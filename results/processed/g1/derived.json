@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "stage": "g1",
+  "config_sha256": "eec9420283364e786e223c899fa3d4f79e82d5abf0b239374559af1331baaee9",
+  "valid_runs": 18,
+  "total_runs": 18,
+  "missing": [],
+  "serial": {
+    "decode_heavy": {
+      "p90_ttft_ms": 18.58308333309348,
+      "p90_tpot_ms": 10.752227226718901,
+      "request_throughput_rps": 0.09146725076943217,
+      "ttft_seed_relative_max_deviation": 0.019024837055814817,
+      "tpot_seed_relative_max_deviation": 0.003213732162923398
+    },
+    "balanced": {
+      "p90_ttft_ms": 52.363376666289696,
+      "p90_tpot_ms": 10.76393967651751,
+      "request_throughput_rps": 0.1814066870919866,
+      "ttft_seed_relative_max_deviation": 0.01592154262472006,
+      "tpot_seed_relative_max_deviation": 0.009081260309758676
+    },
+    "prefill_heavy": {
+      "p90_ttft_ms": 98.16716600010598,
+      "p90_tpot_ms": 10.795350619943731,
+      "request_throughput_rps": 0.6851249292460285,
+      "ttft_seed_relative_max_deviation": 0.011075350802689224,
+      "tpot_seed_relative_max_deviation": 0.011323853220600913
+    }
+  },
+  "saturation": {
+    "decode_heavy": {
+      "request_throughput_rps": 3.795752547312688,
+      "seed_relative_max_deviation": 0.01943767768983452
+    },
+    "balanced": {
+      "request_throughput_rps": 5.6419399385834055,
+      "seed_relative_max_deviation": 0.003035216638697274
+    },
+    "prefill_heavy": {
+      "request_throughput_rps": 7.387181812544572,
+      "seed_relative_max_deviation": 0.0023641619878010285
+    }
+  },
+  "saturation_rps": {
+    "decode_heavy": 3.795752547312688,
+    "balanced": 5.6419399385834055,
+    "prefill_heavy": 7.387181812544572
+  },
+  "low_load": {},
+  "slo_source": "serial",
+  "serial_tpot_drift": {
+    "decode_heavy": {
+      "1": {
+        "first_mean_tpot_ms": 10.640819090615842,
+        "last_mean_tpot_ms": 10.816009646333741,
+        "overall_mean_tpot_ms": 10.683905300156358,
+        "relative_drift": 0.0163976140555397,
+        "warning": false
+      },
+      "2": {
+        "first_mean_tpot_ms": 10.65368551642274,
+        "last_mean_tpot_ms": 10.66389271573814,
+        "overall_mean_tpot_ms": 10.661751444496678,
+        "relative_drift": 0.0009573660921037364,
+        "warning": false
+      },
+      "3": {
+        "first_mean_tpot_ms": 10.664894339198616,
+        "last_mean_tpot_ms": 10.657359278885645,
+        "overall_mean_tpot_ms": 10.66327128711618,
+        "relative_drift": 0.0007066368387415535,
+        "warning": false
+      }
+    },
+    "balanced": {
+      "1": {
+        "first_mean_tpot_ms": 10.653775638551908,
+        "last_mean_tpot_ms": 10.666036796869072,
+        "overall_mean_tpot_ms": 10.679785012231086,
+        "relative_drift": 0.0011480716421840122,
+        "warning": false
+      },
+      "2": {
+        "first_mean_tpot_ms": 10.66083666790544,
+        "last_mean_tpot_ms": 10.64832768532359,
+        "overall_mean_tpot_ms": 10.651374013131246,
+        "relative_drift": 0.0011744008394060554,
+        "warning": false
+      },
+      "3": {
+        "first_mean_tpot_ms": 10.720469886300794,
+        "last_mean_tpot_ms": 10.763777439921872,
+        "overall_mean_tpot_ms": 10.731406520978778,
+        "relative_drift": 0.004035589699860551,
+        "warning": false
+      }
+    },
+    "prefill_heavy": {
+      "1": {
+        "first_mean_tpot_ms": 10.839196550396297,
+        "last_mean_tpot_ms": 10.72161675668993,
+        "overall_mean_tpot_ms": 10.750034599054278,
+        "relative_drift": 0.010937620025586833,
+        "warning": false
+      },
+      "2": {
+        "first_mean_tpot_ms": 10.71999341023281,
+        "last_mean_tpot_ms": 10.726072598432854,
+        "overall_mean_tpot_ms": 10.722811174016137,
+        "relative_drift": 0.0005669397792600324,
+        "warning": false
+      },
+      "3": {
+        "first_mean_tpot_ms": 10.721809799999722,
+        "last_mean_tpot_ms": 10.726770925990193,
+        "overall_mean_tpot_ms": 10.720100917557623,
+        "relative_drift": 0.00046278724693213624,
+        "warning": false
+      }
+    }
+  },
+  "quality_warnings": [
+    {
+      "code": "g1_saturation_multi_token_stream_chunks",
+      "scenario": "decode_heavy",
+      "seed": 1,
+      "multi_token_chunks": 1,
+      "throughput_valid": true,
+      "token_timing_exact": false,
+      "run_id": "20260813T114402.094359-g1-198d1004428e5dbebab7"
+    },
+    {
+      "code": "g1_saturation_multi_token_stream_chunks",
+      "scenario": "decode_heavy",
+      "seed": 2,
+      "multi_token_chunks": 1,
+      "throughput_valid": true,
+      "token_timing_exact": false,
+      "run_id": "20260813T115129.405742-g1-8ddcd18ca55e0dd13f2e"
+    },
+    {
+      "code": "g1_saturation_multi_token_stream_chunks",
+      "scenario": "decode_heavy",
+      "seed": 3,
+      "multi_token_chunks": 2,
+      "throughput_valid": true,
+      "token_timing_exact": false,
+      "run_id": "20260813T115509.292101-g1-c06f210bde27f04de44d"
+    },
+    {
+      "code": "g1_saturation_multi_token_stream_chunks",
+      "scenario": "balanced",
+      "seed": 1,
+      "multi_token_chunks": 1,
+      "throughput_valid": true,
+      "token_timing_exact": false,
+      "run_id": "20260813T115848.037661-g1-3e28f157deb13b030da7"
+    },
+    {
+      "code": "g1_saturation_multi_token_stream_chunks",
+      "scenario": "balanced",
+      "seed": 2,
+      "multi_token_chunks": 3,
+      "throughput_valid": true,
+      "token_timing_exact": false,
+      "run_id": "20260813T120106.408898-g1-19e41dc1fbeef74aecc0"
+    },
+    {
+      "code": "g1_saturation_multi_token_stream_chunks",
+      "scenario": "balanced",
+      "seed": 3,
+      "multi_token_chunks": 1,
+      "throughput_valid": true,
+      "token_timing_exact": false,
+      "run_id": "20260813T120324.767013-g1-a3bbe173a28cd1d33807"
+    },
+    {
+      "code": "g1_saturation_multi_token_stream_chunks",
+      "scenario": "prefill_heavy",
+      "seed": 2,
+      "multi_token_chunks": 1,
+      "throughput_valid": true,
+      "token_timing_exact": false,
+      "run_id": "20260813T120704.685809-g1-62a1559185992bdf09b7"
+    },
+    {
+      "code": "g1_saturation_multi_token_stream_chunks",
+      "scenario": "prefill_heavy",
+      "seed": 3,
+      "multi_token_chunks": 1,
+      "throughput_valid": true,
+      "token_timing_exact": false,
+      "run_id": "20260813T120828.246865-g1-d278b7dfd3963b248229"
+    }
+  ],
+  "quality_status": "complete_with_warnings",
+  "low_load_gate_passed": false,
+  "low_load_gate_required": false,
+  "seed_variation_gate_passed": true,
+  "gate_passed": true
+}

@@ -1,0 +1,49 @@
+schema_version: 1
+status: frozen_g2
+source: mean of seed-level Stock-Auto serial P90 values
+calibration_sample:
+  mode: serial
+  requests_per_seed: 100
+  seeds: 3
+config_sha256: eec9420283364e786e223c899fa3d4f79e82d5abf0b239374559af1331baaee9
+primary_tier: medium
+thresholds:
+  tight:
+    decode_heavy:
+      ttft_ms: 37.16616666618696
+      tpot_ms: 16.12834084007835
+    balanced:
+      ttft_ms: 104.72675333257939
+      tpot_ms: 16.145909514776264
+    prefill_heavy:
+      ttft_ms: 196.33433200021196
+      tpot_ms: 16.193025929915596
+  medium:
+    decode_heavy:
+      ttft_ms: 74.33233333237392
+      tpot_ms: 21.504454453437802
+    balanced:
+      ttft_ms: 209.45350666515878
+      tpot_ms: 21.52787935303502
+    prefill_heavy:
+      ttft_ms: 392.6686640004239
+      tpot_ms: 21.590701239887462
+  loose:
+    decode_heavy:
+      ttft_ms: 148.66466666474784
+      tpot_ms: 32.2566816801567
+    balanced:
+      ttft_ms: 418.90701333031757
+      tpot_ms: 32.29181902955253
+    prefill_heavy:
+      ttft_ms: 785.3373280008478
+      tpot_ms: 32.38605185983119
+lambda_cap_rps:
+  balanced: 5.571415689
+  decode_heavy: 3.890646361
+  prefill_heavy: 3.13955227
+lambda_cap_by_arrival:
+  balanced:poisson: 5.571415689
+  decode_heavy:poisson: 3.890646361
+  prefill_heavy:poisson: 3.13955227
+thresholds_fingerprint: df24d4803a9769b7bf3a3af88ae929a20edff2494457d1793bfcfee4c1547fd0

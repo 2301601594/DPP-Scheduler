@@ -1,0 +1,242 @@
+{
+  "schema_version": 1,
+  "config_sha256": "418a6ec401a72e8608aa80491449d8876ac6344717844a4054e638448e7ccde2",
+  "tokenizer_model": "Qwen/Qwen2.5-3B-Instruct",
+  "tokenizer_revision": "aa8e72537993ba99e69dfaafa59ed015b17504d1",
+  "sources": {
+    "sharegpt": {
+      "requested_url": "https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json",
+      "final_url": "https://us.aws.cdn.hf.co/xet-bridge-us/642912f7a760fe0bf37996b1/d7094af68bb58022696728841937d7285db423eba9d055b3386797b28db2cbdb",
+      "status": 200,
+      "etag": "\"d7094af68bb58022696728841937d7285db423eba9d055b3386797b28db2cbdb\"",
+      "last_modified": null,
+      "content_type": "application/json",
+      "content_length": "672837942",
+      "path": "/home/dongj/projects/LLM/data/raw/ShareGPT_V3_unfiltered_cleaned_split.json",
+      "size_bytes": 672837942,
+      "sha256": "35f0e213ce091ed9b9af2a1f0755e9d39f9ccec34ab281cd4ca60d70f6479ba4"
+    },
+    "burstgpt": {
+      "requested_url": "https://github.com/HPMLL/BurstGPT/releases/download/v1.1/BurstGPT_without_fails_2.csv",
+      "final_url": "https://release-assets.githubusercontent.com/github-production-release-asset/750183438/b0bc5039-cdb9-4d29-bf07-53a7a034877c",
+      "status": 200,
+      "etag": "\"0x8DC8BB2CFD1D23D\"",
+      "last_modified": "Thu, 13 Jun 2024 14:12:08 GMT",
+      "content_type": "application/octet-stream",
+      "content_length": "142376815",
+      "path": "/home/dongj/projects/LLM/data/raw/BurstGPT_without_fails_2.csv",
+      "size_bytes": 142376815,
+      "sha256": "56193aa9b2bb26128ded43d2d29a960df6bf5af062bcfc9b005f3fcaa4e6e501"
+    }
+  },
+  "traces": {
+    "validation:decode_heavy": {
+      "path": "/home/dongj/projects/LLM/traces/validation_decode_heavy.jsonl",
+      "sha256": "a425896149d28e3ffa09be44eb86c707299480f3e83e7e60372bb8d1ea629101",
+      "requests": 1000,
+      "classes": {
+        "decode_heavy": 1000
+      },
+      "first_arrival_s": null,
+      "last_arrival_s": null
+    },
+    "validation:balanced": {
+      "path": "/home/dongj/projects/LLM/traces/validation_balanced.jsonl",
+      "sha256": "81ccc854489844b6e2882d57521b04b6c8f5fa864bfb6b02055e8296c917d945",
+      "requests": 1000,
+      "classes": {
+        "balanced": 1000
+      },
+      "first_arrival_s": null,
+      "last_arrival_s": null
+    },
+    "validation:prefill_heavy": {
+      "path": "/home/dongj/projects/LLM/traces/validation_prefill_heavy.jsonl",
+      "sha256": "c62ac9064bf96878b17b44888f238dbeb7c13502cf3a5e5c46c1b72e5b60d19f",
+      "requests": 1000,
+      "classes": {
+        "prefill_heavy": 1000
+      },
+      "first_arrival_s": null,
+      "last_arrival_s": null
+    },
+    "validation:long_prefill": {
+      "path": "/home/dongj/projects/LLM/traces/validation_long_prefill.jsonl",
+      "sha256": "0c4e817f51b31f70c8aa2d851b5ae86ecf58279141f3a6f9e21b45cdf691e61b",
+      "requests": 1000,
+      "classes": {
+        "long_prefill": 1000
+      },
+      "first_arrival_s": null,
+      "last_arrival_s": null
+    },
+    "validation:heterogeneous": {
+      "path": "/home/dongj/projects/LLM/traces/validation_heterogeneous.jsonl",
+      "sha256": "c94ca012a6227176a0cc4e97c5678d9b12f16e9082240e9a35b53a3bcfa8a077",
+      "requests": 1000,
+      "classes": {
+        "decode_heavy": 334,
+        "balanced": 333,
+        "prefill_heavy": 333
+      },
+      "first_arrival_s": null,
+      "last_arrival_s": null
+    },
+    "test:decode_heavy": {
+      "path": "/home/dongj/projects/LLM/traces/test_decode_heavy.jsonl",
+      "sha256": "5eb171c9d663057b039bf82591875026ed241f4f7490cd25f7b7a20c91d9aadf",
+      "requests": 1000,
+      "classes": {
+        "decode_heavy": 1000
+      },
+      "first_arrival_s": null,
+      "last_arrival_s": null
+    },
+    "test:balanced": {
+      "path": "/home/dongj/projects/LLM/traces/test_balanced.jsonl",
+      "sha256": "f04c5a32cd224222524c73246a02b9ada79a03bd3d6917c0dc3756409316573f",
+      "requests": 1000,
+      "classes": {
+        "balanced": 1000
+      },
+      "first_arrival_s": null,
+      "last_arrival_s": null
+    },
+    "test:prefill_heavy": {
+      "path": "/home/dongj/projects/LLM/traces/test_prefill_heavy.jsonl",
+      "sha256": "8e9f26db90bac7cb0a1426f778413cb586dbfa9b22241c0cdf7caf0ce99869a3",
+      "requests": 1000,
+      "classes": {
+        "prefill_heavy": 1000
+      },
+      "first_arrival_s": null,
+      "last_arrival_s": null
+    },
+    "test:long_prefill": {
+      "path": "/home/dongj/projects/LLM/traces/test_long_prefill.jsonl",
+      "sha256": "d101a3d8fdda6a94321a286912b643d5ca09b0e7cec20554f1b2c84d4b9a4349",
+      "requests": 1000,
+      "classes": {
+        "long_prefill": 1000
+      },
+      "first_arrival_s": null,
+      "last_arrival_s": null
+    },
+    "test:heterogeneous": {
+      "path": "/home/dongj/projects/LLM/traces/test_heterogeneous.jsonl",
+      "sha256": "b5b067e598e18da2d9a6f3150d2762bcceab6de33f28739628e3319bd205f226",
+      "requests": 1000,
+      "classes": {
+        "decode_heavy": 334,
+        "balanced": 333,
+        "prefill_heavy": 333
+      },
+      "first_arrival_s": null,
+      "last_arrival_s": null
+    },
+    "validation:sharegpt": {
+      "path": "/home/dongj/projects/LLM/traces/validation_sharegpt.jsonl",
+      "sha256": "3063040531f4c49dc155e261d36a1712074fac9b02134a0a52499749ff521dc1",
+      "requests": 1000,
+      "classes": {
+        "sharegpt": 1000
+      },
+      "first_arrival_s": null,
+      "last_arrival_s": null
+    },
+    "test:sharegpt": {
+      "path": "/home/dongj/projects/LLM/traces/test_sharegpt.jsonl",
+      "sha256": "fb2f4d329360f7b561082db0e1aafbc7355c5e2d067432f5c3d738535a455cc0",
+      "requests": 1000,
+      "classes": {
+        "sharegpt": 1000
+      },
+      "first_arrival_s": null,
+      "last_arrival_s": null
+    },
+    "validation:burstgpt": {
+      "path": "/home/dongj/projects/LLM/traces/validation_burstgpt.jsonl",
+      "sha256": "9ac324d4443ae639428a2c5b7749f2226f24a1f37df21b4fd2146c26e246c6aa",
+      "requests": 1000,
+      "classes": {
+        "burstgpt": 1000
+      },
+      "first_arrival_s": 0.0,
+      "last_arrival_s": 4585.0
+    },
+    "test:burstgpt": {
+      "path": "/home/dongj/projects/LLM/traces/test_burstgpt.jsonl",
+      "sha256": "82275e9c5a7772485be76a1c65507e713a83c03169e72f384bea3a4259fe8769",
+      "requests": 1000,
+      "classes": {
+        "burstgpt": 1000
+      },
+      "first_arrival_s": 0.0,
+      "last_arrival_s": 2599.0
+    },
+    "validation:phase_shift": {
+      "path": "/home/dongj/projects/LLM/traces/validation_phase_shift.jsonl",
+      "sha256": "9453c3aa57413e3427006fe900c7c25b4dc1bc8d932522688df9b092ec61f915",
+      "requests": 1020,
+      "classes": {
+        "decode_heavy": 315,
+        "prefill_heavy": 254,
+        "balanced": 451
+      },
+      "first_arrival_s": 0.0,
+      "last_arrival_s": 270.0
+    }
+  },
+  "filters": {
+    "sharegpt": {
+      "accepted": 2000,
+      "rejected_before_quota": 188
+    },
+    "burstgpt": {
+      "valid_rows": 82443,
+      "window_start": 5534507.0,
+      "window_end": 5541701.0,
+      "window_duration_s": 7194.0,
+      "window_start_filtered_row": 5686,
+      "selection": "first_2000_valid_gpt4_row_window_with_duration_at_most_7200s"
+    }
+  },
+  "phase_shift_rule": {
+    "classes": [
+      "decode_heavy",
+      "prefill_heavy",
+      "balanced"
+    ],
+    "phase_duration_s": 90,
+    "load_factor": 0.9,
+    "arrival": "poisson_normalized_within_each_phase",
+    "seed": 314159,
+    "status": "materialized",
+    "phases": [
+      {
+        "workload": "decode_heavy",
+        "lambda_cap_rps": 3.890646361,
+        "offered_rate_rps": 3.5015817249,
+        "requests": 315,
+        "start_s": 0.0,
+        "duration_s": 90.0
+      },
+      {
+        "workload": "prefill_heavy",
+        "lambda_cap_rps": 3.13955227,
+        "offered_rate_rps": 2.8255970429999997,
+        "requests": 254,
+        "start_s": 90.0,
+        "duration_s": 90.0
+      },
+      {
+        "workload": "balanced",
+        "lambda_cap_rps": 5.571415689,
+        "offered_rate_rps": 5.0142741201000005,
+        "requests": 451,
+        "start_s": 180.0,
+        "duration_s": 90.0
+      }
+    ]
+  }
+}

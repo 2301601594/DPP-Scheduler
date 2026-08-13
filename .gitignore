@@ -1,0 +1,12 @@
+.cache/
+.venv/
+.uv-python/
+vllm/
+
+data/raw/
+traces/**/*.jsonl
+results/raw/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/

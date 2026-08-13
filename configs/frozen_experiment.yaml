@@ -1,0 +1,175 @@
+schema_version: 1
+status: frozen
+frozen_at: "2026-08-12"
+amended_at: "2026-08-13"
+
+paths:
+  workspace: /home/dongj/projects/LLM
+  vllm_source: /home/dongj/projects/LLM/vllm
+  python: /home/dongj/projects/LLM/.venv/bin/python
+  vllm_cli: /home/dongj/projects/LLM/.venv/bin/vllm
+  model_snapshot: /home/dongj/projects/LLM/.cache/huggingface/hub/models--Qwen--Qwen2.5-3B-Instruct/snapshots/aa8e72537993ba99e69dfaafa59ed015b17504d1
+  raw_data: data/raw
+  traces: traces
+  raw_results: results/raw
+  processed_results: results/processed
+  artifacts: artifacts
+
+environment:
+  gpu: NVIDIA GeForce RTX 5070
+  gpu_memory_mib: 12227
+  vllm_version: 0.26.1rc1.dev535+g83ad767ee.precompiled
+  vllm_commit: 83ad767eed3be3ee7f2df63be693bfaca5c7c922
+  vllm_install: precompiled editable
+  python_version: "3.12.13"
+  torch_version: 2.13.0+cu130
+  cuda_version: "13.0"
+  platform: WSL2 Ubuntu 24.04.3 LTS
+  required_env:
+    VLLM_USE_V2_MODEL_RUNNER: "0"
+    CUDA_VISIBLE_DEVICES: "0"
+    HF_HUB_OFFLINE: "1"
+    PYTHONHASHSEED: "0"
+
+model:
+  id: Qwen/Qwen2.5-3B-Instruct
+  revision: aa8e72537993ba99e69dfaafa59ed015b17504d1
+  dtype: bfloat16
+  max_model_len: 8192
+  gpu_memory_utilization: 0.90
+  max_num_seqs: 64
+  scheduling_policy: fcfs
+  enable_chunked_prefill: true
+  enable_prefix_caching: false
+  generation_config: vllm
+  temperature: 0.0
+  ignore_eos: true
+  seed: 0
+  host: 127.0.0.1
+  port: 8000
+
+statistics:
+  measurement_requests: 300
+  serial_measurement_requests: 100
+  saturation_measurement_requests: 300
+  low_load_measurement_requests: 100
+  split_requests: 1000
+  seeds: [1, 2, 3]
+  warmup_requests: 10
+  percentiles: [50, 90, 95, 99]
+  confidence_level: 0.95
+  joint_attainment_target: 0.90
+
+g1:
+  scope: minimal_slo_calibration
+  scenarios: [decode_heavy, balanced, prefill_heavy]
+  # Freeze SLOs from the already completed three-seed serial P90 values. The
+  # low-load measurements remain append-only diagnostics and are not a gate.
+  slo_source: serial
+  low_load_start_attempt:
+    decode_heavy: 1
+    balanced: 1
+    prefill_heavy: 1
+
+# The listed prior configuration may supply unchanged trace and G1
+# serial/saturation baselines. Its low-load runs remain diagnostics only and
+# cannot affect the serial-derived SLO.
+compatibility:
+  trace_manifest_config_sha256:
+    - 418a6ec401a72e8608aa80491449d8876ac6344717844a4054e638448e7ccde2
+  g1_baseline_config_sha256:
+    - 418a6ec401a72e8608aa80491449d8876ac6344717844a4054e638448e7ccde2
+
+g2:
+  reference_policy: stock_auto
+  slo_tier: medium
+  measurement_requests: 100
+  # G2 is an exploratory capacity scan. One seed is sufficient for locating
+  # candidate knees; it does not provide a cross-seed confidence interval.
+  seeds: [1]
+  conditions:
+    - scenario: decode_heavy
+      arrival: poisson
+      burstiness: 1.0
+    - scenario: balanced
+      arrival: poisson
+      burstiness: 1.0
+    - scenario: prefill_heavy
+      arrival: poisson
+      burstiness: 1.0
+
+workloads:
+  decode_heavy:
+    input_tokens: 128
+    output_tokens: 1024
+  balanced:
+    input_tokens: 512
+    output_tokens: 512
+  prefill_heavy:
+    input_tokens: 1024
+    output_tokens: 128
+  long_prefill:
+    input_tokens: 2048
+    output_tokens: 128
+  heterogeneous:
+    classes: [decode_heavy, balanced, prefill_heavy]
+    proportions: [0.3333333333, 0.3333333333, 0.3333333334]
+  phase_shift:
+    classes: [decode_heavy, prefill_heavy, balanced]
+    phase_duration_s: 90
+
+datasets:
+  sharegpt:
+    url: https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
+    filename: ShareGPT_V3_unfiltered_cleaned_split.json
+    min_input_tokens: 4
+    min_output_tokens: 4
+    max_total_tokens: 8192
+  burstgpt:
+    url: https://github.com/HPMLL/BurstGPT/releases/download/v1.1/BurstGPT_without_fails_2.csv
+    filename: BurstGPT_without_fails_2.csv
+    model_filter: GPT-4
+    min_input_tokens: 4
+    min_output_tokens: 4
+    max_total_tokens: 8192
+    max_window_duration_s: 7200
+    window_selection: first_2000_valid_gpt4_row_window_within_max_duration
+
+arrivals:
+  poisson:
+    burstiness: 1.0
+  gamma_medium:
+    burstiness: 0.5
+  gamma_strong:
+    burstiness: 0.2
+  coarse_saturation_factors: [0.10, 0.20, 0.35, 0.50, 0.65, 0.80, 0.95, 1.10]
+  fine_points: 5
+  max_bracket_extensions: 3
+  extension_factor: 1.25
+  g3_load_factors: [0.5, 0.9, 1.1]
+
+budgets:
+  stock_auto: null
+  fixed: [256, 512, 1024, 4096, 8192]
+  expected_stock_auto: 2048
+  equivalence_budget: 2048
+  equivalence_tolerance: 0.03
+
+validity:
+  max_run_attempts: 2
+  offered_rate_relative_error_max: 0.05
+  output_length_mismatch_max: 0
+  failed_requests_max: 0
+  oom_events_max: 0
+  drain_timeout_s: 600
+  request_timeout_s: 21600
+  seed_variation_target: 0.05
+  serial_tpot_drift_warning_relative: 0.10
+  low_load_ttft_increase_max: 0.25
+  low_load_initial_saturation_fraction: 0.10
+
+best_fixed:
+  load_factors: [0.9, 1.1]
+  include_arrivals: [poisson, gamma_medium, gamma_strong, self_timed]
+  near_tie_relative: 0.01
+  tie_break: smaller_budget
