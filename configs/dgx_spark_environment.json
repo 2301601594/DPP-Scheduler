@@ -4,7 +4,8 @@
   "status": "environment_installed_qwen3_14b_g0_pending",
   "captured_at_utc": "2026-08-19T18:21:50Z",
   "active_campaign": "qwen3_14b_dgx_spark_modular_dpp",
-  "experiment_config_sha256": "bed999861fb9dc0ee1a65661dfd1755a7e05fc6ed8892aec049e3d19333481f6",
+  "experiment_config_sha256": "1020827fee2c77beab8fb3d9bbcc88c9c19e49bae57e41a69ba6aec947afc61f",
+  "experiment_config_sha256_note": "Recomputed after recording the model snapshot identity; previous value bed999861fb9dc0ee1a65661dfd1755a7e05fc6ed8892aec049e3d19333481f6.",
   "transport": {
     "ssh_alias": "dgx-spark",
     "remote_user": "dongj",
@@ -29,9 +30,9 @@
     "nvcc_build": "V13.0.88"
   },
   "source": {
-    "root_commit": "ad04cd43821ea11189a1dae488eb4d74b88cade3",
-    "root_dirty": true,
-    "root_dirty_note": "Contains the intended Qwen3-14B modular Scheduler migration; historical results/artifacts remain excluded from the remote mirror.",
+    "root_commit": "38388d0e9f337796699a85304de5ff10e5e98cf8",
+    "root_dirty": false,
+    "root_dirty_note": "Verified clean after the 2026-08-21 source sync; historical results/artifacts remain excluded from the remote mirror.",
     "vllm_commit": "83ad767eed3be3ee7f2df63be693bfaca5c7c922",
     "vllm_dirty": false
   },
@@ -70,13 +71,18 @@
   "model": {
     "requested_name": "Qwen3-14B",
     "candidate_repository": "Qwen/Qwen3-14B",
-    "repository_status": "provisional_unverified",
-    "revision": null,
-    "tokenizer_revision": null,
-    "snapshot_path": null,
-    "snapshot_present": false,
+    "repository_status": "verified",
+    "revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+    "tokenizer_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+    "snapshot_path": "/home/dongj/models/Qwen3-14B-BF16",
+    "snapshot_present": true,
+    "snapshot_manifest": "configs/qwen3_14b_snapshot_manifest.json",
+    "snapshot_manifest_sha256": "f48a9e0e58bd23f01869ef5706f5dfe9c6a0f0b21b20cdc54e1745af15c30841",
+    "snapshot_source": "ModelScope mirror (content-identical to HuggingFace main)",
+    "snapshot_verified_at_utc": "2026-08-21T13:30:00Z",
     "dtype": "bfloat16",
-    "acquisition_approved": false
+    "acquisition_approved": true,
+    "acquisition_approval_note": "Operator/group approval of the ModelScope acquisition of Qwen/Qwen3-14B confirmed by user on 2026-08-21; acquisition command and source recorded in the snapshot manifest."
   },
   "preflight": {
     "free_disk_gib": 780,
@@ -97,8 +103,6 @@
     "dependency_check_note": "uv 0.11.28 reports the NVIDIA manylinux2014_sbsa wheel as a different platform; the installed library is ARM aarch64, its SBSA tag was checked, ctypes loading passed, and torch._C._has_cusparselt is true. Any additional incompatibility remains fatal."
   },
   "pending": [
-    "Review and freeze the exact Qwen3-14B repository, immutable model/tokenizer revision, source, license, file sizes, and hashes.",
-    "Obtain operator-approved bulk-transfer confirmation before acquiring the model snapshot.",
     "Run a bounded remote Qwen3-14B BF16 smoke with the frozen vLLM commit and required runtime flags.",
     "Capture runtime environment variables, final SchedulerConfig, token/sequence budgets, KV block capacity, and startup log.",
     "Create and freeze a Qwen3-14B natural-EOS trace manifest and Stock SLO/Goodput definitions."

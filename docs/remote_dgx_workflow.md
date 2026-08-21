@@ -84,12 +84,23 @@ incompatibility still fails verification.
 
 ## Qwen3-14B model snapshot
 
-The model cache is never part of daily source synchronization. The exact
-Qwen3-14B repository and immutable revision are still a G0 blocker; do not
-download, copy, or let `vllm serve` implicitly fetch weights while they are
-unreviewed.
+The model cache is never part of daily source synchronization. The snapshot is
+present at `/home/dongj/models/Qwen3-14B-BF16` (28G) and its identity is
+recorded in `configs/qwen3_14b_snapshot_manifest.json`; never download, copy,
+or let `vllm serve` implicitly fetch weights for any other revision.
 
-Before acquiring the snapshot:
+The acquisition that produced the frozen snapshot was:
+
+```bash
+modelscope download --model Qwen/Qwen3-14B \
+  --local-dir "$HOME/models/Qwen3-14B-BF16" --max-workers 1
+```
+
+It ran inside `~/modelscope-download-env` with the observed local proxy
+(`HTTP_PROXY=http://127.0.0.1:17890`). The downloaded content is
+byte-identical to HuggingFace `Qwen/Qwen3-14B` main commit
+`40c069824f4251a91eefaf281ebe4c544efd3e18` (verified per file in the
+manifest). Before transferring or re-acquiring anything else:
 
 1. record the repository, immutable revision, license/source, expected file
    list, and total transfer/storage size in the active manifest;
@@ -99,10 +110,7 @@ Before acquiring the snapshot:
 4. use a bounded, resumable transfer that preserves snapshot links/blobs, then
    verify the manifest hashes.
 
-Transfer only that reviewed revision and never unrelated cache contents. Add
-the exact command to this section only after G0 freezes the source and
-revision; a placeholder command could accidentally trigger an unapproved
-large download.
+Transfer only that reviewed revision and never unrelated cache contents.
 
 ## Remote environment and execution
 
@@ -195,10 +203,14 @@ installed in `~/LLM/.venv`: PyTorch is `2.13.0+cu130`, vLLM is
 `0.26.1rc1.dev535+g83ad767ee.precompiled`, both stable-libtorch extensions
 import, and a GB10 CUDA tensor smoke test passes. The environment occupies
 7,000,453,170 bytes and the uv cache 156,223,805 bytes. Exact package versions
-are recorded in `configs/dgx_spark_environment.freeze.txt`. The exact
-Qwen3-14B repository/revision and snapshot are not frozen or present yet.
-The optional user-space Python-header tree is an observed compatibility
-artifact, not yet a reconstructible Qwen3-14B environment dependency.
+are recorded in `configs/dgx_spark_environment.freeze.txt`. The Qwen3-14B BF16
+snapshot is present at `/home/dongj/models/Qwen3-14B-BF16` and is
+content-identical to HuggingFace main
+`40c069824f4251a91eefaf281ebe4c544efd3e18`; its per-file hashes, source, and
+acquisition command are recorded in
+`configs/qwen3_14b_snapshot_manifest.json`. The optional user-space
+Python-header tree is an observed compatibility artifact, not yet a
+reconstructible Qwen3-14B environment dependency.
 
 The provisional active configuration is `configs/dgx_spark_experiment.yaml`;
 captured environment facts and explicit pending checks are in

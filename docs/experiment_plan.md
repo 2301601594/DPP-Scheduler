@@ -10,9 +10,14 @@ measured on the target DGX Spark.
 The campaign is at **G0**.
 
 Observed DGX software and hardware facts can be reverified from the existing
-environment manifests. The following are not yet frozen:
+environment manifests. The Qwen3-14B BF16 snapshot is present on the DGX and
+its identity, per-file hashes, source, and acquisition command are recorded in
+`configs/qwen3_14b_snapshot_manifest.json` (content-identical to HuggingFace
+`Qwen/Qwen3-14B` main `40c069824f4251a91eefaf281ebe4c544efd3e18`). The
+following are not yet frozen:
 
-- exact `Qwen3-14B` repository, immutable revision, and model/tokenizer hashes;
+- operator-approval confirmation for the model acquisition and the Qwen3-14B
+  smoke;
 - model-specific startup parameters, `SchedulerConfig`, and KV capacity;
 - natural-EOS request/trace manifest and request-level Goodput definition;
 - TTFT/TBT SLOs and obligation event boundaries;

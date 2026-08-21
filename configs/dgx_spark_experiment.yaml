@@ -4,10 +4,11 @@ campaign: qwen3_14b_dgx_spark_modular_dpp
 stage: g0
 design_spec: docs/Qwen3-14B-DGX-Spark-Modular-DPP-Scheduler.md
 provisional_reason: >-
-  The DGX software environment exists, but the exact Qwen3-14B revision,
-  snapshot, model-specific runtime limits, stock telemetry, KV capacity, SLOs,
-  natural-EOS trace manifest, predictor, and DPP parameters have not been
-  measured, reviewed, and frozen. This configuration is not executable.
+  The DGX software environment exists and the Qwen3-14B snapshot identity is
+  recorded (see configs/qwen3_14b_snapshot_manifest.json), but model-specific
+  runtime limits, stock telemetry, KV capacity, SLOs, natural-EOS trace
+  manifest, predictor, and DPP parameters have not been measured, reviewed,
+  and frozen. This configuration is not executable.
 
 paths:
   workspace: /home/dongj/LLM
@@ -52,10 +53,14 @@ environment:
 model:
   requested_name: Qwen3-14B
   repository: Qwen/Qwen3-14B
-  repository_status: provisional_unverified
-  revision: null
-  tokenizer_revision: null
-  snapshot_sha256: null
+  repository_status: verified
+  revision: 40c069824f4251a91eefaf281ebe4c544efd3e18
+  tokenizer_revision: 40c069824f4251a91eefaf281ebe4c544efd3e18
+  snapshot_manifest: configs/qwen3_14b_snapshot_manifest.json
+  snapshot_manifest_sha256: f48a9e0e58bd23f01869ef5706f5dfe9c6a0f0b21b20cdc54e1745af15c30841
+  snapshot_sha256: f48a9e0e58bd23f01869ef5706f5dfe9c6a0f0b21b20cdc54e1745af15c30841
+  snapshot_path: /home/dongj/models/Qwen3-14B-BF16
+  snapshot_source: ModelScope mirror (content-identical to HuggingFace main)
   dtype: bfloat16
   kv_cache_dtype: bfloat16
   quantization:
@@ -65,7 +70,8 @@ model:
   pipeline_parallel_size: 1
   max_model_len: null
   gpu_memory_utilization: null
-  source_and_license_reviewed: false
+  source_and_license_reviewed: true
+  license: Apache-2.0
 
 runtime:
   engine: vllm_v1
@@ -264,3 +270,8 @@ g0_freeze_blockers:
   - stock_iteration_event_semantics
   - natural_eos_trace_manifest
   - stock_slo_and_goodput_definition
+
+g0_blockers_resolved:
+  - resolved_2026_08_21_exact_model_repository_revision_and_snapshot
+  - resolved_2026_08_21_model_license_and_source_review
+  - note: "Model acquired via ModelScope mirror; content-identical to HuggingFace main commit 40c069824f4251a91eefaf281ebe4c544efd3e18; acquisition command and license review recorded in configs/qwen3_14b_snapshot_manifest.json. Operator-approval confirmation for the acquisition and the Qwen3-14B remote smoke remain pending."

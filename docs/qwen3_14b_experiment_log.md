@@ -1,5 +1,31 @@
 # Qwen3-14B modular DPP Scheduler experiment log
 
+## 2026-08-21 — model snapshot identified and recorded
+
+- The Qwen3-14B BF16 snapshot is present on the DGX at
+  `/home/dongj/models/Qwen3-14B-BF16` (28G, 8 safetensors shards), acquired on
+  2026-08-21 via ModelScope:
+  `modelscope download --model Qwen/Qwen3-14B --local-dir $HOME/models/Qwen3-14B-BF16 --max-workers 1`.
+- SHA256 of all 19 files was computed on the DGX and compared with the
+  HuggingFace `Qwen/Qwen3-14B` `resolve/main` content. All 8 weight shards and
+  `tokenizer.json` match the HF LFS sha256 exactly; `config.json`,
+  `tokenizer_config.json`, `generation_config.json`,
+  `model.safetensors.index.json`, `vocab.json`, `merges.txt`, `LICENSE`, and
+  `README.md` match the HF git blob OIDs. The snapshot is therefore
+  content-identical to HuggingFace main commit
+  `40c069824f4251a91eefaf281ebe4c544efd3e18` (last modified 2025-07-26).
+- Known non-content differences: `configuration.json` is a ModelScope-only
+  artifact (absent on HF); `.gitattributes` is ModelScope-regenerated and
+  differs from the HF blob. Neither affects model or tokenizer content.
+- License reviewed: Apache-2.0 (`LICENSE` file and README card).
+- Recorded in `configs/qwen3_14b_snapshot_manifest.json`; `model` sections of
+  `configs/dgx_spark_experiment.yaml` and `configs/dgx_spark_environment.json`
+  updated to verified revision/hashes.
+- Remaining G0 blockers: operator approval confirmation of the acquisition, the
+  bounded remote Qwen3-14B BF16 smoke, runtime/SchedulerConfig/KV capture,
+  stock iteration-event semantics, natural-EOS trace manifest, and
+  SLO/Goodput definitions. No GPU workload was run by this entry.
+
 ## 2026-08-21 — plan migration
 
 - Adopted

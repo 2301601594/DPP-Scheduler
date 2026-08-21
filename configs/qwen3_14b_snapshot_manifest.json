@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "campaign": "qwen3_14b_dgx_spark_modular_dpp",
+  "stage": "g0",
+  "model": {
+    "requested_name": "Qwen3-14B",
+    "repository": "Qwen/Qwen3-14B",
+    "source_of_acquisition": "ModelScope mirror (Qwen/Qwen3-14B, revision master)",
+    "content_identity": {
+      "huggingface_repository": "Qwen/Qwen3-14B",
+      "huggingface_commit": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+      "huggingface_last_modified": "2025-07-26T03:49:23.000Z",
+      "verified_by": "per-file SHA256 comparison against HF resolve/main LFS sha256 and git blob OIDs",
+      "note": "All 8 safetensors shards and tokenizer.json match HF LFS sha256 exactly; 8 of 10 git-tracked text files match HF blob OIDs. ModelScope-only artifacts: configuration.json (not present on HF) and a ModelScope-regenerated .gitattributes (content differs from HF). These do not affect model/tokenizer content."
+    },
+    "dtype": "bfloat16",
+    "architectures": ["Qwen3ForCausalLM"],
+    "params_hidden_size": 5120,
+    "params_num_layers": 40,
+    "params_num_attention_heads": 40,
+    "params_num_key_value_heads": 8,
+    "params_max_position_embeddings": 40960,
+    "params_vocab_size": 151936,
+    "license": "Apache-2.0",
+    "license_file_sha256": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e",
+    "source_and_license_reviewed": true,
+    "review_note": "LICENSE file present (Apache License 2.0); README card declares license apache-2.0; repository Qwen/Qwen3-14B is the official Qwen repo mirrored on ModelScope."
+  },
+  "snapshot": {
+    "remote_path": "/home/dongj/models/Qwen3-14B-BF16",
+    "acquired_at_utc": "2026-08-21T08:37:00Z",
+    "acquisition_command": "modelscope download --model Qwen/Qwen3-14B --local-dir $HOME/models/Qwen3-14B-BF16 --max-workers 1",
+    "acquisition_tool": "modelscope CLI inside ~/modelscope-download-env (ModelScope mirror)",
+    "acquisition_network_note": "Observed: acquisition shell exported HTTP(S)_PROXY=http://127.0.0.1:17890; direct HTTPS to huggingface.co and modelscope.cn fails with a self-signed certificate through the proxy. Recorded as an observed DGX network fact, not bypassed or changed.",
+    "weights_total_bytes": 29536665640,
+    "directory_size_du_sh": "28G",
+    "files": [
+      {"path": "config.json", "size": 728, "sha256": "e73c3664ca09b10a673fef0c22e8a6b456201d49bd4713c9691f775720e8857a"},
+      {"path": "configuration.json", "size": 73, "sha256": "f888421726665e8a84b738eed42a64875aed79de8be7daade851ac8bf4c0cef9", "note": "ModelScope-only artifact; not present on HuggingFace"},
+      {"path": "generation_config.json", "size": 239, "sha256": "2325da0f15bb848e018c5ae071b7943332e9f871d6b60e2ed22ca97d4cb993d2"},
+      {"path": ".gitattributes", "size": 2127, "sha256": "088e25d6bceaa8943f4f292006210358292349cc36e7578f80c62fce75535f46", "note": "ModelScope-regenerated; differs from HF blob 52373fe24473b1aa44333d318f578ae6bf04b49b"},
+      {"path": "LICENSE", "size": 11343, "sha256": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e"},
+      {"path": "merges.txt", "size": 1671853, "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"},
+      {"path": "README.md", "size": 16670, "sha256": "7ef503e68996a4e32007fedc7d8e198846e9b1f36620d38a79b89934100b1250"},
+      {"path": "model.safetensors.index.json", "size": 36514, "sha256": "62d7ad35757bae5e7baa452cb1483178b7daa50e869e923226b8da10871f7ebc"},
+      {"path": "model-00001-of-00008.safetensors", "size": 3841788544, "sha256": "e942bdbdf08857d16a8fef7d1dae9fceabeb4e84def6043485fe2f6f085dab0e"},
+      {"path": "model-00002-of-00008.safetensors", "size": 3963750816, "sha256": "f7c9c6eee628f5ad831d2d1d292e120505e5fcadeb38f88b4d3c4cb86306ccf9"},
+      {"path": "model-00003-of-00008.safetensors", "size": 3963750880, "sha256": "dfb8c5df9404b41ad6ae74e8b6b367135f017b4467b884cf71b17c71954f18a9"},
+      {"path": "model-00004-of-00008.safetensors", "size": 3963750880, "sha256": "eab286fec759e3e59ab228621aefa0fef14ed56039e06f959e67257d5af7604d"},
+      {"path": "model-00005-of-00008.safetensors", "size": 3963750880, "sha256": "97f0dc2992e59da95c466eff6f4fd0c8335843bbc36ed5c913a6f5150748c0e6"},
+      {"path": "model-00006-of-00008.safetensors", "size": 3963750880, "sha256": "9e8e76a013cd5e253865b792991e0b410f869b136b3c500079b531b09198e99e"},
+      {"path": "model-00007-of-00008.safetensors", "size": 3963750880, "sha256": "0aee70ee6e91dc00d818804fb47f124d13ee4ad5b4a64553e09dbf9391cd5750"},
+      {"path": "model-00008-of-00008.safetensors", "size": 1912371880, "sha256": "0d6b92296e326d39bbbaeb32c3ec454ac606da843d4c8ffa8edf010b62b8c9e0"},
+      {"path": "tokenizer.json", "size": 11422654, "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"},
+      {"path": "tokenizer_config.json", "size": 9732, "sha256": "d5d09f07b48c3086c508b30d1c9114bd1189145b74e982a265350c923acd8101"},
+      {"path": "vocab.json", "size": 2776833, "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"}
+    ]
+  },
+  "verification": {
+    "method": "sha256sum of every file on the DGX host; comparison with https://huggingface.co/Qwen/Qwen3-14B/resolve/main/ (LFS x-linked-etag = LFS sha256 for *.safetensors and tokenizer.json; git blob OID via git hash-object for git-tracked text files)",
+    "result": "PASS: all 8 weight shards, tokenizer.json, config.json, tokenizer_config.json, generation_config.json, model.safetensors.index.json, vocab.json, merges.txt, LICENSE, and README.md are content-identical to HuggingFace main @ 40c069824f4251a91eefaf281ebe4c544efd3e18",
+    "known_differences": [
+      "configuration.json: ModelScope-only, absent on HuggingFace",
+      ".gitattributes: ModelScope-regenerated (blob 21b3632f109176bd06594e593a5854afc2122d28 vs HF 52373fe24473b1aa44333d318f578ae6bf04b49b)"
+    ]
+  },
+  "recorded_at_utc": "2026-08-21T13:30:00Z"
+}
