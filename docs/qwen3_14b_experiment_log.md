@@ -42,3 +42,23 @@
 - No model was downloaded, no project Python command or GPU workload was run,
   and no benchmark measurement was created by this migration.
 - Historical evidence remains isolated and is not an active input.
+
+## 2026-08-21 — G2 modular scheduler skeleton implemented
+
+- Added the initial `dpp_scheduler/` package with public immutable contracts,
+  a deterministic Candidate Generator, a temporary Selector, a Controller, a
+  callback-based exact-plan Adapter contract, and G2-safe placeholder modules
+  for Predictor, Safe-Set, Observer, StateStore, ConsequenceEstimator, and
+  Fallback.
+- The Candidate Generator currently emits the 4 Prefill-cap × 3 Decode-profile
+  templates, uses stable ordering, canonical deduplication, token/sequence
+  limits, and pure KV projection. All prefill cap values and urgent limit remain
+  provisional until G0/G1 profiling.
+- Added `tests/unit/test_scheduler_g2.py` covering contracts, candidate
+  generation, deterministic selection, and exact selected-vs-executed plan
+  matching through a fake Adapter.
+- Remote unit suite passes: `42` tests total, including the new G2 tests.
+- The real locked-vLLM `VllmAdapter` translation is deliberately not wired yet:
+  it must be completed against the verified vLLM commit and the G0-captured
+  SchedulerConfig/iteration-event semantics. G2 code uses `CallbackVllmAdapter`
+  for the execution-invariant tests.
