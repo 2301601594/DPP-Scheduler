@@ -140,6 +140,18 @@ class CandidateGeneratorTests(unittest.TestCase):
 
 
 class SelectorTests(unittest.TestCase):
+    def test_selector_prefers_non_idle_plan(self) -> None:
+        prefill = (PrefillRequest("p1", 0.0, 10, 0, ordinal=0),)
+        snap = make_snapshot(prefill=prefill)
+        plans = CandidateGenerator().generate(snap)
+        decision = TemporarySelector().select(snap, plans)
+        self.assertIsNotNone(decision.selected_plan)
+        self.assertGreater(
+            decision.selected_plan.total_prefill_tokens
+            + decision.selected_plan.total_decode_tokens,
+            0,
+        )
+
     def test_selector_is_deterministic(self) -> None:
         prefill = (PrefillRequest("p1", 0.0, 10, 0, ordinal=0),)
         snap = make_snapshot(prefill=prefill)
