@@ -58,7 +58,9 @@
   generation, deterministic selection, and exact selected-vs-executed plan
   matching through a fake Adapter.
 - Remote unit suite passes: `42` tests total, including the new G2 tests.
-- The real locked-vLLM `VllmAdapter` translation is deliberately not wired yet:
-  it must be completed against the verified vLLM commit and the G0-captured
-  SchedulerConfig/iteration-event semantics. G2 code uses `CallbackVllmAdapter`
-  for the execution-invariant tests.
+- Added a commit-specific `VllmAdapter` implementation that constructs a
+  `StateSnapshot` from a live vLLM Scheduler and materializes the selected
+  `BatchPlan` as a vLLM `SchedulerOutput` through the exact prefill/decode path.
+  It still needs to be validated against the real Qwen3-14B DGX server during
+  G0; until then `CallbackVllmAdapter` remains the deterministic test double
+  used by the unit suite.
