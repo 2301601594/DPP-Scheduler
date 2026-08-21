@@ -142,17 +142,22 @@ class VllmAdapter(ExactPlanAdapter):
             provenance="vllm-live",
         )
 
-    def execute_exact_plan(self, plan: BatchPlan) -> ExecutionObservation:
+    def build_scheduler_output(self, plan: BatchPlan) -> Any:
+        """Build the exact vLLM SchedulerOutput for a BatchPlan.
+
+        This is the operation the custom vLLM scheduler calls from its
+        ``schedule()`` method.  It performs the same scheduler state updates as
+        the stock path and returns the output that the engine feeds to the
+        model runner.
+        """
         scheduler = self._require_scheduler()
         from vllm.v1.core.sched.output import (
             CachedRequestData,
             NewRequestData,
-            ScheduledEncoderInputStats,
             SchedulerOutput,
         )
         from vllm.v1.request import RequestStatus
 
-        start = time.time()
         scheduler.current_step += 1
         scheduler.kv_cache_manager.new_step_starts()
 
@@ -252,7 +257,13 @@ class VllmAdapter(ExactPlanAdapter):
         )
 
         scheduler._update_after_schedule(scheduler_output)
+        return scheduler_output
 
+    def execute_exact_plan(self, plan: BatchPlan) -> ExecutionObservation:
+        start = time.time()
+        scheduler_output = self.build_scheduler_output(plan)
+        # The plan is exact by construction: the SchedulerOutput was built from
+        # exactly the prefill/decode items in this BatchPlan.
         return ExecutionObservation(
             frame_id=0,  # filled by the caller/controller in later integration
             snapshot_hash=plan.snapshot_hash,
