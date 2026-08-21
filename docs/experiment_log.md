@@ -1,5 +1,11 @@
 # Experiment log
 
+> **Historical archive.** These entries predate the Qwen3-14B modular
+> `BatchPlan` Scheduler design and are retained only with their append-only
+> raw evidence. They are not active G0-G7 status, configuration, traces, SLOs,
+> or baselines for the new campaign. Active entries start in
+> `docs/qwen3_14b_experiment_log.md`.
+
 ## 2026-08-12 — G0 and GPU smoke
 
 - Downloaded ShareGPT (672,837,942 bytes, SHA256

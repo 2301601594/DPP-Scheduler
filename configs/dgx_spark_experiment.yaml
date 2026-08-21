@@ -1,0 +1,266 @@
+schema_version: 2
+status: provisional
+campaign: qwen3_14b_dgx_spark_modular_dpp
+stage: g0
+design_spec: docs/Qwen3-14B-DGX-Spark-Modular-DPP-Scheduler.md
+provisional_reason: >-
+  The DGX software environment exists, but the exact Qwen3-14B revision,
+  snapshot, model-specific runtime limits, stock telemetry, KV capacity, SLOs,
+  natural-EOS trace manifest, predictor, and DPP parameters have not been
+  measured, reviewed, and frozen. This configuration is not executable.
+
+paths:
+  workspace: /home/dongj/LLM
+  vllm_source: /home/dongj/LLM/vllm
+  python: /home/dongj/LLM/.venv/bin/python
+  vllm_cli: /home/dongj/LLM/.venv/bin/vllm
+  model_snapshot: null
+  active_traces: traces/qwen3_14b
+  frozen_predictor: predictors/qwen3_14b
+  raw_results: results/raw/qwen3_14b_dgx_spark
+  processed_results: results/processed/qwen3_14b_dgx_spark
+  report_artifacts: artifacts/qwen3_14b_dgx_spark
+
+environment:
+  remote_host: convergence
+  remote_user: dongj
+  platform: NVIDIA DGX Spark
+  architecture: aarch64
+  gpu: NVIDIA GB10
+  gpu_compute_capability: "12.1"
+  gpu_memory_architecture: unified
+  driver_version: 580.159.03
+  cuda_toolkit_version: "13.0"
+  python_version: "3.12.3"
+  torch_version: 2.13.0+cu130
+  torch_cuda_version: "13.0"
+  vllm_version: 0.26.1rc1.dev535+g83ad767ee.precompiled
+  vllm_commit: 83ad767eed3be3ee7f2df63be693bfaca5c7c922
+  vllm_commit_status: observed_installed_reverify_before_g0_freeze
+  dependency_snapshot: configs/dgx_spark_environment.freeze.txt
+  required_env:
+    CUDA_VISIBLE_DEVICES: "0"
+    PYTHONHASHSEED: "0"
+  pending_runtime_capture:
+    - root_and_vllm_git_dirty_states
+    - final_environment_variables
+    - startup_log
+    - final_scheduler_config
+    - model_specific_kv_capacity
+    - python_header_requirement_and_reproducible_source
+
+model:
+  requested_name: Qwen3-14B
+  repository: Qwen/Qwen3-14B
+  repository_status: provisional_unverified
+  revision: null
+  tokenizer_revision: null
+  snapshot_sha256: null
+  dtype: bfloat16
+  kv_cache_dtype: bfloat16
+  quantization:
+    enabled: false
+    method: none
+  tensor_parallel_size: 1
+  pipeline_parallel_size: 1
+  max_model_len: null
+  gpu_memory_utilization: null
+  source_and_license_reviewed: false
+
+runtime:
+  engine: vllm_v1
+  continuous_batching: true
+  enable_chunked_prefill: true
+  enable_prefix_caching: false
+  speculative_decoding: false
+  lora: false
+  per_decode_request_tokens_per_iteration: 1
+  total_token_budget: null
+  sequence_budget: null
+  kv_block_size: null
+  usable_kv_blocks: null
+  scheduler_class:
+    stock: null
+    modular_dpp: null
+
+generation:
+  completion: natural_eos
+  predetermined_output_length: false
+  scheduler_output_length_state: forbidden
+  client_safety_ceiling_tokens: null
+  client_safety_ceiling_role: timeout_guard_only_not_scheduler_input
+  sampling_parameters: null
+  finish_reason_validation: pending
+
+slo:
+  classes: 1
+  source: stock_natural_eos_validation
+  freeze_before_dpp_results: true
+  ttft_seconds: null
+  tbt_seconds: null
+  request_success_definition: null
+  actual_goodput_definition: null
+
+contracts:
+  immutable_per_decision: true
+  require_snapshot_hash_match: true
+  types:
+    - StateSnapshot
+    - BatchPlan
+    - Prediction
+    - ControlState
+  fallback_owner: null
+  dpp_candidate_set_name: null
+  ttft_completion_event: null
+
+candidate_generator:
+  prefill_caps:
+    zero: 0
+    small: null
+    medium: null
+    large: null
+    source: same_configuration_dgx_profiling
+  decode_profiles:
+    - MANDATORY
+    - URGENT
+    - ALL
+  urgent_limit_u: null
+  maximum_candidates_before_deduplication: 12
+  canonical_deduplication: true
+  decode_order:
+    - oldest_due_recovery
+    - non_violated_tbt_edf
+    - remaining_recovery_first_miss
+  prefill_order:
+    - hard_protected_ttft_edf
+    - partial_prefill
+    - fcfs
+  stable_tie_keys: null
+  kv_projection_side_effect_free: true
+
+predictor:
+  family: shallow_random_forest
+  training: offline_only
+  features:
+    - B_P
+    - N_P
+    - N_D
+    - K_D
+    - L_D_max
+  provisional_hyperparameter_ranges:
+    n_estimators: [32, 64]
+    max_depth: [6, 8]
+    min_samples_leaf: 5
+  exact_hyperparameters: null
+  random_seed: null
+  expected_duration_calibration: residual_bucket_mean
+  conservative_duration_calibration: centered_residual_p95
+  residual_groups:
+    - prefill_only
+    - decode_only
+    - mixed
+  residual_token_buckets: null
+  insufficient_bucket_fallback: global_residual_distribution
+  support_domain: null
+  artifact_path: null
+  artifact_sha256: null
+  predictor_version: null
+
+safe_set:
+  hard_filters:
+    - total_token_budget
+    - sequence_budget
+    - current_projected_kv
+    - rolling_kv
+    - predictor_support
+  rolling_kv_horizon_iterations: null
+  reserve_blocks_r0: null
+  full_output_length_reservation: forbidden
+  slo_risk_is_hard_filter: false
+  all_risk_order:
+    - predicted_violation_count
+    - predicted_total_lateness
+    - stable_plan_key
+  top_k_when_all_risky: null
+
+fallback:
+  participates_in_dpp_scoring: false
+  with_decode: edf_decode_only_no_prefill
+  without_decode: minimum_physically_feasible_prefill
+  minimum_prefill_chunk_tokens: null
+  final_path: preemption_or_idle
+  must_pass_hard_filters: true
+
+dpp:
+  control_state:
+    - prefill_backlog
+    - ttft_debt
+    - tbt_debt
+  epsilon_ttft: null
+  epsilon_tbt: null
+  weight_v: null
+  denominator: expected_duration
+  score_numeric_ranges: null
+  zero_duration_behavior: null
+  tie_break:
+    - fewer_predicted_misses
+    - larger_conservative_deadline_margin
+    - smaller_plan_id
+  updates_from_actual_observation_only: true
+  obligation_settlement_exactly_once: true
+
+profiling:
+  required_identity:
+    model_revision: null
+    platform: NVIDIA DGX Spark
+    dtype: bfloat16
+    vllm_commit: 83ad767eed3be3ee7f2df63be693bfaca5c7c922
+    runtime_config_sha256: null
+  instrumentation_default: false
+  train_validation_test_split: null
+  evaluation_metrics:
+    - expected_duration_error
+    - conservative_underprediction
+    - conservative_coverage
+    - support_coverage
+    - out_of_support_rate
+    - predictor_cpu_overhead
+
+experiments:
+  baseline: stock_scheduler
+  treatment: modular_dpp_scheduler
+  identical_inputs_and_non_scheduler_settings: true
+  natural_eos_trace_manifest: null
+  arrival_processes: null
+  absolute_offered_loads_requests_per_second: null
+  development_request_count: null
+  formal_request_count: null
+  seeds: null
+  confidence_interval_method: null
+  performance_instrumentation: false
+  profile_and_performance_namespaces_separate: true
+
+validity:
+  selected_plan_must_equal_executed_plan: true
+  failed_requests_max: null
+  timeouts_max: null
+  cancellations_max: null
+  offered_rate_relative_error_max: null
+  warmup_and_drain_rules: null
+  scheduler_cpu_overhead_target: null
+
+archive_isolation:
+  historical_campaign_inputs_active: false
+  mix_historical_and_qwen3_14b_results: false
+  overwrite_historical_raw_results: false
+
+g0_freeze_blockers:
+  - exact_model_repository_revision_and_snapshot
+  - operator_approved_model_acquisition
+  - model_license_and_source_review
+  - qwen3_14b_remote_smoke
+  - final_runtime_and_scheduler_config
+  - token_sequence_and_kv_capacity
+  - stock_iteration_event_semantics
+  - natural_eos_trace_manifest
+  - stock_slo_and_goodput_definition

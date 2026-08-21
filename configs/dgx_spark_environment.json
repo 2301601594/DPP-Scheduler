@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "stage": "g0",
+  "status": "environment_installed_qwen3_14b_g0_pending",
+  "captured_at_utc": "2026-08-19T18:21:50Z",
+  "active_campaign": "qwen3_14b_dgx_spark_modular_dpp",
+  "experiment_config_sha256": "bed999861fb9dc0ee1a65661dfd1755a7e05fc6ed8892aec049e3d19333481f6",
+  "transport": {
+    "ssh_alias": "dgx-spark",
+    "remote_user": "dongj",
+    "remote_host": "convergence",
+    "remote_project": "/home/dongj/LLM"
+  },
+  "host": {
+    "platform": "NVIDIA DGX Spark",
+    "dgx_os_ota_version": "7.5.0",
+    "operating_system": "Ubuntu 24.04.4 LTS",
+    "kernel": "6.17.0-1026-nvidia",
+    "architecture": "aarch64",
+    "cpu_count": 20,
+    "cpu_layout": "10x Cortex-X925 + 10x Cortex-A725",
+    "system_memory_bytes": 130595860480,
+    "swap_bytes": 17179865088,
+    "gpu": "NVIDIA GB10",
+    "gpu_compute_capability": "12.1",
+    "gpu_memory_architecture": "unified",
+    "gpu_driver": "580.159.03",
+    "cuda_toolkit": "13.0",
+    "nvcc_build": "V13.0.88"
+  },
+  "source": {
+    "root_commit": "ad04cd43821ea11189a1dae488eb4d74b88cade3",
+    "root_dirty": true,
+    "root_dirty_note": "Contains the intended Qwen3-14B modular Scheduler migration; historical results/artifacts remain excluded from the remote mirror.",
+    "vllm_commit": "83ad767eed3be3ee7f2df63be693bfaca5c7c922",
+    "vllm_dirty": false
+  },
+  "python_environment": {
+    "path": "/home/dongj/LLM/.venv",
+    "python": "3.12.3",
+    "uv": "0.11.28",
+    "uv_binary": "/home/dongj/.local/bin/uv",
+    "uv_installer_sha256": "b7b3fe80cad1142a2a5794050b7db7b3291d1bac1423b0732571dd9366e8ca8b",
+    "torch": "2.13.0+cu130",
+    "torch_cuda": "13.0",
+    "vllm": "0.26.1rc1.dev535+g83ad767ee.precompiled",
+    "installed_package_count": 195,
+    "environment_size_bytes": 7000453170,
+    "uv_cache_size_bytes": 156223805,
+    "package_snapshot": "configs/dgx_spark_environment.freeze.txt",
+    "package_snapshot_sha256": "d6e200edd8f4a932456ee76eb2f0fd24aa38cc8ed36223f28cac2f7565bf9199",
+    "installation_complete": true
+  },
+  "vllm_target": {
+    "version": "0.26.1rc1.dev535+g83ad767ee",
+    "source_commit": "83ad767eed3be3ee7f2df63be693bfaca5c7c922",
+    "install_mode": "precompiled editable",
+    "wheel_variant": "cu130",
+    "wheel_platform": "manylinux_2_28_aarch64",
+    "wheel_source": "https://wheels.vllm.ai/83ad767eed3be3ee7f2df63be693bfaca5c7c922/",
+    "resolved_package_count": 195,
+    "estimated_download_gib": "4-6",
+    "estimated_environment_plus_cache_gib": "10-15",
+    "runtime_artifacts": {
+      "vllm_rs_sha256": "fa256501963cdeedbfa8881747dcf33e324efdeaf69154f79c47e9bb8602d443",
+      "stable_libtorch_sha256": "03c906d89496b5cc7462a834997f9668941eb5596755be363e54239717498a70",
+      "moe_stable_libtorch_sha256": "20531296d0930a2b9dca81e39044bfaf008f4702a6a22f2a8bb92f4aeffdaa2a"
+    }
+  },
+  "model": {
+    "requested_name": "Qwen3-14B",
+    "candidate_repository": "Qwen/Qwen3-14B",
+    "repository_status": "provisional_unverified",
+    "revision": null,
+    "tokenizer_revision": null,
+    "snapshot_path": null,
+    "snapshot_present": false,
+    "dtype": "bfloat16",
+    "acquisition_approved": false
+  },
+  "preflight": {
+    "free_disk_gib": 780,
+    "free_disk_bytes": 838183608320,
+    "gpu_compute_processes": 0,
+    "dependency_resolution": "passed",
+    "bulk_install_operator_confirmation": "confirmed_by_user_2026-08-20"
+  },
+  "verification": {
+    "verified_at_utc": "2026-08-19T18:21:50Z",
+    "source_mirror_checksum": "passed",
+    "vllm_cli": "passed",
+    "stable_libtorch_import": "passed",
+    "moe_stable_libtorch_import": "passed",
+    "cuda_smoke": "passed",
+    "cusparselt_load": "passed",
+    "dependency_check": "passed_with_verified_sbsa_tag_exception",
+    "dependency_check_note": "uv 0.11.28 reports the NVIDIA manylinux2014_sbsa wheel as a different platform; the installed library is ARM aarch64, its SBSA tag was checked, ctypes loading passed, and torch._C._has_cusparselt is true. Any additional incompatibility remains fatal."
+  },
+  "pending": [
+    "Review and freeze the exact Qwen3-14B repository, immutable model/tokenizer revision, source, license, file sizes, and hashes.",
+    "Obtain operator-approved bulk-transfer confirmation before acquiring the model snapshot.",
+    "Run a bounded remote Qwen3-14B BF16 smoke with the frozen vLLM commit and required runtime flags.",
+    "Capture runtime environment variables, final SchedulerConfig, token/sequence budgets, KV block capacity, and startup log.",
+    "Create and freeze a Qwen3-14B natural-EOS trace manifest and Stock SLO/Goodput definitions."
+  ]
+}

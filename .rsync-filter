@@ -1,0 +1,50 @@
+# WSL x86_64 环境，不能在 ARM64 Spark 上使用
+- /.venv/
+- /.uv-python/
+
+# Codex/agent 运行时目录只属于本地会话
+- /.agents/
+- /.codex/
+
+# 缓存和原始数据单独处理
+- /.cache/
+- /data/raw/
+- /models/
+- /checkpoints/
+- *.safetensors
+- *.gguf
+- **/pytorch_model*.bin
+
+# 只同步新项目冻结后的 Qwen3-14B trace；历史 trace 保留在本地档案
++ /traces/
++ /traces/qwen3_14b/
++ /traces/qwen3_14b/***
+- /traces/***
+
+# 本地历史结果不推送到 Spark，同时保护 Spark 新结果不被 --delete 删除
+- /results/
+- /artifacts/
+
+# DGX 运行日志保留在远端，避免源代码镜像删除诊断记录
+- /logs/
+
+# 临时文件
+- /.pytest_cache/
+- **/__pycache__/
+- *.pyc
+- *.pyo
+
+# Codex 生成的临时 Git refs 不属于可复现实验源码
+- /.git/refs/codex/
+- /.git/logs/refs/codex/
+- /.git/index.lock
+
+# x86_64 vLLM 编译产物
+- /vllm/.deps/
+- /vllm/build/
+- /vllm/vllm.egg-info/
+# precompiled editable 安装会在源码树放置平台相关运行时；保留远端 ARM64 版本
+- /vllm/vllm/vllm-rs
+- *.so
+- *.o
+- *.a

@@ -1,0 +1,112 @@
+schema_version: 1
+status: passed_non_benchmark_smoke
+observed_at_utc: "2026-08-20T07:20:54Z"
+scope: independent_dgx_compatibility_check
+research_campaign_inclusion: false
+research_campaign_exclusion_reason: >-
+  This is standalone compatibility evidence for another model and precision.
+  The active Qwen3-14B BF16 modular DPP campaign does not consume it, and this
+  file does not change configs/dgx_spark_experiment.yaml.
+
+remote:
+  ssh_alias: dgx-spark
+  host: convergence
+  user: dongj
+  workspace: /home/dongj/LLM
+  log: /home/dongj/LLM/logs/qwen38-nvfp4-smoke-20260820T070822Z.log
+  response: /home/dongj/LLM/logs/qwen38-nvfp4-smoke-20260820T070822Z.response.json
+
+local_evidence:
+  directory: results/raw/dgx_spark/compatibility_smoke/qwen38_nvfp4_20260820T070822Z
+  server_log_sha256: 7898a3ada39d52e85b4015d1f4b90bb0ac24715834bbec21cb4aa39812b23a10
+  response_sha256: d377c4fe0564a56e5124798feafea2605e543ec72ae69ff5b2897607b0c2cc13
+  aggregate_as_performance_result: false
+
+model:
+  source: ModelScope
+  id: unsloth/Qwen3.8-27B-NVFP4
+  revision: 8dd9d2f9168272d773eebc67ec9bef79ec4f1664
+  local_path: /home/dongj/models/Qwen3.8-27B-NVFP4
+  architecture: Qwen3_5ForConditionalGeneration
+  quantization: compressed-tensors mixed-precision NVFP4
+  files:
+    model.safetensors:
+      size_bytes: 22568192096
+      sha256: c473512c70eace07e2256fe9fd76596ac03e3295bee7d54cfb72676416afcc05
+    model_mtp.safetensors:
+      size_bytes: 849400392
+      sha256: 1d8268aa85ace093a561e3e7b63b9d390dac1cd55a90cd55b5ec509c3c9da9fe
+      used: false
+
+environment:
+  gpu: NVIDIA GB10
+  compute_capability: "12.1"
+  python: "3.12.3"
+  vllm: 0.26.1rc1.dev535+g83ad767ee.precompiled
+  flashinfer_python: 0.6.16.post3
+  nvidia_cutlass_dsl: 4.6.0
+  triton: 3.7.1
+  ninja: 1.13.0
+  cuda_toolkit: "13.0"
+  user_python_headers: /home/dongj/LLM/.uv-python/cpython-3.12.3-linux-aarch64-gnu/include/python3.12
+  launch_env:
+    PATH: /home/dongj/LLM/.venv/bin:/home/dongj/.local/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    CPATH: /home/dongj/LLM/.uv-python/cpython-3.12.3-linux-aarch64-gnu/include/python3.12
+    MAX_JOBS: "2"
+    NVCC_THREADS: "1"
+
+server:
+  executable: /home/dongj/LLM/.venv/bin/vllm
+  subcommand: serve
+  served_model_name: qwen3.8-27b
+  host: 127.0.0.1
+  port: 8000
+  tensor_parallel_size: 1
+  max_model_len: 32768
+  kv_cache_dtype: fp8
+  gpu_memory_utilization: 0.5
+  max_num_seqs: 4
+  max_num_batched_tokens: 8192
+  enable_chunked_prefill: true
+  enforce_eager: true
+  reasoning_parser: qwen3
+  enable_auto_tool_choice: true
+  tool_call_parser: qwen3_coder
+  speculative_decoding: false
+  timeout_minutes: 20
+
+observations:
+  selected_nvfp4_kernel: FlashInferCutlassNvFp4LinearKernel
+  selected_attention_backend: FLASHINFER
+  selected_gdn_prefill_kernel: Triton/FLA
+  model_loading_seconds: 171.495442
+  model_memory_gib: 21.34
+  engine_init_seconds: 440.04
+  available_kv_cache_gib: 32.9
+  kv_cache_tokens: 833763
+  max_concurrency_at_32768_tokens: 25.44
+  api_models_http_status: 200
+  smoke_request:
+    temperature: 0.0
+    thinking: false
+    prompt_tokens: 24
+    completion_tokens: 4
+    http_status: 200
+    curl_total_seconds_with_first_inference_jit: 51.890978
+    response_content: 模型运行成功
+  shutdown:
+    clean_resource_release_verified: true
+    remaining_compute_processes: 0
+    final_gpu_utilization_percent: 0
+    final_available_system_memory_gib: 116
+
+warnings:
+  - >-
+    NVIDIA Artifactory certificate verification failed; HTTPS verification was
+    not disabled. FlashInfer fell back to bounded local JIT compilation.
+  - >-
+    The first inference compiled additional Triton kernels, so its 51.89 s
+    latency is not a benchmark measurement.
+  - >-
+    Transformers emitted non-fatal Qwen3-VL min_frames/max_frames docstring
+    validation messages during initialization.

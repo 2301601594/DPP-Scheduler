@@ -1,54 +1,122 @@
-# Stock Scheduler benchmark: G0-G3
+# Qwen3-14B modular DPP Scheduler experiment plan
 
-The executable source of truth is `configs/frozen_experiment.yaml`.
+The active design is
+`docs/Qwen3-14B-DGX-Spark-Modular-DPP-Scheduler.md`. This plan turns that
+design into scientific gates; it does not freeze values that have not been
+measured on the target DGX Spark.
 
-The current G1 gate is the minimal SLO-calibration matrix: three fixed-length
-classes, 100 serial requests and 300 saturation requests per seed. It is 18
-runs and 3600 measured requests. Tight/Medium/Loose SLOs are frozen from the
-mean of the three seed-level Stock-Auto serial P90 values. Existing low-load
-runs are retained as diagnostics but are no longer scheduled or gated.
+## Current status
 
-The preferred G1-G2 entry point is:
+The campaign is at **G0**.
+
+Observed DGX software and hardware facts can be reverified from the existing
+environment manifests. The following are not yet frozen:
+
+- exact `Qwen3-14B` repository, immutable revision, and model/tokenizer hashes;
+- model-specific startup parameters, `SchedulerConfig`, and KV capacity;
+- natural-EOS request/trace manifest and request-level Goodput definition;
+- TTFT/TBT SLOs and obligation event boundaries;
+- `C_tok`, `C_seq`, `b_s`, `b_m`, `b_l`, `u`, `H`, `R0`, Top-K,
+  Recovery rules, `epsilon^F`, `epsilon^D`, and `V`; and
+- profiling dataset, Random-Forest artifact, support domain, and residual
+  calibration.
+
+`configs/dgx_spark_experiment.yaml` therefore remains provisional and must
+not be used for a benchmark.
+
+## Gate sequence
+
+| Gate | Work | Required evidence |
+| --- | --- | --- |
+| G0 | Freeze environment, model, runtime, source, and trace identity | exact manifests, remote smoke, startup log, final SchedulerConfig/KV facts |
+| G1 | Stock natural-EOS baseline and event telemetry | verified TTFT/TBT event semantics, frozen SLO/Goodput definitions, resource/load calibration |
+| G2 | Contracts, Snapshot, exact-plan Adapter, Candidate Generator | immutable same-hash structures; at most 12 deterministic plans; selected plan equals actual execution |
+| G3 | Same-configuration profiling and shallow RF | held-out expected error, conservative P95 coverage/underprediction, support/OOD report, CPU overhead |
+| G4 | Safe-Set, Rolling KV, and Fallback | physical feasibility, zero-violation/all-risk behavior, deterministic fallback/preemption/idle audit |
+| G5 | DPP and SLO ledger freeze | complete equation, units, numeric ranges, obligation boundaries, one owner for fallback, deterministic tie-break |
+| G6 | Integrated modular Scheduler | remote unit/integration tests, exact execution, one-time settlement, actual-only state updates |
+| G7 | Stock-versus-DPP evaluation | identical frozen model/requests/arrival/runtime settings, append-only raw data, reproducible tables and uncertainty |
+
+No gate is skipped because later code can be scaffolded. Early scaffolding
+keeps every unmeasured value explicitly provisional.
+
+## G0 execution checklist
+
+1. Reverify the DGX host, disk, installed project environment, root/vLLM commits,
+   and source dirty states.
+2. Resolve the exact model repository and immutable revision. Record source,
+   license, file sizes, and expected storage before any transfer.
+3. Obtain user confirmation that the group/operator approved the model
+   acquisition method; then acquire or transfer only the reviewed snapshot.
+4. Run a bounded Qwen3-14B BF16 smoke with vLLM V1, one GPU, chunked prefill on,
+   Prefix Caching and Speculative Decoding off.
+5. Capture the startup log, final `SchedulerConfig`, model/KV dtype, block
+   size, usable KV blocks, `C_tok`, `C_seq`, and all environment variables.
+6. Define natural-EOS prompts and client safety guards without exposing a fixed
+   or expected output length to the Scheduler.
+7. Freeze config and manifests only after review; update hashes atomically.
+
+Model acquisition and the smoke are separate authorized tasks. Merely syncing
+this plan does not authorize either one.
+
+## Implementation milestones
+
+### G1: Stock semantics
+
+Instrument the locked stock Scheduler without changing its decisions. Identify
+the exact Adapter-visible events for Prefill service, first-token return,
+non-EOS Decode return, EOS completion, KV release, preemption, and failure.
+Calibrate SLOs and actual request-level Goodput from Stock validation before
+observing DPP test results.
+
+### G2: Exact BatchPlan path
+
+Implement public immutable contracts and `snapshot_hash` validation. Generate
+`{0,b_s,b_m,b_l}` × `{MANDATORY,URGENT(u),ALL}`, canonically deduplicate, and
+use a deterministic temporary selector. Adapter execution is atomic: request
+IDs and token counts may not be reselected after the decision.
+
+### G3: Predictor
+
+Collect same-model/same-runtime iteration rows with only
+`B_P,N_P,N_D,K_D,L_D_max`. Train the shallow RF offline, calibrate residuals,
+freeze its support domain and artifact hash, and validate expected versus
+conservative duration independently.
+
+### G4: Safety
+
+Apply token, sequence, current KV, Rolling-KV, and Predictor-support hard
+filters. Use conservative duration for SLO-risk estimation. Prefer zero-new-
+violation plans; otherwise send risk-ranked Top-K to DPP. Keep the independent
+Fallback and Preemption/Idle paths deterministic and audited.
+
+### G5–G6: Control and integration
+
+Freeze `Psi_k`, its units/ranges, `Q^P/Z^F/Z^D` ledger, event boundaries, and
+tie-break. Integrate Selector, Adapter, Observer, and actual-only updates. Every
+TTFT/TBT obligation is created and settled exactly once; natural EOS releases
+KV and creates no next obligation.
+
+### G7: Evaluation
+
+Compare Stock and modular DPP at identical absolute offered loads using the
+same immutable model, prompts, arrival schedule, seeds, generation settings,
+and non-Scheduler vLLM parameters. Profile runs and performance runs use
+separate namespaces. Aggregate per seed, retain invalid/negative runs, and
+rebuild all tables from append-only raw results.
+
+## Remote workflow
+
+All execution is remote:
 
 ```bash
-.venv/bin/python -m benchmarks.run_g1_g2 \
-  --config configs/frozen_experiment.yaml --dry-run
-.venv/bin/python -m benchmarks.run_g1_g2 \
-  --config configs/frozen_experiment.yaml --execute --resume
-.venv/bin/python -m benchmarks.run_g1_g2 \
-  --config configs/frozen_experiment.yaml --report-only
+./scripts/remote_dgx.sh check
+./scripts/remote_dgx.sh dry-run
+./scripts/remote_dgx.sh push
+./scripts/remote_dgx.sh verify
 ```
 
-It runs one ten-request Stock-Auto preflight, reuses or completes the G1
-serial/saturation gate, freezes the shared Stock-derived serial SLO, and then
-performs the configured G2 adaptive scan. The current G2 scope is the three
-fixed classes under Poisson arrival with seed 1 only. Each workload is probed
-from the largest coarse QPS downward and stops as soon as a pass/fail bracket
-exists, before moving to the next workload. The five-point fine scan runs after
-all workload brackets exist. A fresh run needs at least 21 runs when each
-second coarse point passes, at most 39 without extensions, and at most 48 with
-three extensions per workload; every run has 100 measured requests. Medium is
-the primary capacity SLO. This reduced single-seed scan locates candidate
-capacity knees but cannot estimate cross-seed confidence intervals and has
-higher tail uncertainty. `stock_reference.csv/json` is the reference for later
-schedulers; it is not a multi-scheduler result by itself.
-
-1. `.venv/bin/python -m benchmarks.prepare_traces --config configs/frozen_experiment.yaml`
-   downloads and freezes ShareGPT/BurstGPT, generates validation/test traces,
-   and writes a SHA256 manifest.
-2. `.venv/bin/python -m benchmarks.smoke_test --config configs/frozen_experiment.yaml --execute`
-   runs the four required GPU smoke configurations.
-3. Use `benchmarks.run_g1_g2 --dry-run` to review the combined adaptive bounds,
-   then replace it with `--execute --resume` after review.
-4. `.venv/bin/python -m benchmarks.aggregate_results --config configs/frozen_experiment.yaml --stage g1`
-   derives and freezes SLOs from the serial baseline.
-5. The combined runner enters G2 only after the complete G1 gate passes. G2
-   freezes measured capacity and materializes the phase-shift trace.
-6. Repeat run/aggregate for G3. G3 first populates each budget's compilation
-   cache, checks Auto-vs-explicit-B2048 equivalence, and selects Best-Fixed from
-   validation only.
-7. `.venv/bin/python -m benchmarks.aggregate_results --config configs/frozen_experiment.yaml --stage all`
-   rebuilds every processed table and artifact from append-only raw results.
-
-Raw results are append-only. Performance and iteration-profile runs are never
-mixed; G4 profiling is not implemented here.
+After source verification, short checks use
+`./scripts/remote_dgx.sh run ...`. Long work additionally requires the shared-
+host preflight, resource approval, a bounded named session, and a unique output
+directory required by `AGENTS.md`.
