@@ -133,3 +133,23 @@
 - Raw results:
   - `results/raw/qwen3_14b_dgx_spark/shared_scan_fast/`
 - This is only a coarse probe; final shared config must still be validated on the full natural-EOS trace.
+
+## 2026-08-22 — Shared runtime parameters fixed at 0.84 GPU utilization
+
+- Fixed shared runtime parameters:
+  - `max_num_batched_tokens = 2048`
+  - `max_num_seqs = 64`
+  - `gpu_memory_utilization = 0.84`
+- Re-captured G0 KV facts at 0.84 GPU utilization:
+  - KV block size: 16
+  - GPU KV cache tokens: 482,384
+  - usable KV blocks: 30,149
+  - available KV cache: 73.61 GiB
+  - max concurrency at 40,960 tokens/request: 11.78x
+- Updated:
+  - `configs/dgx_spark_experiment.yaml`
+  - `configs/dgx_spark_environment.json`
+  - `configs/qwen3_14b_g0_stock_capture.json`
+- Raw evidence:
+  - `results/raw/qwen3_14b_dgx_spark/g0_stock_capture_084/`
+- These are now fixed as the shared Stock/DPP baseline. No further parameter scan or validation was run per user instruction.
