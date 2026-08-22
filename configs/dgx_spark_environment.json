@@ -4,8 +4,8 @@
   "status": "environment_installed_qwen3_14b_g0_pending",
   "captured_at_utc": "2026-08-19T18:21:50Z",
   "active_campaign": "qwen3_14b_dgx_spark_modular_dpp",
-  "experiment_config_sha256": "2484ef9021581e1dab2d11591fc8bed82e1199de3ee02a440491d195bfd58284",
-  "experiment_config_sha256_note": "Recomputed after fixing shared runtime at gpu_memory_utilization=0.84, max_num_batched_tokens=2048, max_num_seqs=64; previous value c1895bb156ba565e53ae5aa2a0b4004f19a1975226379445a2d16d40620e8a29.",
+  "experiment_config_sha256": "c331ed4ed04ef7647f6e20eb7a7813c062ab5ea8c26461463c8de063ac3a1688",
+  "experiment_config_sha256_note": "Recomputed after the 2026-08-22 length-blind runner, locked trace-source settings, and VLLM_USE_V1 guard were added; captured runtime values remain gpu_memory_utilization=0.84, max_num_batched_tokens=2048, max_num_seqs=64.",
   "transport": {
     "ssh_alias": "dgx-spark",
     "remote_user": "dongj",
@@ -32,7 +32,7 @@
   "source": {
     "root_commit": "38388d0e9f337796699a85304de5ff10e5e98cf8",
     "root_dirty": false,
-    "root_dirty_note": "Verified clean after the 2026-08-21 source sync; historical results/artifacts remain excluded from the remote mirror.",
+    "root_dirty_note": "Observed value from the prior capture; reverify after the 2026-08-22 legacy cleanup before freezing G0.",
     "vllm_commit": "83ad767eed3be3ee7f2df63be693bfaca5c7c922",
     "vllm_dirty": false
   },

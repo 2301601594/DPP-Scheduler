@@ -22,6 +22,7 @@ class SchedulerSettings:
     stable_tie_key: str = "request_id"
     allow_partial_prefill: bool = True
     minimum_prefill_chunk_tokens: int = 1
+    frozen: bool = False
 
     @property
     def prefill_caps(self) -> tuple[int, int, int, int]:
@@ -41,4 +42,5 @@ class SchedulerSettings:
             prefill_caps_large=2048,
             urgent_limit_u=4,
             recovery_age_threshold=30.0,
+            frozen=False,
         )

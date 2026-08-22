@@ -13,7 +13,12 @@ from dpp_scheduler.contracts import Decision, ExecutionObservation, StateSnapsho
 
 @dataclass
 class InMemoryObserver:
+    max_records: int = 1024
     records: list[dict] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.max_records <= 0:
+            raise ValueError("max_records must be positive")
 
     def record(self, snapshot: StateSnapshot, decision: Decision, observation: ExecutionObservation | None) -> None:
         self.records.append(
@@ -24,6 +29,7 @@ class InMemoryObserver:
                 "observation": observation,
             }
         )
+        del self.records[:-self.max_records]
 
     def clear(self) -> None:
         self.records.clear()

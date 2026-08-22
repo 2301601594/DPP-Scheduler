@@ -36,25 +36,43 @@
   source facts may be reused only after verification. No model-specific
   capacity, trace, SLO, output-length assumption, or result transfers into the
   new campaign.
-- Historical raw/processed evidence and standalone compatibility smokes remain
-  immutable archives. They are never active inputs and are never mixed with
-  Qwen3-14B results.
+- Obsolete version-controlled 5070 campaign code, configs, traces, results,
+  plots, tests, and standalone compatibility-smoke files were removed on
+  2026-08-22 at the user's request. A separately confirmed cleanup removed the
+  old 5070 raw results, BurstGPT input, and invalid Qwen3 scan/validation trace
+  drafts. Old model caches and retained Qwen3 raw evidence were not deleted;
+  none of the historical residue is an active input.
 - The currently installed vLLM source commit is recorded as an observed G0
   candidate, not silently changed. Compatibility must be verified before it is
   frozen for the new model.
 
 ## 2026-08-21: freeze interface ambiguities before DPP implementation
 
-Before G5, the specification must choose and test:
+The following interface choices are now fixed:
 
-- where `snapshot_hash` lives in every public structure;
-- one canonical Safe-Set/DPP candidate-set name;
-- a single owner for Fallback construction;
+- every public decision-round contract carries `snapshot_hash`;
+- the canonical candidate-set name is `safe_candidates`; and
+- Controller owns Fallback construction.
+
+Before G5, the specification must still choose and test:
+
 - the locked-vLLM event that completes TTFT; and
 - units, numeric ranges, zero-duration handling, tie keys, Recovery rules,
   Top-K, and every ledger update boundary.
 
 No implementation may resolve these differences implicitly.
+
+## 2026-08-22: define natural completion as length-blind scheduling
+
+- The objective is not to require every request to finish with
+  `finish_reason=stop`; it is to prevent Scheduler access to a future or
+  remaining output length.
+- The runner sends the reviewed finite `max_tokens` only as a client
+  termination guard. The guard is absent from Scheduler contracts, candidates,
+  Predictor features/labels, and decisions.
+- Both `stop` and `length` observations are retained and reported separately.
+  A `length` terminal is never silently filtered or reinterpreted as a natural
+  EOS sample.
 
 ## 2026-08-21: preserve the remote-only execution and shared-host boundary
 

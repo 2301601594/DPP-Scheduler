@@ -4,6 +4,8 @@
   "dataset": "/home/dongj/LLM/data/raw/ShareGPT_V3_unfiltered_cleaned_split.json",
   "dataset_sha256": "35f0e213ce091ed9b9af2a1f0755e9d39f9ccec34ab281cd4ca60d70f6479ba4",
   "model_path": "/home/dongj/models/Qwen3-14B-BF16",
+  "model_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+  "tokenizer_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
   "enable_thinking": false,
   "min_input_tokens": 128,
   "max_input_tokens": 8192,

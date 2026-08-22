@@ -5,10 +5,11 @@ stage: g0
 design_spec: docs/Qwen3-14B-DGX-Spark-Modular-DPP-Scheduler.md
 provisional_reason: >-
   The DGX software environment exists and the Qwen3-14B snapshot identity is
-  recorded (see configs/qwen3_14b_snapshot_manifest.json), but model-specific
-  runtime limits, stock telemetry, KV capacity, SLOs, natural-EOS trace
-  manifest, predictor, and DPP parameters have not been measured, reviewed,
-  and frozen. This configuration is not executable.
+  recorded (see configs/qwen3_14b_snapshot_manifest.json). The shared runtime
+  and KV capacity were captured at gpu_memory_utilization=0.84, but stock
+  iteration telemetry, the reviewed length-blind trace manifest, SLOs,
+  predictor, and DPP parameters have not been frozen. This configuration is
+  not executable.
 
 paths:
   workspace: /home/dongj/LLM
@@ -42,12 +43,13 @@ environment:
   required_env:
     CUDA_VISIBLE_DEVICES: "0"
     PYTHONHASHSEED: "0"
+    VLLM_USE_V1: "1"
   captured_runtime_facts:
     - configs/qwen3_14b_g0_stock_capture.json
-    - results/raw/qwen3_14b_dgx_spark/g0_stock_capture_20260822
+    - results/raw/qwen3_14b_dgx_spark/g0_stock_capture_084
   pending_runtime_capture:
     - python_header_requirement_and_reproducible_source
-    - review_remote_git_dirty_state_from_excluded_historical_artifacts
+    - reverify_remote_root_clean_state_after_legacy_cleanup
 
 model:
   requested_name: Qwen3-14B
@@ -92,10 +94,28 @@ generation:
   completion: natural_eos
   predetermined_output_length: false
   scheduler_output_length_state: forbidden
-  client_safety_ceiling_tokens: null
-  client_safety_ceiling_role: timeout_guard_only_not_scheduler_input
-  sampling_parameters: null
-  finish_reason_validation: pending
+  client_safety_ceiling_tokens: 16384
+  client_safety_ceiling_role: termination_guard_only_never_scheduler_input
+  sampling_parameters:
+    temperature: 0.0
+    top_p: 1.0
+    ignore_eos: false
+    seed_source: per_request_trace
+  finish_reason_validation: >-
+    Record and stratify every terminal reason. Both stop and length are valid
+    observations; a length terminal means the client safety guard fired and
+    must never reveal a target or remaining length to the Scheduler.
+
+trace_source:
+  dataset: /home/dongj/LLM/data/raw/ShareGPT_V3_unfiltered_cleaned_split.json
+  dataset_sha256: 35f0e213ce091ed9b9af2a1f0755e9d39f9ccec34ab281cd4ca60d70f6479ba4
+  request_pool: request_pool.jsonl
+  request_pool_manifest: request_pool.meta.json
+  enable_thinking: false
+  min_input_tokens: 128
+  max_input_tokens: 8192
+  pool_size: 3000
+  pool_seed: 1001
 
 slo:
   classes: 1
@@ -109,13 +129,14 @@ slo:
 contracts:
   immutable_per_decision: true
   require_snapshot_hash_match: true
+  snapshot_hash_placement: every_public_decision_round_contract
   types:
     - StateSnapshot
     - BatchPlan
     - Prediction
     - ControlState
-  fallback_owner: null
-  dpp_candidate_set_name: null
+  fallback_owner: controller
+  dpp_candidate_set_name: safe_candidates
   ttft_completion_event: null
 
 candidate_generator:
@@ -254,24 +275,19 @@ validity:
   warmup_and_drain_rules: null
   scheduler_cpu_overhead_target: null
 
-archive_isolation:
-  historical_campaign_inputs_active: false
-  mix_historical_and_qwen3_14b_results: false
-  overwrite_historical_raw_results: false
+input_isolation:
+  active_result_namespace: results/raw/qwen3_14b_dgx_spark
+  active_trace_namespace: traces/qwen3_14b
+  legacy_scheduler_inputs_allowed: false
 
 g0_freeze_blockers:
-  - exact_model_repository_revision_and_snapshot
-  - operator_approved_model_acquisition
-  - model_license_and_source_review
-  - qwen3_14b_remote_smoke
-  - final_runtime_and_scheduler_config
-  - token_sequence_and_kv_capacity
   - stock_iteration_event_semantics
   - natural_eos_trace_manifest
   - stock_slo_and_goodput_definition
 
 g0_blockers_resolved:
   - resolved_2026_08_21_exact_model_repository_revision_and_snapshot
+  - resolved_2026_08_21_operator_approved_model_acquisition
   - resolved_2026_08_21_model_license_and_source_review
   - resolved_2026_08_22_qwen3_14b_stock_g0_capture
-  - note: "Qwen3-14B BF16 stock vLLM G0 capture completed: SchedulerConfig, token/sequence budgets, KV block size/capacity, startup log, and one natural-EOS smoke completion are recorded in configs/qwen3_14b_g0_stock_capture.json and results/raw/qwen3_14b_dgx_spark/g0_stock_capture_20260822. G0 remains provisional until trace manifest and stock SLO/Goodput are frozen."
+  - note: "Qwen3-14B BF16 stock vLLM G0 capture completed at gpu_memory_utilization=0.84: SchedulerConfig, token/sequence budgets, KV block size/capacity, startup log, and a bounded client-guard smoke are recorded in configs/qwen3_14b_g0_stock_capture.json and results/raw/qwen3_14b_dgx_spark/g0_stock_capture_084. The smoke terminated by length as expected for its 16-token guard; it is not a predetermined Scheduler output length. G0 remains provisional until the length-blind trace manifest and stock SLO/Goodput semantics are frozen."

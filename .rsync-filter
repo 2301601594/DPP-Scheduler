@@ -15,7 +15,7 @@
 - *.gguf
 - **/pytorch_model*.bin
 
-# 只同步新项目冻结后的 Qwen3-14B trace；历史 trace 保留在本地档案
+# 只同步当前项目审核后的 Qwen3-14B trace；旧 trace 已删除
 + /traces/
 + /traces/qwen3_14b/
 + /traces/qwen3_14b/***

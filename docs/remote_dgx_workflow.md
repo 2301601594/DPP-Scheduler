@@ -41,7 +41,7 @@ repository. It excludes:
 
 - local `.venv`, `.uv-python`, caches, and agent runtime directories;
 - `data/raw`, which is unnecessary when consuming frozen traces;
-- historical trace paths that are not part of the Qwen3-14B campaign;
+- every trace path except the active `traces/qwen3_14b` namespace;
 - local `results` and `artifacts`;
 - x86_64 vLLM dependencies and compiled objects, including the platform-specific
   `vllm-rs` executable (the remote ARM64 copy is preserved);
@@ -163,6 +163,41 @@ After verification, use the project interpreter explicitly:
 ./scripts/remote_dgx.sh run .venv/bin/python -m pytest tests/unit
 ```
 
+If `pytest` is not installed, do not install it implicitly; the current unit
+suite also runs with the standard library:
+
+```bash
+./scripts/remote_dgx.sh run .venv/bin/python -m unittest discover -v -s tests/unit
+```
+
+Stage a candidate length-blind trace under a unique raw-results directory. QPS,
+seeds, and request count remain review inputs until G0 freezes them:
+
+```bash
+./scripts/remote_dgx.sh run .venv/bin/python \
+  -m benchmarks.generate_qwen3_poisson_traces \
+  --output-dir <unique-trace-stage-run-id> \
+  --num-requests <reviewed-count> \
+  --qps <reviewed-qps...> \
+  --seeds <reviewed-seeds...>
+```
+
+After pulling, reviewing, and promoting that trace into
+`traces/qwen3_14b/`, update its manifest/config hash and freeze the corresponding
+G0 fields. Preview the Stock runner before any real server launch:
+
+```bash
+./scripts/remote_dgx.sh run .venv/bin/python \
+  -m benchmarks.run_stock_natural_eos \
+  --trace <file-relative-to-traces/qwen3_14b> \
+  --trace-manifest <manifest-relative-to-traces/qwen3_14b> \
+  --run-id <unique-run-id> \
+  --dry-run
+```
+
+Without `--dry-run`, the runner rejects a provisional active config. A real
+run additionally needs the shared-host resource checks and approval below.
+
 Long benchmarks must run under a disconnect-safe mechanism such as `tmux` or
 `systemd-run --user`, while still writing unique append-only run directories
 under remote `results/raw`. Run the new campaign only from the frozen
@@ -194,8 +229,9 @@ investigate it rather than overwriting either copy.
 
 ## Current G0 facts
 
-The verified remote project is `/home/dongj/LLM`, with main commit
-`ad04cd43821ea11189a1dae488eb4d74b88cade3` and vLLM commit
+The verified remote project is `/home/dongj/LLM`; capture the root commit and
+dirty state for every run rather than copying the value from this document.
+The locked vLLM commit is
 `83ad767eed3be3ee7f2df63be693bfaca5c7c922`. The host runs DGX OS OTA 7.5.0,
 Ubuntu 24.04.4, driver 580.159.03, CUDA toolkit 13.0 (`nvcc` V13.0.88), Python
 3.12.3, and user-space `uv 0.11.28`. The 195-package project environment is
@@ -214,6 +250,6 @@ reconstructible Qwen3-14B environment dependency.
 
 The provisional active configuration is `configs/dgx_spark_experiment.yaml`;
 captured environment facts and explicit pending checks are in
-`configs/dgx_spark_environment.json`. Neither file freezes G0. Historical
-campaign configs, traces, and results remain archival evidence and cannot be
-used as the active baseline or mixed with Qwen3-14B aggregates.
+`configs/dgx_spark_environment.json`. Neither file freezes G0. The obsolete
+version-controlled 5070 campaign files were deleted; only the namespaced
+Qwen3-14B inputs and outputs may be used by current tooling.

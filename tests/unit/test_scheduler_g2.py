@@ -14,9 +14,9 @@ from dpp_scheduler.contracts import (
     validate_snapshot_hash,
 )
 from dpp_scheduler.controller import Controller
-from dpp_scheduler.selector import TemporarySelector
+from dpp_scheduler.dpp_selector import TemporarySelector
 from dpp_scheduler.settings import SchedulerSettings
-from dpp_scheduler.vllm_adapter import CallbackVllmAdapter
+from dpp_scheduler.vllm_adapter import CallbackVllmAdapter, VllmAdapter
 
 
 def make_snapshot(
@@ -138,6 +138,76 @@ class CandidateGeneratorTests(unittest.TestCase):
         self.assertEqual(snap.snapshot_hash, before)
         self.assertEqual(snap.free_kv_blocks, 900)
 
+    def test_running_partial_prefill_is_counted_as_active_sequence(self) -> None:
+        prefill = (
+            PrefillRequest("running", 0.0, 100, 32, is_running=True),
+            PrefillRequest("new", 1.0, 100, 0),
+        )
+        snap = make_snapshot(prefill=prefill, sequence_budget=1)
+        plans = CandidateGenerator().generate(snap)
+        self.assertTrue(plans)
+        self.assertTrue(
+            all("new" not in {request_id for request_id, _ in plan.prefill_items}
+                for plan in plans)
+        )
+        self.assertTrue(all(plan.total_sequences == 1 for plan in plans))
+
+    def test_full_sequence_budget_still_allows_running_partial_prefill(self) -> None:
+        prefill = (
+            PrefillRequest(
+                "blocked-new", 0.0, 100, 0,
+                hard_ttft_protected=True,
+            ),
+            PrefillRequest("running", 1.0, 100, 32, is_running=True),
+        )
+        plans = CandidateGenerator().generate(
+            make_snapshot(prefill=prefill, sequence_budget=1)
+        )
+        self.assertTrue(
+            any(
+                "running" in {request_id for request_id, _ in plan.prefill_items}
+                for plan in plans
+            )
+        )
+        self.assertTrue(
+            all(
+                "blocked-new"
+                not in {request_id for request_id, _ in plan.prefill_items}
+                for plan in plans
+            )
+        )
+
+    def test_urgent_does_not_promote_request_without_deadline(self) -> None:
+        decode = (
+            DecodeRequest("mandatory", 0.0, 10, mandatory=True),
+            DecodeRequest("no-deadline", 1.0, 10),
+            DecodeRequest("urgent", 2.0, 10, tbt_deadline=5.0),
+        )
+        plans = CandidateGenerator().generate(make_snapshot(decode=decode))
+        urgent = [plan for plan in plans if plan.template_id.startswith("URGENT")]
+        self.assertTrue(urgent)
+        self.assertTrue(all("urgent" in plan.decode_items for plan in urgent))
+        self.assertTrue(all("no-deadline" not in plan.decode_items for plan in urgent))
+
+    def test_only_oldest_due_recovery_is_mandatory(self) -> None:
+        decode = (
+            DecodeRequest(
+                "older", 0.0, 10, recovery_due=True,
+                recovery_first_miss_time=2.0,
+            ),
+            DecodeRequest(
+                "newer", 1.0, 10, recovery_due=True,
+                recovery_first_miss_time=3.0,
+            ),
+        )
+        snap = make_snapshot(decode=decode, recovery=("older", "newer"))
+        mandatory = [
+            plan for plan in CandidateGenerator().generate(snap)
+            if plan.template_id.startswith("MANDATORY")
+        ]
+        self.assertTrue(mandatory)
+        self.assertTrue(all(plan.decode_items == ("older",) for plan in mandatory))
+
 
 class SelectorTests(unittest.TestCase):
     def test_selector_prefers_non_idle_plan(self) -> None:
@@ -216,6 +286,53 @@ class ControllerTests(unittest.TestCase):
         decision = controller.schedule_once()
         self.assertIsNotNone(decision.selected_plan)
         self.assertEqual(len(controller.observer.records), 1)
+
+
+class AdapterSnapshotTests(unittest.TestCase):
+    def test_snapshot_keeps_running_partial_prefill_and_never_reads_max_tokens(self) -> None:
+        class Request:
+            request_id = "partial"
+            arrival_time = 1.0
+            num_computed_tokens = 32
+            num_prompt_tokens = 128
+            status = "RUNNING"
+
+            @property
+            def max_tokens(self):
+                raise AssertionError("Scheduler must not read the client length guard")
+
+        class BlockPool:
+            num_gpu_blocks = 100
+
+            @staticmethod
+            def get_num_free_blocks() -> int:
+                return 90
+
+        class KVManager:
+            block_pool = BlockPool()
+
+        class Config:
+            enable_prefix_caching = False
+            async_scheduling = False
+
+        class Scheduler:
+            requests = {"partial": Request()}
+            running = [requests["partial"]]
+            waiting = ()
+            kv_cache_manager = KVManager()
+            block_size = 16
+            max_num_scheduled_tokens = 2048
+            max_num_running_reqs = 64
+            cache_config = Config()
+            scheduler_config = Config()
+            num_spec_tokens = 0
+            connector = None
+
+        snapshot = VllmAdapter(Scheduler()).make_snapshot()
+        self.assertEqual(snapshot.active_decode_requests, ())
+        self.assertEqual(len(snapshot.waiting_prefill_requests), 1)
+        self.assertTrue(snapshot.waiting_prefill_requests[0].is_running)
+        self.assertEqual(snapshot.waiting_prefill_requests[0].prefilled_tokens, 32)
 
 
 if __name__ == "__main__":

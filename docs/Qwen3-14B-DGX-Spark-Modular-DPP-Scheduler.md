@@ -10,11 +10,15 @@
 - 基于当前 vLLM 源码提交，开发前记录 commit；
 - 使用 vLLM V1、continuous batching 和 chunked prefill；
 - 关闭 Prefix Caching 和 Speculative Decoding；
-- 使用自然 EOS，不预设输出长度；
+- 让模型正常响应 EOS，不把输出长度预先暴露给 Scheduler；
 - 每个 Decode 请求每轮最多生成一个 token；
 - 单一 SLO 类别。
 
-调度器绝不保存 `remaining_output_tokens` 或预计固定输出长度。
+请求 API 可以携带有限的客户端终止护栏。护栏值只属于 runner，不能进入
+Scheduler 快照、候选、Predictor 特征/标签或 DPP 决策。`stop` 和 `length`
+终止都必须保留并分层报告；`length` 表示护栏触发，不表示 Scheduler 事先知道
+了请求长度。调度器绝不保存、推断或使用 `remaining_output_tokens`、预计固定
+输出长度或最终 EOS 位置。
 
 ## 2. 总体结构
 
@@ -94,6 +98,7 @@ Prediction
   predictor_version
 
 ControlState
+  snapshot_hash
   prefill_backlog
   ttft_debt
   tbt_debt
@@ -439,6 +444,7 @@ Safe-Set 本身不负责决定最终选择哪个计划。
 ## 6.5 FallbackPlan
 
 FallbackPlan 是独立于正常 DPP 候选集合的兜底路径，不参与 DPP 评分。
+其构造所有权固定在 Controller；Safe-Set 只返回 `safe_candidates` 和拒绝原因。
 
 当没有可执行的正常候选时，按以下规则构造：
 
@@ -474,14 +480,12 @@ def filter(snapshot, plans, predictions):
 
         resource_plans.append((plan, pred))
 
-    # 2. 没有物理可行计划
+    # 2. 没有物理可行计划：交回 Controller，不在 Safe-Set 内构造 Fallback
     if not resource_plans:
-        fallback = build_fallback(snapshot)
-
-        if fallback is None:
-            return PREEMPT_OR_IDLE
-
-        return FallbackResult(fallback, rejected)
+        return SafeSetResult(
+            safe_candidates=[],
+            rejected=rejected,
+        )
 
     # 3. 计算 SLO 违约风险
     evaluated = []
@@ -505,7 +509,7 @@ def filter(snapshot, plans, predictions):
 
     if zero_plans:
         return SafeSetResult(
-            candidates=zero_plans,
+            safe_candidates=zero_plans,
             rejected=rejected,
         )
 
@@ -514,6 +518,7 @@ def filter(snapshot, plans, predictions):
         key=lambda x: (
             x.n_vio,
             x.e_vio,
+            x.stable_plan_key,
         )
     )
 
@@ -521,17 +526,11 @@ def filter(snapshot, plans, predictions):
 
     if candidates:
         return SafeSetResult(
-            candidates=candidates,
+            safe_candidates=candidates,
             rejected=rejected,
         )
 
-    # 6. 最终兜底
-    fallback = build_fallback(snapshot)
-
-    if fallback is None:
-        return PREEMPT_OR_IDLE
-
-    return FallbackResult(fallback, rejected)
+    return SafeSetResult(safe_candidates=[], rejected=rejected)
 ```
 
 

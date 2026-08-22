@@ -13,21 +13,28 @@ The active project is the first-version modular DPP Scheduler defined in
 - `Qwen3-14B` on one DGX Spark and one GPU;
 - BF16 inference with vLLM V1 continuous batching and chunked prefill;
 - Prefix Caching and Speculative Decoding disabled;
-- natural EOS, no predetermined output length, and at most one generated token
-  per Decode request in each iteration;
+- normal EOS handling with no output length exposed to the Scheduler, and at
+  most one generated token per Decode request in each iteration;
 - one SLO class; and
 - no PD separation, multi-GPU/model parallelism, LoRA, quantization, online
   predictor training, or output-quality optimization in version 1.
 
 The Scheduler must never store, infer, or consume `remaining_output_tokens`, a
-fixed expected output length, or the eventual EOS position. Client-side safety
-timeouts are allowed but must not become Scheduler features or labels.
+fixed expected output length, or the eventual EOS position. A finite client
+termination guard is allowed but must not become Scheduler state, a Predictor
+feature/label, or a decision input. Preserve and stratify both `stop` and
+`length`; never filter a guard-triggered request merely to manufacture an
+all-EOS workload.
 
 Negative and null results must be retained and reported. Never change prompts,
 arrival times, SLOs, baselines, filtering, seeds, or failed-run handling to make
-DPP appear successful. Historical raw evidence remains immutable, but no
-historical campaign configuration, trace, SLO, result, or conclusion is an
-active input to this project unless it is explicitly revalidated and frozen.
+DPP appear successful. Current Qwen3-14B raw evidence remains append-only. The
+obsolete 5070 campaign's version-controlled files were deleted by explicit
+user request. The separately approved 5070 raw results, BurstGPT input, and
+invalid Qwen3 scan/validation trace drafts were also deleted. Remaining ignored
+historical residue, including old model caches, is intentionally retained and
+non-active; no historical campaign configuration, trace, SLO, result, or
+conclusion is an active input unless explicitly revalidated and frozen.
 
 When instructions conflict, use this precedence:
 
@@ -121,9 +128,9 @@ a system change, preserve the error and ask the user to contact operator
 
 `configs/dgx_spark_experiment.yaml` is the only active experiment configuration.
 It is provisional until G0 is reviewed and frozen. The exact Qwen3-14B model
-repository and immutable revision, local snapshot path, runtime limits, KV
-capacity, final `SchedulerConfig`, trace manifest, SLOs, predictor, and DPP
-parameters are currently pending.
+revision/snapshot, shared runtime limits, and KV capacity have provisional G0
+captures. Stock iteration telemetry, the reviewed trace manifest, SLOs,
+predictor, and DPP parameters remain pending.
 
 Existing DGX environment manifests may be reused only for observed host,
 CUDA, Python, PyTorch, vLLM-installation, and source facts that are reverified.
@@ -132,10 +139,8 @@ tokenization, SLOs, and performance measurements must be recreated for
 Qwen3-14B BF16.
 
 The model and Scheduler redesign reopen the project at **G0**. No later gate
-is complete merely because a historical campaign reached it. Historical raw
-results, processed artifacts, configurations, traces, and standalone
-compatibility smokes are archival evidence: preserve them, do not execute them
-as this campaign, do not silently edit their manifests, and never combine them
+is complete merely because an older campaign reached it. Obsolete campaign
+artifacts are not accepted as inputs and must never be recreated or combined
 with Qwen3-14B aggregates.
 
 ## 5. Task workflow
@@ -246,12 +251,10 @@ submit only a cap and let the stock Scheduler reselect requests. The selected
 Prefill/Decode request IDs, token counts, total sequences, and actual execution
 must agree; any mismatch is a counted error and conservative failure path.
 
-Before G5 is frozen, resolve in the specification:
-
-- which structures physically carry `snapshot_hash`;
-- one canonical name for the DPP candidate set;
-- whether Safe-Set or Controller owns Fallback construction; and
-- the exact Adapter event that settles each TTFT/TBT obligation.
+Every public decision-round contract carries `snapshot_hash`; the canonical
+candidate-set name is `safe_candidates`; and Controller owns Fallback
+construction. Before G5 is frozen, resolve the exact Adapter event that settles
+each TTFT/TBT obligation.
 
 ## 9. Candidate Generator contract
 
@@ -357,8 +360,10 @@ choose, in order: fewer predicted misses; larger conservative deadline margin;
 smaller stable `plan_id`.
 
 The score's Goodput-oriented service utility is not request-level Goodput.
-Actual Goodput is counted only after natural EOS according to the frozen
-request-level success definition.
+Actual Goodput is counted only after a terminal request event according to the
+frozen request-level success definition. `stop` and safety-guard `length`
+terminations remain separate strata; the definition may classify them
+differently but may not silently discard either one.
 
 Update state only from actual execution and returned-token events:
 
@@ -436,8 +441,8 @@ settings, vLLM commit, and all non-Scheduler runtime settings. Policies compare
 at the same absolute offered load. Never use a Scheduler-specific capacity to
 renormalize load.
 
-The new natural-EOS workload and trace manifest must be created and frozen for
-Qwen3-14B. Record source, prompt text or token IDs as appropriate, tokenizer
+The new length-blind natural-completion workload and trace manifest must be
+created and frozen for Qwen3-14B. Record source, prompt text or token IDs as appropriate, tokenizer
 revision, filtering, request parameters, arrival process, sampling seed, and
 SHA256. Do not reuse tokenized or fixed-output traces from another model.
 

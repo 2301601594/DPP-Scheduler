@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, fields, is_dataclass
 from typing import Any, TypeVar
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 T = TypeVar("T")
 
@@ -88,6 +88,10 @@ class PrefillRequest:
     prefilled_tokens: int
     ttft_deadline: float | None = None
     hard_ttft_protected: bool = False
+    # True means that vLLM already admitted the request into its running set.
+    # It therefore consumes a sequence slot even if this plan does not select
+    # another prompt chunk for it.
+    is_running: bool = False
     # Partial-prefill ordering uses the original index as a stable tie key.
     ordinal: int = 0
 
@@ -109,6 +113,7 @@ class DecodeRequest:
     kv_context_length: int
     tbt_deadline: float | None = None
     recovery_due: bool = False
+    recovery_first_miss_time: float | None = None
     mandatory: bool = False
     ordinal: int = 0
 
@@ -236,6 +241,7 @@ class Prediction:
 class ControlState:
     """DPP control state, containing only the three declared control variables."""
 
+    snapshot_hash: str
     prefill_backlog: int
     ttft_debt: float
     tbt_debt: float
@@ -247,7 +253,7 @@ class SafeSetResult:
     """Result container reserved for G4; G2 may pass all candidates through."""
 
     snapshot_hash: str
-    candidates: tuple[BatchPlan, ...]
+    safe_candidates: tuple[BatchPlan, ...]
     rejected: tuple[tuple[str, tuple[str, ...]], ...] = ()
     schema_version: int = SCHEMA_VERSION
 

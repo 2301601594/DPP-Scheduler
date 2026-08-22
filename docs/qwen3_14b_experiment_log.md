@@ -69,7 +69,9 @@
 
 - Added `benchmarks/capture_qwen3_g0.py`, which resolves vLLM EngineArgs,
   starts a stock vLLM server on the DGX, captures the startup log and KV facts,
-  sends one natural-EOS smoke completion, and writes append-only raw evidence.
+  sends one bounded model-execution smoke completion, and writes append-only
+  raw evidence. The 16-token API cap is a client guard, not natural-EOS
+  workload evidence and not a Scheduler input.
 - Stock capture run:
   - Model: Qwen3-14B-BF16 at `/home/dongj/models/Qwen3-14B-BF16`
   - vLLM: `83ad767eed3be3ee7f2df63be693bfaca5c7c922`
@@ -77,24 +79,26 @@
   - `max_model_len=40960`
   - `max_num_batched_tokens=2048`
   - `max_num_seqs=64`
-  - `gpu_memory_utilization=0.90`
+  - `gpu_memory_utilization=0.84`
   - `kv_cache_dtype=bfloat16`
   - chunked prefill on, prefix caching off, async scheduling off
 - Captured KV facts:
   - KV block size: 16
-  - GPU KV cache size: 531,168 tokens
-  - usable KV blocks: 33,198
-  - available KV cache: 81.05 GiB
-  - max concurrency at 40,960 tokens/request: 12.97x
-- Smoke completion passed: natural-EOS request returned a generated completion.
+  - GPU KV cache size: 482,384 tokens
+  - usable KV blocks: 30,149
+  - available KV cache: 73.61 GiB
+  - max concurrency at 40,960 tokens/request: 11.78x
+- Smoke completion passed with `finish_reason=length`, as expected for its
+  deliberately small 16-token guard. It does not validate a natural-completion
+  distribution.
 - Authoritative facts recorded in:
   - `configs/qwen3_14b_g0_stock_capture.json`
-  - `results/raw/qwen3_14b_dgx_spark/g0_stock_capture_final/`
+  - `results/raw/qwen3_14b_dgx_spark/g0_stock_capture_084/`
 - The final rerun used the corrected capture script with `async_scheduling=False`
   in the resolved EngineArgs, matching the actual server launch command.
-- Remaining G0 items are not frozen yet: natural-EOS trace manifest, Stock
-  TTFT/TBT SLO and Goodput definitions, and final review/cleanliness of the
-  remote Git dirty state caused by excluded historical artifacts and logs.
+- Remaining G0 items are not frozen yet: reviewed length-blind trace manifest,
+  Stock iteration semantics, TTFT/TBT SLO and Goodput definitions, and remote
+  cleanliness verification after legacy cleanup.
 
 ## 2026-08-22 — Stage 1 Qwen3 request pool built
 
@@ -114,7 +118,7 @@
 - Stage 1 is complete. No arrival times, generation seeds, or reference output
   lengths are included yet.
 
-## 2026-08-22 — Fast shared-parameter coarse scan completed
+## 2026-08-22 — Fast shared-parameter coarse scan (retired)
 
 - Added:
   - `benchmarks/generate_stock_scan_trace.py`
@@ -123,16 +127,12 @@
 - Token-budget scan at `max_num_seqs=64`: [512, 1024, 2048, 4096].
 - Sequence scan at `max_num_batched_tokens=2048`: [32, 64, 128].
 - All configurations completed 30/30 requests with no failures.
-- Coarse observations:
-  - `max_num_batched_tokens=512` has visibly worse TTFT (mean 6.38s vs 4.85-5.19s for 1024+).
-  - `2048` and `4096` are similar under this small fast probe.
-  - `max_num_seqs` 32/64/128 are close in TTFT/E2E; 128 is marginally better in this tiny probe but not a decisive difference.
-- Preliminary recommended shared baseline remains:
-  - `max_num_batched_tokens=2048`
-  - `max_num_seqs=64`
-- Raw results:
-  - `results/raw/qwen3_14b_dgx_spark/shared_scan_fast/`
-- This is only a coarse probe; final shared config must still be validated on the full natural-EOS trace.
+- This probe is retired: its launcher hard-coded
+  `gpu_memory_utilization=0.90`, did not honor the recorded generation seed,
+  and recorded dispatch timing after completion. Its scripts, draft traces,
+  are removed from current tooling and none of its latency observations are
+  active evidence. Its ignored raw outputs remain preserved as invalid
+  historical evidence and are excluded from all active inputs.
 
 ## 2026-08-22 — Shared runtime parameters fixed at 0.84 GPU utilization
 
@@ -153,3 +153,27 @@
 - Raw evidence:
   - `results/raw/qwen3_14b_dgx_spark/g0_stock_capture_084/`
 - These are now fixed as the shared Stock/DPP baseline. No further parameter scan or validation was run per user instruction.
+
+## 2026-08-22 — runner correction and obsolete campaign cleanup
+
+- Replaced the parameter-overridable Stock scan runner with a launcher derived
+  exclusively from `configs/dgx_spark_experiment.yaml`. It rejects provisional
+  configs for real server execution, records config/trace hashes and actual
+  dispatch times, honors per-request seeds, and counts only real streamed token
+  events for TTFT/TBT.
+- Defined the finite completion cap as a client termination guard only. It is
+  absent from every Scheduler contract and both `stop` and `length` terminal
+  reasons are retained and stratified.
+- Replaced finite-sample-rescaled arrivals with independent exponential
+  inter-arrivals. Old generated scan/validation drafts are invalid and excluded
+  from current tooling; their trace directories were permanently deleted after
+  explicit confirmation.
+- Corrected the modular contracts and exact-plan scaffold: running partial
+  Prefill stays visible, active sequence count is projected correctly, running
+  Prefill uses vLLM cached-request data, all public round contracts use the
+  same hash, and provisional ModularDPP launch fails closed.
+- Deleted obsolete version-controlled 5070 campaign
+  code/configs/traces/results/plots/tests and the standalone Qwen3-8B NVFP4
+  compatibility-smoke files. A separately confirmed cleanup deleted the old
+  5070 raw results and BurstGPT input. Old model caches and retained Qwen3 raw
+  evidence were left untouched. No benchmark or GPU workload was run.

@@ -39,10 +39,25 @@ class PassThroughSafeSet(SafeSet):
         predictions: Iterable[Prediction],
     ) -> SafeSetResult:
         plan_tuple = tuple(plans)
+        prediction_tuple = tuple(predictions)
         for plan in plan_tuple:
             if plan.snapshot_hash != snapshot.snapshot_hash:
                 raise ValueError("candidate snapshot_hash mismatch")
+        plan_ids = {plan.plan_id for plan in plan_tuple}
+        if len(plan_ids) != len(plan_tuple):
+            raise ValueError("duplicate candidate plan_id")
+        prediction_ids: set[str] = set()
+        for prediction in prediction_tuple:
+            if prediction.snapshot_hash != snapshot.snapshot_hash:
+                raise ValueError("prediction snapshot_hash mismatch")
+            if prediction.plan_id not in plan_ids:
+                raise ValueError("prediction references an unknown plan_id")
+            if prediction.plan_id in prediction_ids:
+                raise ValueError("duplicate prediction plan_id")
+            prediction_ids.add(prediction.plan_id)
+        if prediction_ids != plan_ids:
+            raise ValueError("predictions must cover candidates exactly once")
         return SafeSetResult(
             snapshot_hash=snapshot.snapshot_hash,
-            candidates=plan_tuple,
+            safe_candidates=plan_tuple,
         )

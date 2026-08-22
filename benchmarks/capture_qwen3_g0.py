@@ -6,7 +6,7 @@ This script is a bounded, auditable G0 capture helper:
 1. Resolves the exact vLLM EngineArgs/SchedulerConfig/CacheConfig.
 2. Starts a stock vLLM server (default scheduler, no ModularDPPScheduler).
 3. Waits for /health.
-4. Sends one natural-EOS smoke completion.
+4. Sends one bounded client-guard smoke completion.
 5. Stops the server.
 6. Writes resolved config, startup log, smoke response, and a G0 manifest.
 
@@ -33,6 +33,14 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+from benchmarks.qwen3_runtime import (
+    ActiveRuntime,
+    build_stock_server_command,
+    load_active_runtime,
+    require_frozen_for_execution,
+    resolve_under,
+)
 
 
 def _jsonable(value: Any) -> Any:
@@ -77,18 +85,18 @@ def git_dirty(workspace: Path, repo: str = ".") -> bool:
     )
 
 
-def resolve_engine_config(args: argparse.Namespace) -> tuple[Any, Any]:
+def resolve_engine_config(runtime: ActiveRuntime) -> tuple[Any, Any]:
     from vllm.engine.arg_utils import EngineArgs
 
     engine_args = EngineArgs(
-        model=args.model_path,
-        served_model_name=["Qwen3-14B"],
+        model=str(runtime.model_path),
+        served_model_name=[runtime.model_name],
         dtype="bfloat16",
         kv_cache_dtype="bfloat16",
-        max_model_len=args.max_model_len,
-        gpu_memory_utilization=args.gpu_memory_utilization,
-        max_num_seqs=args.max_num_seqs,
-        max_num_batched_tokens=args.max_num_batched_tokens,
+        max_model_len=runtime.max_model_len,
+        gpu_memory_utilization=runtime.gpu_memory_utilization,
+        max_num_seqs=runtime.max_num_seqs,
+        max_num_batched_tokens=runtime.max_num_batched_tokens,
         scheduling_policy="fcfs",
         enable_chunked_prefill=True,
         enable_prefix_caching=False,
@@ -121,12 +129,19 @@ def wait_for_health(port: int, timeout: float) -> None:
     raise RuntimeError(f"vLLM health endpoint did not become ready: {last_error}")
 
 
-def run_smoke_completion(port: int, timeout: float = 120.0) -> dict[str, Any]:
+def run_smoke_completion(
+    runtime: ActiveRuntime, port: int, timeout: float = 120.0
+) -> dict[str, Any]:
     payload = {
-        "model": "Qwen3-14B",
+        "model": runtime.model_name,
         "prompt": "Hello, write one short sentence about scheduling.",
+        # A deliberately small smoke-only termination guard. It checks model
+        # execution, not the workload's natural completion distribution.
         "max_tokens": 16,
         "temperature": 0,
+        "top_p": 1,
+        "seed": 0,
+        "ignore_eos": False,
         "stream": False,
     }
     request = urllib.request.Request(
@@ -166,19 +181,7 @@ def parse_startup_kv_facts(log_text: str) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--workspace", default="/home/dongj/LLM")
-    parser.add_argument(
-        "--venv-python",
-        default="/home/dongj/LLM/.venv/bin/python",
-    )
-    parser.add_argument(
-        "--model-path",
-        default="/home/dongj/models/Qwen3-14B-BF16",
-    )
-    parser.add_argument("--max-model-len", type=int, default=40960)
-    parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
-    parser.add_argument("--max-num-seqs", type=int, default=64)
-    parser.add_argument("--max-num-batched-tokens", type=int, default=2048)
+    parser.add_argument("--config", default="configs/dgx_spark_experiment.yaml")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--startup-timeout", type=float, default=600.0)
     parser.add_argument("--completion-timeout", type=float, default=120.0)
@@ -190,20 +193,25 @@ def main() -> int:
     parser.add_argument("--no-server", action="store_true", help="Resolve config only.")
     args = parser.parse_args()
 
-    workspace = Path(args.workspace).resolve()
+    runtime = load_active_runtime(args.config)
+    if not args.no_server:
+        require_frozen_for_execution(runtime)
+    workspace = runtime.workspace
     if args.output_dir:
-        output_dir = Path(args.output_dir).resolve()
+        output_dir = resolve_under(
+            runtime.raw_results, args.output_dir, label="G0 output directory"
+        )
     else:
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ") + "-g0-stock"
         output_dir = (
-            workspace
-            / "results/raw/qwen3_14b_dgx_spark"
-            / run_id
+            runtime.raw_results / run_id
         )
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if output_dir.exists():
+        raise FileExistsError(f"append-only output directory exists: {output_dir}")
+    output_dir.mkdir(parents=True)
 
     # 1. Resolve vLLM config without starting GPU work.
-    engine_args, resolved = resolve_engine_config(args)
+    engine_args, resolved = resolve_engine_config(runtime)
     resolved_payload = {
         "engine_args": _jsonable(engine_args),
         "scheduler_config": _jsonable(resolved.scheduler_config),
@@ -219,7 +227,7 @@ def main() -> int:
         host_facts["hostname"] = subprocess.check_output(["hostname"], text=True).strip()
         host_facts["arch"] = subprocess.check_output(["uname", "-m"], text=True).strip()
         host_facts["python"] = subprocess.check_output(
-            [args.venv_python, "--version"], text=True
+            [str(runtime.python), "--version"], text=True
         ).strip()
         host_facts["nvidia_smi"] = subprocess.check_output(
             [
@@ -248,16 +256,19 @@ def main() -> int:
         "stage": "g0",
         "kind": "qwen3_14b_stock_g0_capture",
         "captured_at_utc": datetime.now(timezone.utc).isoformat(),
+        "active_config": str(runtime.config_path),
+        "active_config_sha256": runtime.config_sha256,
+        "active_config_status": runtime.status,
         "workspace": str(workspace),
-        "model_path": args.model_path,
+        "model_path": str(runtime.model_path),
         "runtime": {
             "engine": "vllm_v1",
             "dtype": "bfloat16",
             "kv_cache_dtype": "bfloat16",
-            "max_model_len": args.max_model_len,
-            "gpu_memory_utilization": args.gpu_memory_utilization,
-            "max_num_seqs": args.max_num_seqs,
-            "max_num_batched_tokens": args.max_num_batched_tokens,
+            "max_model_len": runtime.max_model_len,
+            "gpu_memory_utilization": runtime.gpu_memory_utilization,
+            "max_num_seqs": runtime.max_num_seqs,
+            "max_num_batched_tokens": runtime.max_num_batched_tokens,
             "enable_chunked_prefill": True,
             "enable_prefix_caching": False,
             "scheduler_cls": None,
@@ -276,6 +287,11 @@ def main() -> int:
             "started": False,
             "health_ok": False,
             "completion_ok": False,
+        },
+        "smoke_semantics": {
+            "max_tokens": 16,
+            "role": "bounded_model_execution_guard_not_natural_eos_evidence",
+            "scheduler_input": False,
         },
         "kv_facts": {},
         "startup_log_sha256": None,
@@ -298,35 +314,10 @@ def main() -> int:
 
         startup_log = output_dir / "startup.log"
         env = os.environ.copy()
-        venv_bin = Path(args.venv_python).parent
+        env.update(dict(runtime.required_env))
+        venv_bin = runtime.python.parent
         env["PATH"] = f"{venv_bin}:{env.get('PATH', '')}"
-        vllm_cli = venv_bin / "vllm"
-        cmd = [
-            str(vllm_cli),
-            "serve",
-            args.model_path,
-            "--served-model-name",
-            "Qwen3-14B",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(args.port),
-            "--dtype",
-            "bfloat16",
-            "--kv-cache-dtype",
-            "bfloat16",
-            "--max-model-len",
-            str(args.max_model_len),
-            "--gpu-memory-utilization",
-            str(args.gpu_memory_utilization),
-            "--max-num-seqs",
-            str(args.max_num_seqs),
-            "--max-num-batched-tokens",
-            str(args.max_num_batched_tokens),
-            "--enable-chunked-prefill",
-            "--no-enable-prefix-caching",
-            "--no-async-scheduling",
-        ]
+        cmd = build_stock_server_command(runtime, port=args.port)
         manifest["server"]["command"] = cmd
 
         process: subprocess.Popen | None = None
@@ -345,7 +336,7 @@ def main() -> int:
                 manifest["server"]["health_ok"] = True
 
                 completion = run_smoke_completion(
-                    args.port, timeout=args.completion_timeout
+                    runtime, args.port, timeout=args.completion_timeout
                 )
                 completion_file = output_dir / "smoke_completion.json"
                 with completion_file.open("w", encoding="utf-8") as stream:

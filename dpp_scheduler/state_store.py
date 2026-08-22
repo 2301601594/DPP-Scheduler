@@ -14,7 +14,12 @@ from dpp_scheduler.contracts import ControlState
 
 @dataclass
 class InMemoryStateStore:
-    current: ControlState = ControlState(prefill_backlog=0, ttft_debt=0.0, tbt_debt=0.0)
+    current: ControlState = ControlState(
+        snapshot_hash="unbound",
+        prefill_backlog=0,
+        ttft_debt=0.0,
+        tbt_debt=0.0,
+    )
 
     def get(self) -> ControlState:
         return self.current

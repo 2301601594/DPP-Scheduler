@@ -9,17 +9,17 @@ measured on the target DGX Spark.
 
 The campaign is at **G0**.
 
-Observed DGX software and hardware facts can be reverified from the existing
-environment manifests. The Qwen3-14B BF16 snapshot is present on the DGX and
-its identity, per-file hashes, source, and acquisition command are recorded in
+The Qwen3-14B BF16 snapshot, acquisition approval, bounded model smoke, shared
+runtime (`gpu_memory_utilization=0.84`, `C_tok=2048`, `C_seq=64`), and KV
+capacity (`30149` usable 16-token blocks) have been captured provisionally.
+The snapshot identity, per-file hashes, source, and acquisition command are recorded in
 `configs/qwen3_14b_snapshot_manifest.json` (content-identical to HuggingFace
 `Qwen/Qwen3-14B` main `40c069824f4251a91eefaf281ebe4c544efd3e18`). The
-following are not yet frozen:
+The following are not yet frozen:
 
-- operator-approval confirmation for the model acquisition and the Qwen3-14B
-  smoke;
-- model-specific startup parameters, `SchedulerConfig`, and KV capacity;
-- natural-EOS request/trace manifest and request-level Goodput definition;
+- reviewed length-blind natural-completion trace manifest and request-level
+  Goodput definition;
+- stock iteration telemetry and the exact TTFT/TBT event boundaries;
 - TTFT/TBT SLOs and obligation event boundaries;
 - `C_tok`, `C_seq`, `b_s`, `b_m`, `b_l`, `u`, `H`, `R0`, Top-K,
   Recovery rules, `epsilon^F`, `epsilon^D`, and `V`; and
@@ -57,8 +57,9 @@ keeps every unmeasured value explicitly provisional.
    Prefix Caching and Speculative Decoding off.
 5. Capture the startup log, final `SchedulerConfig`, model/KV dtype, block
    size, usable KV blocks, `C_tok`, `C_seq`, and all environment variables.
-6. Define natural-EOS prompts and client safety guards without exposing a fixed
-   or expected output length to the Scheduler.
+6. Define prompts and a finite client termination guard. Keep that guard out of
+   Scheduler contracts, Predictor inputs/labels, and decisions; retain and
+   stratify both `stop` and `length` terminal reasons.
 7. Freeze config and manifests only after review; update hashes atomically.
 
 Model acquisition and the smoke are separate authorized tasks. Merely syncing

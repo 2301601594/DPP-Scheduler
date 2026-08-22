@@ -51,6 +51,7 @@
     "Captured with stock vLLM default scheduler; ModularDPPScheduler was not loaded.",
     "Shared runtime parameters are now fixed: gpu_memory_utilization=0.84, max_num_batched_tokens=2048, max_num_seqs=64.",
     "KV facts are captured at 0.84 GPU utilization.",
-    "Final natural-EOS trace and SLO/Goodput definitions remain to be frozen separately."
+    "The 16-token smoke ended with finish_reason=length by design: this is a bounded model-execution guard, not natural-EOS workload evidence and not Scheduler input.",
+    "Final length-blind natural-completion trace and SLO/Goodput definitions remain to be frozen separately."
   ]
 }

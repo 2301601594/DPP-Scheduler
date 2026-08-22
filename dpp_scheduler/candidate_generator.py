@@ -11,16 +11,41 @@ from dataclasses import replace
 from dpp_scheduler.contracts import BatchPlan, DecodeRequest, PrefillRequest, StateSnapshot
 from dpp_scheduler.settings import SchedulerSettings
 
+def _oldest_due_recovery(snapshot: StateSnapshot) -> str | None:
+    recovery_set = set(snapshot.recovery_requests)
+    due = [
+        item
+        for item in snapshot.active_decode_requests
+        if item.recovery_due and item.request_id in recovery_set
+    ]
+    if not due:
+        return None
+    return min(
+        due,
+        key=lambda item: (
+            item.recovery_first_miss_time
+            if item.recovery_first_miss_time is not None
+            else item.arrival_time,
+            item.arrival_time,
+            item.ordinal,
+            item.request_id,
+        ),
+    ).request_id
+
+
 def _rank_decode(snapshot: StateSnapshot) -> tuple[DecodeRequest, ...]:
     decode = list(snapshot.active_decode_requests)
     recovery_set = set(snapshot.recovery_requests)
+    oldest_due = _oldest_due_recovery(snapshot)
 
     def category(item: DecodeRequest) -> int:
-        if item.recovery_due or item.request_id in recovery_set:
+        if item.request_id == oldest_due:
             return 0
-        if item.tbt_deadline is not None:
+        if item.request_id not in recovery_set and item.tbt_deadline is not None:
             return 1
-        return 2
+        if item.request_id not in recovery_set:
+            return 2
+        return 3
 
     def sort_key(item: DecodeRequest) -> tuple:
         if category(item) == 0:
@@ -33,7 +58,17 @@ def _rank_decode(snapshot: StateSnapshot) -> tuple[DecodeRequest, ...]:
                 item.ordinal,
                 item.request_id,
             )
-        return (2, item.arrival_time, item.ordinal, item.request_id)
+        if category(item) == 2:
+            return (2, item.arrival_time, item.ordinal, item.request_id)
+        return (
+            3,
+            item.recovery_first_miss_time
+            if item.recovery_first_miss_time is not None
+            else item.arrival_time,
+            item.arrival_time,
+            item.ordinal,
+            item.request_id,
+        )
 
     return tuple(sorted(decode, key=sort_key))
 
@@ -65,12 +100,12 @@ def _rank_prefill(snapshot: StateSnapshot) -> tuple[PrefillRequest, ...]:
 
 
 def _mandatory_decode(
-    ordered: tuple[DecodeRequest, ...], recovery_set: set[str]
+    ordered: tuple[DecodeRequest, ...], oldest_due_recovery: str | None
 ) -> list[str]:
     return [
         item.request_id
         for item in ordered
-        if item.mandatory or item.recovery_due or item.request_id in recovery_set
+        if item.mandatory or item.request_id == oldest_due_recovery
     ]
 
 
@@ -78,19 +113,26 @@ def _bind_decode(
     profile: str,
     ordered: tuple[DecodeRequest, ...],
     settings: SchedulerSettings,
+    oldest_due_recovery: str | None,
     recovery_set: set[str],
 ) -> tuple[str, ...]:
-    mandatory = _mandatory_decode(ordered, recovery_set)
+    mandatory = _mandatory_decode(ordered, oldest_due_recovery)
     if profile == "MANDATORY":
         return tuple(mandatory)
     if profile == "URGENT":
         result = list(mandatory)
+        urgent_added = 0
         for item in ordered:
             if item.request_id in result:
                 continue
-            if len(result) >= len(mandatory) + settings.urgent_limit_u:
+            # URGENT means earliest live deadlines. A request without a TBT
+            # deadline, or already in Recovery, is not promoted arbitrarily.
+            if item.tbt_deadline is None or item.request_id in recovery_set:
+                continue
+            if urgent_added >= settings.urgent_limit_u:
                 break
             result.append(item.request_id)
+            urgent_added += 1
         return tuple(result)
     if profile == "ALL":
         return tuple(item.request_id for item in ordered)
@@ -101,7 +143,7 @@ def _trim_decode_to_budget(
     decode_ids: tuple[str, ...],
     snapshot: StateSnapshot,
     ordered: tuple[DecodeRequest, ...],
-) -> tuple[str, ...]:
+) -> tuple[str, ...] | None:
     """Keep as many decode ids as the per-iteration token/sequence limits allow.
 
     Each decode item consumes one token in this design.  Mandatory items are
@@ -112,9 +154,18 @@ def _trim_decode_to_budget(
         return decode_ids
 
     by_id = {item.request_id: item for item in ordered}
-    mandatory_ids = [rid for rid in decode_ids if by_id[rid].mandatory or by_id[rid].recovery_due or rid in set(snapshot.recovery_requests)]
+    oldest_due = _oldest_due_recovery(snapshot)
+    mandatory_ids = [
+        rid for rid in decode_ids
+        if by_id[rid].mandatory or rid == oldest_due
+    ]
+    limit = min(snapshot.sequence_budget, snapshot.token_budget)
+    if len(mandatory_ids) > limit:
+        # A profile that silently drops protected Decode work is not the same
+        # action. Let later fallback/preemption ownership handle this state.
+        return None
     remaining = [rid for rid in decode_ids if rid not in mandatory_ids]
-    selected = list(mandatory_ids[: min(snapshot.sequence_budget, snapshot.token_budget)])
+    selected = list(mandatory_ids)
     for rid in remaining:
         if len(selected) + 1 > snapshot.sequence_budget:
             break
@@ -142,16 +193,22 @@ def _fill_prefill(
     token_budget_for_prefill = max(
         0, snapshot.token_budget - decode_count
     )
-    seed_budget_for_prefill = max(0, snapshot.sequence_budget - decode_count)
+    running_prefill = sum(
+        request.is_running for request in snapshot.waiting_prefill_requests
+    )
+    active_sequences = len(snapshot.active_decode_requests) + running_prefill
+    new_sequence_budget = max(0, snapshot.sequence_budget - active_sequences)
     remaining_cap = min(prefill_cap, token_budget_for_prefill)
 
     items: list[tuple[str, int]] = []
     scheduled_tokens = 0
-    used_sequences = 0
+    admitted_sequences = 0
 
     for request in prefill_order:
-        if used_sequences >= seed_budget_for_prefill:
-            break
+        if not request.is_running and admitted_sequences >= new_sequence_budget:
+            # A new request cannot be admitted, but a later running partial
+            # Prefill may still consume no additional sequence slot.
+            continue
         if scheduled_tokens >= remaining_cap:
             break
         remaining = request.remaining_tokens
@@ -179,7 +236,8 @@ def _fill_prefill(
 
         items.append((request.request_id, scheduled))
         scheduled_tokens += scheduled
-        used_sequences += 1
+        if not request.is_running:
+            admitted_sequences += 1
 
     return tuple(items)
 
@@ -190,7 +248,7 @@ def _ceil_div(numerator: int, denominator: int) -> int:
     return (numerator + denominator - 1) // denominator
 
 
-def _projected_kv_blocks(
+def project_kv_blocks(
     snapshot: StateSnapshot,
     prefill_items: tuple[tuple[str, int], ...],
     decode_items: tuple[str, ...],
@@ -205,7 +263,7 @@ def _projected_kv_blocks(
     for request_id, scheduled_tokens in prefill_items:
         request = prefill_by_id.get(request_id)
         if request is None:
-            continue
+            raise ValueError(f"unknown prefill request in plan: {request_id}")
         old_blocks = _ceil_div(request.prefilled_tokens, block_size)
         new_blocks = _ceil_div(request.prefilled_tokens + scheduled_tokens, block_size)
         added += max(0, new_blocks - old_blocks)
@@ -213,12 +271,32 @@ def _projected_kv_blocks(
     for request_id in decode_items:
         request = decode_by_id.get(request_id)
         if request is None:
-            continue
+            raise ValueError(f"unknown decode request in plan: {request_id}")
         old_blocks = _ceil_div(request.kv_context_length, block_size)
         new_blocks = _ceil_div(request.kv_context_length + 1, block_size)
         added += max(0, new_blocks - old_blocks)
 
     return current_allocated + added
+
+
+def project_sequence_count(
+    snapshot: StateSnapshot,
+    prefill_items: tuple[tuple[str, int], ...],
+) -> int:
+    """Return projected active sequences, not scheduled items this round."""
+    prefill_by_id = {
+        request.request_id: request for request in snapshot.waiting_prefill_requests
+    }
+    active = len(snapshot.active_decode_requests) + sum(
+        request.is_running for request in snapshot.waiting_prefill_requests
+    )
+    for request_id, _ in prefill_items:
+        request = prefill_by_id.get(request_id)
+        if request is None:
+            raise ValueError(f"unknown prefill request in plan: {request_id}")
+        if not request.is_running:
+            active += 1
+    return active
 
 
 class CandidateGenerator:
@@ -231,26 +309,31 @@ class CandidateGenerator:
         ordered_decode = _rank_decode(snapshot)
         ordered_prefill = _rank_prefill(snapshot)
         recovery_set = set(snapshot.recovery_requests)
+        oldest_due = _oldest_due_recovery(snapshot)
 
         raw_plans: list[tuple[str, BatchPlan]] = []
         profile_order = ("MANDATORY", "URGENT", "ALL")
         cap_order = self.settings.prefill_caps
 
         for profile in profile_order:
-            decode_ids = _bind_decode(profile, ordered_decode, self.settings, recovery_set)
+            decode_ids = _bind_decode(
+                profile, ordered_decode, self.settings, oldest_due, recovery_set
+            )
             decode_ids = _trim_decode_to_budget(decode_ids, snapshot, ordered_decode)
+            if decode_ids is None:
+                continue
             for cap in cap_order:
                 prefill_items = _fill_prefill(
                     snapshot, len(decode_ids), cap, ordered_prefill, self.settings
                 )
                 total_prefill = sum(count for _, count in prefill_items)
                 total_decode = len(decode_ids)
-                total_sequences = len(prefill_items) + total_decode
+                total_sequences = project_sequence_count(snapshot, prefill_items)
                 if total_prefill + total_decode > snapshot.token_budget:
                     continue
                 if total_sequences > snapshot.sequence_budget:
                     continue
-                projected_kv = _projected_kv_blocks(
+                projected_kv = project_kv_blocks(
                     snapshot, prefill_items, decode_ids
                 )
                 template_id = f"{profile}:cap_{cap}"
@@ -267,9 +350,9 @@ class CandidateGenerator:
                     mandatory_request_ids=tuple(
                         rid for rid in decode_ids
                         if (
-                            rid in recovery_set
+                            rid == oldest_due
                             or any(
-                                r.request_id == rid and (r.mandatory or r.recovery_due)
+                                r.request_id == rid and r.mandatory
                                 for r in ordered_decode
                             )
                         )

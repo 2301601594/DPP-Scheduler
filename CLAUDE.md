@@ -5,8 +5,8 @@ file completely before acting. Do not duplicate or override it here.
 
 The active research design is
 `docs/Qwen3-14B-DGX-Spark-Modular-DPP-Scheduler.md`: Qwen3-14B BF16 with a
-modular exact-`BatchPlan` DPP Scheduler and natural EOS. Historical campaign
-configs, traces, scripts, and results are archival only.
+modular exact-`BatchPlan` DPP Scheduler with length-blind natural completion.
+Obsolete campaign files are not retained or accepted as inputs.
 
 Critical execution rule: develop in the local WSL repository, but execute all
 project Python, tests, vLLM, profiling, and benchmarks only on the DGX Spark at

@@ -21,6 +21,8 @@ from pathlib import Path
 
 from transformers import AutoTokenizer
 
+from benchmarks.qwen3_runtime import load_active_runtime, resolve_under
+
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -48,27 +50,35 @@ def render_prompt(tokenizer, user_text: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", required=True)
-    parser.add_argument("--model-path", default="/home/dongj/models/Qwen3-14B-BF16")
-    parser.add_argument("--output-dir", default="traces/qwen3_14b")
-    parser.add_argument("--min-input-tokens", type=int, default=128)
-    parser.add_argument("--max-input-tokens", type=int, default=8192)
-    parser.add_argument("--max-pool-size", type=int, default=3000)
-    parser.add_argument("--seed", type=int, default=1001)
+    parser.add_argument("--config", default="configs/dgx_spark_experiment.yaml")
+    parser.add_argument(
+        "--output-dir",
+        required=True,
+        help="Unique staging directory relative to the active raw-results root.",
+    )
     args = parser.parse_args()
 
-    dataset_path = Path(args.dataset).resolve()
-    output_dir = Path(args.output_dir).resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    runtime = load_active_runtime(args.config)
+    dataset_path = runtime.source_dataset.resolve()
+    output_dir = resolve_under(
+        runtime.raw_results, args.output_dir, label="request-pool staging directory"
+    )
+    if output_dir.exists():
+        raise FileExistsError(f"append-only staging directory exists: {output_dir}")
+    output_dir.mkdir(parents=True)
 
     print(f"Loading dataset: {dataset_path}")
     with dataset_path.open("r", encoding="utf-8") as stream:
         conversations = json.load(stream)
     source_sha256 = sha256_file(dataset_path)
+    if source_sha256 != runtime.source_dataset_sha256:
+        raise ValueError("source dataset SHA256 does not match active config")
     print(f"Loaded {len(conversations)} conversations")
 
-    print(f"Loading tokenizer from {args.model_path}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+    print(f"Loading tokenizer from {runtime.model_path}")
+    tokenizer = AutoTokenizer.from_pretrained(
+        runtime.model_path, trust_remote_code=True, local_files_only=True
+    )
 
     records: list[dict] = []
     seen_hashes: set[str] = set()
@@ -86,7 +96,10 @@ def main() -> int:
         input_ids = tokenizer.encode(prompt, add_special_tokens=False)
         input_tokens = len(input_ids)
 
-        if input_tokens < args.min_input_tokens or input_tokens > args.max_input_tokens:
+        if (
+            input_tokens < runtime.min_input_tokens
+            or input_tokens > runtime.max_input_tokens
+        ):
             skipped_length += 1
             continue
 
@@ -112,9 +125,11 @@ def main() -> int:
         f"length={skipped_length}, duplicate={duplicate})"
     )
 
-    rng = random.Random(args.seed)
+    rng = random.Random(runtime.pool_seed)
     rng.shuffle(records)
-    selected = records[: args.max_pool_size]
+    selected = records[: runtime.pool_size]
+    if not selected:
+        raise ValueError("request-pool filters produced no prompts")
     print(f"Selected pool size: {len(selected)}")
 
     pool_path = output_dir / "request_pool.jsonl"
@@ -128,12 +143,15 @@ def main() -> int:
         "stage": "stage1_request_pool",
         "dataset": str(dataset_path),
         "dataset_sha256": source_sha256,
-        "model_path": args.model_path,
+        "config_sha256": runtime.config_sha256,
+        "model_path": str(runtime.model_path),
+        "model_revision": runtime.model_revision,
+        "tokenizer_revision": runtime.tokenizer_revision,
         "enable_thinking": False,
-        "min_input_tokens": args.min_input_tokens,
-        "max_input_tokens": args.max_input_tokens,
-        "max_pool_size": args.max_pool_size,
-        "seed": args.seed,
+        "min_input_tokens": runtime.min_input_tokens,
+        "max_input_tokens": runtime.max_input_tokens,
+        "max_pool_size": runtime.pool_size,
+        "seed": runtime.pool_seed,
         "selected_count": len(selected),
         "input_tokens": {
             "min": min(token_counts),
