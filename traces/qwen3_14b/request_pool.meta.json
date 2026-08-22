@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "stage": "stage1_request_pool",
+  "dataset": "/home/dongj/LLM/data/raw/ShareGPT_V3_unfiltered_cleaned_split.json",
+  "dataset_sha256": "35f0e213ce091ed9b9af2a1f0755e9d39f9ccec34ab281cd4ca60d70f6479ba4",
+  "model_path": "/home/dongj/models/Qwen3-14B-BF16",
+  "enable_thinking": false,
+  "min_input_tokens": 128,
+  "max_input_tokens": 8192,
+  "max_pool_size": 3000,
+  "seed": 1001,
+  "selected_count": 3000,
+  "input_tokens": {
+    "min": 128,
+    "max": 7938,
+    "mean": 765.67
+  },
+  "request_pool_sha256": "9d5e57900b9580480c7912a65d449bd608e0edc1293578c6c3e5d73fc71dbab5"
+}

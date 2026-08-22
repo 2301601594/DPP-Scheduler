@@ -95,3 +95,21 @@
 - Remaining G0 items are not frozen yet: natural-EOS trace manifest, Stock
   TTFT/TBT SLO and Goodput definitions, and final review/cleanliness of the
   remote Git dirty state caused by excluded historical artifacts and logs.
+
+## 2026-08-22 — Stage 1 Qwen3 request pool built
+
+- Added `benchmarks/qwen3_build_request_pool.py`.
+- Used local ShareGPT_V3 dataset (`data/raw/ShareGPT_V3_unfiltered_cleaned_split.json`, SHA256
+  `35f0e213ce091ed9b9af2a1f0755e9d39f9ccec34ab281cd4ca60d70f6479ba4`).
+- Rendered the first human turn from each conversation through the Qwen3-14B
+  chat template with `enable_thinking=False`.
+- Filtered to input token lengths `[128, 8192]`, deduplicated, then
+  deterministically sampled 3000 prompts with seed 1001.
+- Output:
+  - `traces/qwen3_14b/request_pool.jsonl` (3000 records)
+  - `traces/qwen3_14b/request_pool.meta.json`
+- Pool input-token stats: min=128, max=7938, mean=765.67.
+- Request pool SHA256:
+  `9d5e57900b9580480c7912a65d449bd608e0edc1293578c6c3e5d73fc71dbab5`.
+- Stage 1 is complete. No arrival times, generation seeds, or reference output
+  lengths are included yet.
