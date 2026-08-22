@@ -113,3 +113,23 @@
   `9d5e57900b9580480c7912a65d449bd608e0edc1293578c6c3e5d73fc71dbab5`.
 - Stage 1 is complete. No arrival times, generation seeds, or reference output
   lengths are included yet.
+
+## 2026-08-22 — Fast shared-parameter coarse scan completed
+
+- Added:
+  - `benchmarks/generate_stock_scan_trace.py`
+  - `benchmarks/run_stock_shared_scan.py`
+- Used a fast coarse probe: 30 requests, concurrent arrivals, safety cap 64 tokens per request.
+- Token-budget scan at `max_num_seqs=64`: [512, 1024, 2048, 4096].
+- Sequence scan at `max_num_batched_tokens=2048`: [32, 64, 128].
+- All configurations completed 30/30 requests with no failures.
+- Coarse observations:
+  - `max_num_batched_tokens=512` has visibly worse TTFT (mean 6.38s vs 4.85-5.19s for 1024+).
+  - `2048` and `4096` are similar under this small fast probe.
+  - `max_num_seqs` 32/64/128 are close in TTFT/E2E; 128 is marginally better in this tiny probe but not a decisive difference.
+- Preliminary recommended shared baseline remains:
+  - `max_num_batched_tokens=2048`
+  - `max_num_seqs=64`
+- Raw results:
+  - `results/raw/qwen3_14b_dgx_spark/shared_scan_fast/`
+- This is only a coarse probe; final shared config must still be validated on the full natural-EOS trace.
