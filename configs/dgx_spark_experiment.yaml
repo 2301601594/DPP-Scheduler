@@ -83,7 +83,7 @@ runtime:
   total_token_budget: 2048
   sequence_budget: 64
   kv_block_size: 16
-  usable_kv_blocks: 33198
+  usable_kv_blocks: 33178
   scheduler_class:
     stock: vllm.v1.core.sched.scheduler.Scheduler
     modular_dpp: dpp_scheduler.vllm_scheduler.ModularDPPScheduler

@@ -87,9 +87,11 @@
   - available KV cache: 81.05 GiB
   - max concurrency at 40,960 tokens/request: 12.97x
 - Smoke completion passed: natural-EOS request returned a generated completion.
-- Facts recorded in:
+- Authoritative facts recorded in:
   - `configs/qwen3_14b_g0_stock_capture.json`
-  - `results/raw/qwen3_14b_dgx_spark/g0_stock_capture_20260822/`
+  - `results/raw/qwen3_14b_dgx_spark/g0_stock_capture_final/`
+- The final rerun used the corrected capture script with `async_scheduling=False`
+  in the resolved EngineArgs, matching the actual server launch command.
 - Remaining G0 items are not frozen yet: natural-EOS trace manifest, Stock
   TTFT/TBT SLO and Goodput definitions, and final review/cleanliness of the
   remote Git dirty state caused by excluded historical artifacts and logs.

@@ -4,8 +4,8 @@
   "status": "environment_installed_qwen3_14b_g0_pending",
   "captured_at_utc": "2026-08-19T18:21:50Z",
   "active_campaign": "qwen3_14b_dgx_spark_modular_dpp",
-  "experiment_config_sha256": "b6e4744826b2860b42a0cbff79351486e84064e520e8c37579876e4bd28ad6eb",
-  "experiment_config_sha256_note": "Recomputed after recording G0 stock runtime and KV facts; previous value 1020827fee2c77beab8fb3d9bbcc88c9c19e49bae57e41a69ba6aec947afc61f.",
+  "experiment_config_sha256": "c1895bb156ba565e53ae5aa2a0b4004f19a1975226379445a2d16d40620e8a29",
+  "experiment_config_sha256_note": "Recomputed after finalizing G0 stock capture facts; previous value b6e4744826b2860b42a0cbff79351486e84064e520e8c37579876e4bd28ad6eb.",
   "transport": {
     "ssh_alias": "dgx-spark",
     "remote_user": "dongj",
@@ -108,15 +108,16 @@
   ],
   "g0_stock_capture": {
     "status": "captured_provisional",
-    "captured_at_utc": "2026-08-22T04:07:04Z",
-    "raw_dir": "results/raw/qwen3_14b_dgx_spark/g0_stock_capture_20260822",
+    "captured_at_utc": "2026-08-22T04:14:34Z",
+    "raw_dir": "results/raw/qwen3_14b_dgx_spark/g0_stock_capture_final",
     "facts_file": "configs/qwen3_14b_g0_stock_capture.json",
     "scheduler": "stock_vllm_default",
     "max_num_batched_tokens": 2048,
     "max_num_seqs": 64,
     "kv_block_size": 16,
-    "gpu_kv_cache_tokens": 531168,
-    "usable_kv_blocks": 33198,
-    "smoke_ok": true
+    "gpu_kv_cache_tokens": 530848,
+    "usable_kv_blocks": 33178,
+    "smoke_ok": true,
+    "resolved_config_sha256": "66b2480c6052e0b434bed67aa11e845cb6ca4de86a22ae31e406542f23c881c4"
   }
 }

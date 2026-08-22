@@ -3,7 +3,7 @@
   "campaign": "qwen3_14b_dgx_spark_modular_dpp",
   "stage": "g0",
   "status": "captured_provisional",
-  "captured_at_utc": "2026-08-22T04:07:04Z",
+  "captured_at_utc": "2026-08-22T04:14:34Z",
   "kind": "qwen3_14b_stock_g0_capture",
   "model": {
     "requested_name": "Qwen3-14B",
@@ -25,21 +25,21 @@
     "enable_prefix_caching": false,
     "speculative_decoding": false,
     "async_scheduling": false,
-    "gpu_memory_utilization": 0.90
+    "gpu_memory_utilization": 0.9
   },
   "kv": {
     "kv_block_size": 16,
-    "gpu_kv_cache_tokens": 531168,
-    "usable_kv_blocks": 33198,
-    "available_kv_cache_gib": 81.05,
+    "gpu_kv_cache_tokens": 530848,
+    "usable_kv_blocks": 33178,
+    "available_kv_cache_gib": 81.0,
     "kv_cache_max_tokens_per_request": 40960,
-    "kv_cache_max_concurrency": 12.97
+    "kv_cache_max_concurrency": 12.96
   },
   "capture_artifacts": {
-    "raw_dir": "results/raw/qwen3_14b_dgx_spark/g0_stock_capture_20260822",
-    "resolved_config_sha256": "0e95a826ef2643abec7f78cb4063ef57e364ea03751e9381a7fe28fee4137d0e",
-    "startup_log_sha256": "9e3ead1feb18f88c072ed60864529b64aa98f981904ba399cdf41382e9b016d1",
-    "smoke_completion_sha256": "eb19cedf752c1ebe86c8e1e4157e667d3a4aecdeeb06e428a1412f05d4dbdd98"
+    "raw_dir": "results/raw/qwen3_14b_dgx_spark/g0_stock_capture_final",
+    "resolved_config_sha256": "66b2480c6052e0b434bed67aa11e845cb6ca4de86a22ae31e406542f23c881c4",
+    "startup_log_sha256": "7cdf3cdaff6ad468afe4dddb0c403157c15235d4aa47a4ae0eaea6bae9049f2f",
+    "smoke_completion_sha256": "dfbbf14612c50a92066ba975f2a8d2ce0d48ad78e698839770d2aae2d940a9d4"
   },
   "smoke_completion": {
     "finish_reason": "length",
@@ -49,7 +49,7 @@
   },
   "notes": [
     "Captured with stock vLLM default scheduler; ModularDPPScheduler was not loaded.",
-    "The resolved_config.json in raw_dir was generated before async_scheduling was passed to EngineArgs; the startup log and server command include --no-async-scheduling. Re-resolve will correct this on the next run.",
+    "Authoritative G0 stock capture is results/raw/qwen3_14b_dgx_spark/g0_stock_capture_final.",
     "G0 is still provisional until natural-EOS trace manifest and Stock SLO/Goodput definitions are frozen."
   ]
 }
