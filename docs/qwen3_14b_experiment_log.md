@@ -64,3 +64,32 @@
   It still needs to be validated against the real Qwen3-14B DGX server during
   G0; until then `CallbackVllmAdapter` remains the deterministic test double
   used by the unit suite.
+
+## 2026-08-22 — G0 stock vLLM capture completed
+
+- Added `benchmarks/capture_qwen3_g0.py`, which resolves vLLM EngineArgs,
+  starts a stock vLLM server on the DGX, captures the startup log and KV facts,
+  sends one natural-EOS smoke completion, and writes append-only raw evidence.
+- Stock capture run:
+  - Model: Qwen3-14B-BF16 at `/home/dongj/models/Qwen3-14B-BF16`
+  - vLLM: `83ad767eed3be3ee7f2df63be693bfaca5c7c922`
+  - Scheduler: default vLLM Scheduler, not `ModularDPPScheduler`
+  - `max_model_len=40960`
+  - `max_num_batched_tokens=2048`
+  - `max_num_seqs=64`
+  - `gpu_memory_utilization=0.90`
+  - `kv_cache_dtype=bfloat16`
+  - chunked prefill on, prefix caching off, async scheduling off
+- Captured KV facts:
+  - KV block size: 16
+  - GPU KV cache size: 531,168 tokens
+  - usable KV blocks: 33,198
+  - available KV cache: 81.05 GiB
+  - max concurrency at 40,960 tokens/request: 12.97x
+- Smoke completion passed: natural-EOS request returned a generated completion.
+- Facts recorded in:
+  - `configs/qwen3_14b_g0_stock_capture.json`
+  - `results/raw/qwen3_14b_dgx_spark/g0_stock_capture_20260822/`
+- Remaining G0 items are not frozen yet: natural-EOS trace manifest, Stock
+  TTFT/TBT SLO and Goodput definitions, and final review/cleanliness of the
+  remote Git dirty state caused by excluded historical artifacts and logs.

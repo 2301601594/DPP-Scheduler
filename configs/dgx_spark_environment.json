@@ -4,8 +4,8 @@
   "status": "environment_installed_qwen3_14b_g0_pending",
   "captured_at_utc": "2026-08-19T18:21:50Z",
   "active_campaign": "qwen3_14b_dgx_spark_modular_dpp",
-  "experiment_config_sha256": "1020827fee2c77beab8fb3d9bbcc88c9c19e49bae57e41a69ba6aec947afc61f",
-  "experiment_config_sha256_note": "Recomputed after recording the model snapshot identity; previous value bed999861fb9dc0ee1a65661dfd1755a7e05fc6ed8892aec049e3d19333481f6.",
+  "experiment_config_sha256": "b6e4744826b2860b42a0cbff79351486e84064e520e8c37579876e4bd28ad6eb",
+  "experiment_config_sha256_note": "Recomputed after recording G0 stock runtime and KV facts; previous value 1020827fee2c77beab8fb3d9bbcc88c9c19e49bae57e41a69ba6aec947afc61f.",
   "transport": {
     "ssh_alias": "dgx-spark",
     "remote_user": "dongj",
@@ -103,8 +103,20 @@
     "dependency_check_note": "uv 0.11.28 reports the NVIDIA manylinux2014_sbsa wheel as a different platform; the installed library is ARM aarch64, its SBSA tag was checked, ctypes loading passed, and torch._C._has_cusparselt is true. Any additional incompatibility remains fatal."
   },
   "pending": [
-    "Run a bounded remote Qwen3-14B BF16 smoke with the frozen vLLM commit and required runtime flags.",
-    "Capture runtime environment variables, final SchedulerConfig, token/sequence budgets, KV block capacity, and startup log.",
-    "Create and freeze a Qwen3-14B natural-EOS trace manifest and Stock SLO/Goodput definitions."
-  ]
+    "Review/capture the remaining G0 prerequisites: natural-EOS trace manifest and Stock SLO/Goodput definitions.",
+    "Resolve the remote Git dirty state caused by excluded historical artifacts/logs, or document it as accepted for G0."
+  ],
+  "g0_stock_capture": {
+    "status": "captured_provisional",
+    "captured_at_utc": "2026-08-22T04:07:04Z",
+    "raw_dir": "results/raw/qwen3_14b_dgx_spark/g0_stock_capture_20260822",
+    "facts_file": "configs/qwen3_14b_g0_stock_capture.json",
+    "scheduler": "stock_vllm_default",
+    "max_num_batched_tokens": 2048,
+    "max_num_seqs": 64,
+    "kv_block_size": 16,
+    "gpu_kv_cache_tokens": 531168,
+    "usable_kv_blocks": 33198,
+    "smoke_ok": true
+  }
 }

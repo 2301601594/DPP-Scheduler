@@ -15,7 +15,7 @@ paths:
   vllm_source: /home/dongj/LLM/vllm
   python: /home/dongj/LLM/.venv/bin/python
   vllm_cli: /home/dongj/LLM/.venv/bin/vllm
-  model_snapshot: null
+  model_snapshot: /home/dongj/models/Qwen3-14B-BF16
   active_traces: traces/qwen3_14b
   frozen_predictor: predictors/qwen3_14b
   raw_results: results/raw/qwen3_14b_dgx_spark
@@ -42,13 +42,12 @@ environment:
   required_env:
     CUDA_VISIBLE_DEVICES: "0"
     PYTHONHASHSEED: "0"
+  captured_runtime_facts:
+    - configs/qwen3_14b_g0_stock_capture.json
+    - results/raw/qwen3_14b_dgx_spark/g0_stock_capture_20260822
   pending_runtime_capture:
-    - root_and_vllm_git_dirty_states
-    - final_environment_variables
-    - startup_log
-    - final_scheduler_config
-    - model_specific_kv_capacity
     - python_header_requirement_and_reproducible_source
+    - review_remote_git_dirty_state_from_excluded_historical_artifacts
 
 model:
   requested_name: Qwen3-14B
@@ -68,8 +67,8 @@ model:
     method: none
   tensor_parallel_size: 1
   pipeline_parallel_size: 1
-  max_model_len: null
-  gpu_memory_utilization: null
+  max_model_len: 40960
+  gpu_memory_utilization: 0.90
   source_and_license_reviewed: true
   license: Apache-2.0
 
@@ -81,13 +80,13 @@ runtime:
   speculative_decoding: false
   lora: false
   per_decode_request_tokens_per_iteration: 1
-  total_token_budget: null
-  sequence_budget: null
-  kv_block_size: null
-  usable_kv_blocks: null
+  total_token_budget: 2048
+  sequence_budget: 64
+  kv_block_size: 16
+  usable_kv_blocks: 33198
   scheduler_class:
-    stock: null
-    modular_dpp: null
+    stock: vllm.v1.core.sched.scheduler.Scheduler
+    modular_dpp: dpp_scheduler.vllm_scheduler.ModularDPPScheduler
 
 generation:
   completion: natural_eos
@@ -274,4 +273,5 @@ g0_freeze_blockers:
 g0_blockers_resolved:
   - resolved_2026_08_21_exact_model_repository_revision_and_snapshot
   - resolved_2026_08_21_model_license_and_source_review
-  - note: "Model acquired via ModelScope mirror; content-identical to HuggingFace main commit 40c069824f4251a91eefaf281ebe4c544efd3e18; acquisition command and license review recorded in configs/qwen3_14b_snapshot_manifest.json. Operator-approval confirmation for the acquisition and the Qwen3-14B remote smoke remain pending."
+  - resolved_2026_08_22_qwen3_14b_stock_g0_capture
+  - note: "Qwen3-14B BF16 stock vLLM G0 capture completed: SchedulerConfig, token/sequence budgets, KV block size/capacity, startup log, and one natural-EOS smoke completion are recorded in configs/qwen3_14b_g0_stock_capture.json and results/raw/qwen3_14b_dgx_spark/g0_stock_capture_20260822. G0 remains provisional until trace manifest and stock SLO/Goodput are frozen."

@@ -92,6 +92,7 @@ def resolve_engine_config(args: argparse.Namespace) -> tuple[Any, Any]:
         scheduling_policy="fcfs",
         enable_chunked_prefill=True,
         enable_prefix_caching=False,
+        async_scheduling=False,
         stream_interval=1,
         seed=0,
     )
