@@ -27,12 +27,14 @@ G1 Stock SLO/load calibration is now frozen:
   `traces/qwen3_14b/manifest_cap2048_lowqps.json`
   (200 requests per trace, seed 1001, client cap 2048).
 
+The validated raw iteration dataset is assembled by batch kind under
+`results/processed/qwen3_14b_dgx_spark/predictor_iteration_dataset_v1/`.
 The following are **not yet frozen** and remain later-gate inputs:
 
 - `C_tok`, `C_seq`, `b_s`, `b_m`, `b_l`, `u`, `H`, `R0`, Top-K,
   Recovery rules, `epsilon^F`, `epsilon^D`, and `V`; and
-- profiling dataset, Random-Forest artifact, support domain, and residual
-  calibration.
+- dataset split, feature schema, selected Predictor artifact, support domain,
+  and residual calibration.
 
 ## Gate sequence
 
@@ -41,7 +43,7 @@ The following are **not yet frozen** and remain later-gate inputs:
 | G0 | Freeze environment, model, runtime, source, and trace identity | exact manifests, remote smoke, startup log, final SchedulerConfig/KV facts |
 | G1 | Stock natural-EOS baseline and event telemetry | verified TTFT/TBT event semantics, frozen SLO/Goodput definitions, resource/load calibration |
 | G2 | Contracts, Snapshot, exact-plan Adapter, Candidate Generator | immutable same-hash structures; at most 12 deterministic plans; selected plan equals actual execution |
-| G3 | Same-configuration profiling and shallow RF | held-out expected error, conservative P95 coverage/underprediction, support/OOD report, CPU overhead |
+| G3 | Same-configuration profiling and offline model selection | held-out expected error, conservative P95 coverage/underprediction, support/OOD report, CPU overhead |
 | G4 | Safe-Set, Rolling KV, and Fallback | physical feasibility, zero-violation/all-risk behavior, deterministic fallback/preemption/idle audit |
 | G5 | DPP and SLO ledger freeze | complete equation, units, numeric ranges, obligation boundaries, one owner for fallback, deterministic tie-break |
 | G6 | Integrated modular Scheduler | remote unit/integration tests, exact execution, one-time settlement, actual-only state updates |
@@ -91,9 +93,20 @@ IDs and token counts may not be reselected after the decision.
 
 Collect same-model/same-runtime rows containing each executed BatchPlan's
 per-request phase, current context, scheduled tokens, and actual duration.
-Derive and compare features offline without using the held-out test split, then
-freeze the selected schema, support domain, residual calibration, and RF
-artifact.
+Derive features without using the held-out test split, train the user-selected
+three-scenario Ridge baseline, and select each scenario's residual-window size
+only from chronological training OOF replay. Freeze the model, feature schema,
+support domain, online-calibration policy, and artifact after remote shadow
+validation.
+
+The first single-seed 500-request shadow validation completed without request
+failures, but failed the predeclared timing-compatibility guard. It is retained
+as diagnostic evidence; Predictor effectiveness and G3 remain unvalidated.
+The replacement 200-request validation completed without request failures and
+matched the locked-vLLM official timing. Online calibration did not meet every
+effectiveness criterion: Decode-only and Mixed missed 95% conservative
+coverage, while Prefill-only slightly worsened expected MAE. This negative
+result is retained; the Predictor is accepted for modular integration.
 
 ### G4: Safety
 

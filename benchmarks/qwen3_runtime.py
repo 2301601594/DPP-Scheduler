@@ -25,6 +25,13 @@ class ActiveConfigError(ValueError):
     """The active Qwen3 configuration is missing or internally inconsistent."""
 
 
+@dataclass(frozen=True)
+class FrozenPredictor:
+    artifact_root: Path
+    artifact_manifest_sha256: str
+    predictor_version: str
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -59,6 +66,7 @@ class ActiveRuntime:
     kv_block_size: int
     usable_kv_blocks: int
     raw_results: Path
+    processed_results: Path
     active_traces: Path
     client_safety_ceiling_tokens: int
     temperature: float
@@ -171,9 +179,12 @@ def load_active_runtime(config_path: str | Path) -> ActiveRuntime:
 
     workspace = Path(_require(paths, "workspace", where="paths"))
     raw_results = Path(_require(paths, "raw_results", where="paths"))
+    processed_results = Path(_require(paths, "processed_results", where="paths"))
     active_traces = Path(_require(paths, "active_traces", where="paths"))
     if not raw_results.is_absolute():
         raw_results = workspace / raw_results
+    if not processed_results.is_absolute():
+        processed_results = workspace / processed_results
     if not active_traces.is_absolute():
         active_traces = workspace / active_traces
     source_dataset = Path(
@@ -231,6 +242,7 @@ def load_active_runtime(config_path: str | Path) -> ActiveRuntime:
         kv_block_size=int(_require(runtime, "kv_block_size", where="runtime")),
         usable_kv_blocks=int(_require(runtime, "usable_kv_blocks", where="runtime")),
         raw_results=raw_results,
+        processed_results=processed_results,
         active_traces=active_traces,
         client_safety_ceiling_tokens=safety_ceiling,
         temperature=float(_require(sampling, "temperature", where="sampling_parameters")),
@@ -363,6 +375,63 @@ def build_targeted_profile_server_command(
         ]
     )
     return command
+
+
+def build_predictor_evaluation_server_command(
+    runtime: ActiveRuntime, *, port: int
+) -> list[str]:
+    """Build the locked real-vLLM command for Predictor shadow evaluation."""
+    command = build_stock_server_command(runtime, port=port)
+    command.extend(
+        [
+            "--scheduler-cls",
+            (
+                "dpp_scheduler.predictor_evaluation_scheduler."
+                "PredictorEvaluationScheduler"
+            ),
+            "--enable-logging-iteration-details",
+        ]
+    )
+    return command
+
+
+def load_frozen_predictor(runtime: ActiveRuntime) -> FrozenPredictor:
+    """Resolve the exact Predictor artifact from the sole active config."""
+    with runtime.config_path.open("r", encoding="utf-8") as stream:
+        config = yaml.safe_load(stream)
+    predictor = config.get("predictor") if isinstance(config, dict) else None
+    if not isinstance(predictor, dict):
+        raise ActiveConfigError("active config predictor section is missing")
+    value = predictor.get("artifact_path")
+    expected_hash = predictor.get("artifact_manifest_sha256")
+    version = predictor.get("predictor_version")
+    if not value or not expected_hash or not version:
+        raise ActiveConfigError("frozen Predictor path/hash/version is incomplete")
+    root = Path(str(value))
+    if not root.is_absolute():
+        root = runtime.workspace / root
+    root = root.resolve()
+    workspace = runtime.workspace.resolve()
+    if root != workspace and workspace not in root.parents:
+        raise ActiveConfigError("Predictor artifact escapes the configured workspace")
+    manifest = root / "artifact_manifest.json"
+    if not root.is_dir() or not manifest.is_file():
+        raise ActiveConfigError(f"Predictor artifact is absent: {root}")
+    if root.lstat().st_uid != os.getuid():
+        raise ActiveConfigError(f"Predictor artifact is not user-owned: {root}")
+    observed_hash = sha256_file(manifest)
+    if observed_hash != str(expected_hash):
+        raise ActiveConfigError(
+            f"Predictor artifact manifest hash mismatch: {observed_hash}"
+        )
+    payload = _require(predictor, "predictor_version", where="predictor")
+    with manifest.open("r", encoding="utf-8") as stream:
+        artifact_manifest = yaml.safe_load(stream)
+    if not isinstance(artifact_manifest, dict) or artifact_manifest.get(
+        "predictor_version"
+    ) != payload:
+        raise ActiveConfigError("Predictor artifact version mismatch")
+    return FrozenPredictor(root, observed_hash, str(version))
 
 
 def resolve_under(root: Path, value: str | Path, *, label: str) -> Path:

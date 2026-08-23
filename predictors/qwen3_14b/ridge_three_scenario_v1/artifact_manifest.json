@@ -1,0 +1,15 @@
+{
+  "files": {
+    "predictor": {
+      "file": "predictor.json",
+      "sha256": "f6fa6e1458854b6a0b8e1d3538f5a44d0706e7df17b4d7d2b49f7e00f580c99f"
+    },
+    "training_report": {
+      "file": "training_report.json",
+      "sha256": "9e899f7f224f187c8c231ea22c0d2666ca57128bbdbebb79fb11ae8461cc6a1a"
+    }
+  },
+  "predictor_version": "qwen3-14b-ridge-three-scenario-v1",
+  "schema_version": 1,
+  "status": "complete"
+}

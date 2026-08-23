@@ -180,7 +180,7 @@ implementation steps in the authoritative design document.
 | G0 | Freeze DGX environment, exact Qwen3-14B revision, vLLM commit, runtime flags, model/trace manifests, and stock iteration-log semantics | Configuration and commands are reconstructible; model smoke and captured `SchedulerConfig`/KV facts pass remotely |
 | G1 | Stock natural-EOS correctness, iteration telemetry, load baseline, and SLO/resource calibration | TTFT/TBT obligation semantics and actual request-level Goodput are defined; required physical and SLO inputs are frozen before DPP results |
 | G2 | Public contracts, immutable Snapshot, exact-plan Adapter, Candidate Generator, and deterministic temporary selector | Selected and executed request/token sets agree; candidate construction is pure and deterministic |
-| G3 | Same-configuration DGX profiling and offline Random-Forest Predictor | Independent accuracy, conservative coverage, support domain, residual calibration, and inference overhead are reported |
+| G3 | Same-configuration DGX profiling and offline-selected Predictor | Independent accuracy, conservative coverage, support domain, residual calibration, and inference overhead are reported |
 | G4 | Safe-Set, Rolling KV Guard, SLO-risk ranking, Fallback, Preemption/Idle paths | Hard constraints never pass an infeasible plan; every rejection/fallback is deterministic and auditable |
 | G5 | Freeze DPP equation, SLO ledger, obligation boundaries, parameter units/ranges, and fallback ownership | All symbols, update times, success/miss semantics, tie-breaks, and unresolved interface names are unambiguous |
 | G6 | Integrate Selector, Adapter, Observer, and actual-feedback state updates | Remote unit/integration tests and exact-execution/one-settlement invariants pass |
@@ -289,8 +289,10 @@ construction must never allocate, free, or mutate the real block manager.
 
 ## 10. Predictor contract
 
-Version 1 uses a shallow offline Random Forest to predict current-plan
-iteration duration. Profiling must record one row per actually executed
+Version 1 uses an offline-trained model to predict current-plan iteration
+duration. The model family is selected only after comparing multiple suitable
+regressors on the development data; it is not fixed by the design. Profiling
+must record one row per actually executed
 `BatchPlan`: run/plan/snapshot identity, actual iteration duration, and for each
 selected request its request ID, Prefill/Decode phase, pre-iteration computed
 or KV-context length, and scheduled token count. Identity fields are for joins
@@ -298,20 +300,22 @@ and audit only. This raw schema is not the model feature schema and must not
 contain remaining output length or future EOS information.
 
 Offline training derives and compares candidate aggregate or nonlinear features
-from those raw fields without using the held-out test split. The final feature
-schema, transformations, support domain, exact seed, and artifact are frozen
-only after validation. Suggested RF ranges (`n_estimators=32–64`,
-`max_depth=6–8`, `min_samples_leaf=5`) remain provisional until then.
+from those raw fields without using the held-out test split. Model-family,
+feature, and hyperparameter selection use only training/development data. The
+final model family, exact hyperparameters, feature schema, transformations,
+support domain, exact seed, and artifact are frozen only after validation.
 
-Calibrate residuals by Prefill-only, Decode-only, Mixed, and coarse token
-buckets. `expected_duration` is the RF prediction plus the bucket mean
-residual. `conservative_duration` adds the centered residual P95. The Selector
-uses expected duration; Safe-Set uses conservative duration. An undersized
-bucket falls back to the global residual distribution.
+Calibrate residuals with separate bounded Prefill-only, Decode-only, and Mixed
+online windows. `expected_duration` is the frozen model's prediction plus the
+window mean residual. `conservative_duration` adds the centered window P95.
+The Selector uses expected duration; Safe-Set uses conservative duration. A
+window with fewer than 32 completed in-support samples falls back to the same
+batch kind's training OOF residual distribution.
 
 Training data must match Qwen3-14B, DGX Spark, BF16, vLLM commit, runtime flags,
-and Scheduler-relevant limits exactly. Version 1 trains offline; online code may
-log residuals but must not modify the Predictor. Missing, NaN/Inf, schema or
+and Scheduler-relevant limits exactly. Version 1 trains model weights offline;
+online code may update bounded residual windows but must not modify model
+weights. Missing, NaN/Inf, schema or
 version mismatch, and inputs outside the frozen support domain set
 `in_support=false` and fail normal hard admission. Never extrapolate
 optimistically.
@@ -395,7 +399,8 @@ duplicate callbacks.
 Parameters that must be measured/reviewed and frozen include `C_tok`, `C_seq`,
 `b_s`, `b_m`, `b_l`, `u`, `H`, `R0`, Recovery age, hard-TTFT protection,
 Top-K, minimum Prefill chunk, TTFT/TBT SLOs, `epsilon^F`, `epsilon^D`, `V`,
-residual buckets, RF artifact/version, and every stable tie key.
+residual windows, Predictor model family/artifact/version, and every stable tie
+key.
 
 ## 13. Implementation and remote tests
 
@@ -430,7 +435,7 @@ Remote tests must cover at least:
   and the 12-candidate bound;
 - exact token/sequence limits, current and Rolling KV boundaries, no evaluator
   side effects, and native allocation failure;
-- RF expected/conservative calculations, global-residual fallback, missing/
+- Predictor expected/conservative calculations, same-kind OOF cold start, missing/
   NaN/Inf/schema/version/OOD rejection, and zero/non-positive duration;
 - zero-violation Safe-Set, all-risk Top-K ordering, every Fallback branch,
   Preemption/Idle, and audited reasons;
@@ -484,7 +489,7 @@ units, seed count, and uncertainty.
 ## 15. Completion and reporting
 
 Before formal DPP comparison, require: a frozen G0 environment/model; explained
-Stock variability; frozen natural-EOS SLO/Goodput semantics; a validated RF
+Stock variability; frozen natural-EOS SLO/Goodput semantics; a validated Predictor
 support region and conservative underprediction behavior; exact-plan execution;
 one-time obligation settlement; safe fallback behavior; and measured Scheduler
 CPU overhead. These are scientific gates, not assumed outcomes.
@@ -502,3 +507,15 @@ when an analysis actually mixes them; simple factual answers do not need those
 labels. Use the locked vLLM source for version-specific interfaces. DPP papers
 provide design ideas only; do not claim their proofs or stability results
 transfer to mixed continuous batching.
+
+For long-running asynchronous work:
+- Empty `write_stdin` polls MUST use `yield_time_ms >= 180000`;
+prefer `300000` when intermediate output is not needed.
+- `functions.wait` MUST use `yield_time_ms >= 180000`.
+- `functions.exec` MUST set its outer `@exec yield_time_ms` at least
+30000 ms longer than the longest nested tool wait, so the outer
+code cell does not yield first.
+- Do not apply the long wait to non-empty `write_stdin` calls that
+send interactive input.
+- These tools return early when the process or cell completes.
+Do not wake the model merely to report that work is still running.

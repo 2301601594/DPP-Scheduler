@@ -190,37 +190,34 @@ generate(snapshot):
 
 ## 5. Predictor
 
-采用浅层 Random Forest，只预测当前 BatchPlan 的 iteration 时间。
-
-建议初始配置：
-
-```text
-n_estimators = 32~64
-max_depth = 6~8
-min_samples_leaf = 5
-```
+Predictor 只预测当前 `BatchPlan` 的 iteration 时间，不预先固定模型系列。
+训练阶段可比较简单基线、树模型或其他满足离线训练和低延迟 CPU 推理约束的
+回归器；模型与超参数仅使用训练/开发数据选择，独立测试集只用于最终评估。
 
 Profiling 不预先固定模型特征。每个实际执行的 `BatchPlan` 记录一行基础数据：
 run/plan/snapshot 标识、实际 iteration 时间，以及每个选中请求的
 request ID、Prefill/Decode 阶段、执行前已计算或 KV-context 长度和本轮 token
 数。标识字段只用于关联和审计；基础数据不得包含剩余输出长度或未来 EOS 信息。
+实际时间采用锁定 vLLM 的官方 iteration 边界：异步模型执行提交完成之后开始，
+到模型结果收集和采样完成为止，不包含 Scheduler 的结果更新。
 
 训练阶段从基础数据离线构造并比较候选聚合或非线性特征，不使用独立测试集
-选择特征。验证后冻结最终特征 schema、变换、支持域和 Predictor artifact；
-在线特征必须能从当前 `StateSnapshot` 与 `BatchPlan` 直接计算。
+选择特征或模型。验证后冻结最终模型系列、超参数、特征 schema、变换、支持域
+和 Predictor artifact；在线特征必须能从当前 `StateSnapshot` 与 `BatchPlan`
+直接计算。
 
 基础预测为：
 
 $$
 \widetilde{\tau}_k(\mathbf a)
 =
-f_{RF}
+f_{\theta}
 \left(
 \mathbf x_k(\mathbf a)
 \right)
 $$
 
-残差按 `Prefill-only`、`Decode-only`、`Mixed` 和粗粒度 token bucket 分组。平均时间与保守时间分别为：
+残差按 `Prefill-only`、`Decode-only`、`Mixed` 分别维护有界在线窗口。窗口只接收已经完成且位于支持域内的 iteration，残差定义为实际时间减去基础预测；当前 iteration 不得使用自身残差。模型参数保持离线冻结。平均时间与保守时间分别为：
 
 $$
 \widehat{\tau}_k(\mathbf a)
@@ -243,9 +240,11 @@ $$
 
 - DPP Selector 使用 `expected_duration`；
 - Safe-Set 使用 `conservative_duration`；
-- 分桶样本不足时回退到全局残差；
+- 每类窗口不足 32 条时回退到该类训练集 OOF 残差统计；
+- 窗口长度只使用训练集 OOF 顺序回放从 `{32,64,128}` 中选择；
 - 输入超出冻结支持域时设置 `in_support=false`；
-- 第一版离线训练，在线只记录残差，不在线更新模型。
+- 服务重启时清空窗口，不跨 run 或 Predictor 版本继承；
+- 第一版不在线更新模型权重。
 
 训练数据必须来自相同的 `Qwen3-14B + DGX Spark + BF16 + vLLM commit + 运行开关`。
 

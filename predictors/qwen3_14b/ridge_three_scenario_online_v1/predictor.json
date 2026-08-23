@@ -1,0 +1,235 @@
+{
+  "base_predictor_sha256": "f6fa6e1458854b6a0b8e1d3538f5a44d0706e7df17b4d7d2b49f7e00f580c99f",
+  "base_predictor_version": "qwen3-14b-ridge-three-scenario-v1",
+  "model_family": "ridge_regression",
+  "models": {
+    "decode_only": {
+      "active_features": [
+        "x_4",
+        "x_5"
+      ],
+      "alpha": 10.0,
+      "coefficients_for_standardized_features": {
+        "x_4": 0.0031949227844691674,
+        "x_5": 0.021901753498288545
+      },
+      "intercept_seconds": 0.17772833500350735,
+      "standardization": {
+        "x_4": {
+          "mean": 40.51260981394228,
+          "scale": 20.259127755172035
+        },
+        "x_5": {
+          "mean": 60931.76615893369,
+          "scale": 29674.12731484467
+        }
+      },
+      "support_domain_train_marginal_box": {
+        "x_4": {
+          "max": 64.0,
+          "min": 1.0
+        },
+        "x_5": {
+          "max": 117903.0,
+          "min": 206.0
+        }
+      }
+    },
+    "mixed": {
+      "active_features": [
+        "x_1",
+        "x_2",
+        "x_3",
+        "x_4",
+        "x_5",
+        "x_6",
+        "x_7",
+        "x_8"
+      ],
+      "alpha": 10.0,
+      "coefficients_for_standardized_features": {
+        "x_1": 0.00651474954116011,
+        "x_2": 0.03306256097574206,
+        "x_3": 0.060748317668683056,
+        "x_4": 0.010165468910594945,
+        "x_5": 0.05158836235409636,
+        "x_6": 0.1538785454939804,
+        "x_7": 0.006612207695206464,
+        "x_8": 0.007460413621490333
+      },
+      "intercept_seconds": 0.5398618032786885,
+      "standardization": {
+        "x_1": {
+          "mean": 1031043.3502235449,
+          "scale": 1637991.8322975172
+        },
+        "x_2": {
+          "mean": 834892.723397914,
+          "scale": 1249074.8347101863
+        },
+        "x_3": {
+          "mean": 69591.38777943364,
+          "scale": 27795.606297824048
+        },
+        "x_4": {
+          "mean": 47.38658718330836,
+          "scale": 17.430941846561154
+        },
+        "x_5": {
+          "mean": 69331.98092399398,
+          "scale": 27855.113560919763
+        },
+        "x_6": {
+          "mean": 702.1934426229501,
+          "scale": 616.2347921554037
+        },
+        "x_7": {
+          "mean": 681.8622950819683,
+          "scale": 601.0826190029625
+        },
+        "x_8": {
+          "mean": 1.0822652757078992,
+          "scale": 0.3857733765232691
+        }
+      },
+      "support_domain_train_marginal_box": {
+        "x_1": {
+          "max": 15741054.0,
+          "min": 256.0
+        },
+        "x_2": {
+          "max": 4190209.0,
+          "min": 4.0
+        },
+        "x_3": {
+          "max": 116823.0,
+          "min": 141.0
+        },
+        "x_4": {
+          "max": 63.0,
+          "min": 1.0
+        },
+        "x_5": {
+          "max": 116628.0,
+          "min": 139.0
+        },
+        "x_6": {
+          "max": 2047.0,
+          "min": 2.0
+        },
+        "x_7": {
+          "max": 2047.0,
+          "min": 2.0
+        },
+        "x_8": {
+          "max": 6.0,
+          "min": 1.0
+        }
+      }
+    },
+    "prefill_only": {
+      "active_features": [
+        "x_1",
+        "x_2",
+        "x_3",
+        "x_6",
+        "x_7",
+        "x_8"
+      ],
+      "alpha": 1e-06,
+      "coefficients_for_standardized_features": {
+        "x_1": 0.013432235689973843,
+        "x_2": 0.04926038093656271,
+        "x_3": -0.002099226471706774,
+        "x_6": 0.1520896069995125,
+        "x_7": -0.050218263768369,
+        "x_8": 0.0019936015376735595
+      },
+      "intercept_seconds": 0.2129728861788618,
+      "standardization": {
+        "x_1": {
+          "mean": 504712.3008130078,
+          "scale": 1124094.9257413768
+        },
+        "x_2": {
+          "mean": 322496.71138211404,
+          "scale": 825434.7964639347
+        },
+        "x_3": {
+          "mean": 738.9065040650411,
+          "scale": 1289.597748542982
+        },
+        "x_6": {
+          "mean": 385.7113821138212,
+          "scale": 532.8120312100269
+        },
+        "x_7": {
+          "mean": 317.12601626016254,
+          "scale": 451.09942071780006
+        },
+        "x_8": {
+          "mean": 1.7113821138211374,
+          "scale": 1.6632177282943452
+        }
+      },
+      "support_domain_train_marginal_box": {
+        "x_1": {
+          "max": 7503872.0,
+          "min": 32.0
+        },
+        "x_2": {
+          "max": 4194304.0,
+          "min": 32.0
+        },
+        "x_3": {
+          "max": 6921.0,
+          "min": 0.0
+        },
+        "x_6": {
+          "max": 2048.0,
+          "min": 6.0
+        },
+        "x_7": {
+          "max": 2048.0,
+          "min": 2.0
+        },
+        "x_8": {
+          "max": 8.0,
+          "min": 1.0
+        }
+      }
+    }
+  },
+  "prediction_target": "current_plan_iteration_duration_seconds",
+  "predictor_version": "qwen3-14b-ridge-three-scenario-online-v1",
+  "residual_calibration": {
+    "by_batch_kind": {
+      "decode_only": {
+        "cold_start_centered_p95_seconds": 0.0027248208201835944,
+        "cold_start_mean_seconds": 2.5029017873694265e-05,
+        "minimum_samples": 32,
+        "window_size": 128
+      },
+      "mixed": {
+        "cold_start_centered_p95_seconds": 0.058273816867463885,
+        "cold_start_mean_seconds": -0.0001064236407404796,
+        "minimum_samples": 32,
+        "window_size": 128
+      },
+      "prefill_only": {
+        "cold_start_centered_p95_seconds": 0.02127883050103742,
+        "cold_start_mean_seconds": 0.00025663090919629663,
+        "minimum_samples": 32,
+        "window_size": 128
+      }
+    },
+    "cold_start": "offline_oof_by_batch_kind",
+    "conservative_statistic": "centered_p95",
+    "expected_statistic": "mean",
+    "quantile_method": "higher",
+    "reset_scope": "server_process",
+    "residual_definition": "actual_duration_seconds-base_duration_seconds",
+    "strategy": "online_window_per_batch_kind"
+  },
+  "schema_version": 1
+}

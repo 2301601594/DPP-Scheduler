@@ -1,0 +1,13 @@
+{
+  "dataset_id": "predictor_ridge_splits_v1",
+  "decompressed_jsonl_sha256": {
+    "decode_only_test": "a3b2e61298561a004e6428dffbc9f13413f626c28f571b1ad7335c89aaae4f75",
+    "decode_only_train": "7f5a4c1ce2e09b42611550b3c74bd6b0ef09271f4071b62857be44f90ae2c4a1",
+    "mixed_test": "75beefe12e006f69a757c71d5a70fa8d0ddf0bd163e35a17b99218128e7da20c",
+    "mixed_train": "a2b533dbc09ab0043312e1943c55bdcd2b28d51a0c6d91e60ae6bba4458b3ab6",
+    "prefill_only_test": "88ec93a25e31356a5d8a865e7a08ef6e675136db892ce883443eb6666b0a4dfe",
+    "prefill_only_train": "4edb4a0ba9e84377cae3c1073228d6e8bba90eeb5c0778259d2ac86463faaaa0"
+  },
+  "original_dataset_manifest_sha256": "32c27bc1b8205f2464ca6ee5ae91ee6fdaa67375d4004c481a2ab3fff75c5164",
+  "schema_version": 1
+}

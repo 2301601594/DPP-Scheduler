@@ -10,7 +10,7 @@
 - The action is an exact, atomic `BatchPlan` containing selected Prefill and
   Decode work. A scalar Prefill cap is only one candidate-template dimension;
   vLLM may not reselect the plan after DPP chooses it.
-- Candidate Generator, shallow Random-Forest Predictor, Safe-Set, DPP Selector,
+- Candidate Generator, offline Duration Predictor, Safe-Set, DPP Selector,
   Adapter, and Observer communicate through immutable public contracts tied to
   one `snapshot_hash`.
 - Safe-Set hard-filters physical feasibility and Predictor support. SLO risk is
@@ -25,16 +25,38 @@
   them from actual events; every obligation is settled once, and actual
   request-level Goodput is counted only after natural EOS.
 
-## 2026-08-23: defer Predictor feature selection to offline training
+## 2026-08-23: defer Predictor feature and model selection to offline training
 
 - Profiling records each executed BatchPlan's actual duration and per-selected-
   request identity, phase, current context, and scheduled token count. Identity
   fields are used only for joins and audit.
-- Candidate features are derived and compared offline without using the held-
-  out test split. The selected feature schema and support domain are frozen in
-  the Predictor artifact before online use.
+- Candidate features and suitable regression models are compared offline
+  without using the held-out test split for selection. The selected model,
+  hyperparameters, feature schema, and support domain are frozen in the
+  Predictor artifact before online use.
 - Raw or derived data must not include remaining output length or future EOS
   information.
+
+## 2026-08-23: use three bounded online residual windows
+
+- The offline Ridge weights remain immutable. Decode-only, Mixed, and
+  Prefill-only keep separate windows of completed in-support residuals.
+- Window sizes are selected from 32/64/128 using training OOF replay only;
+  fewer than 32 live samples fall back to same-scenario OOF statistics.
+- Shadow evaluation records base, expected, conservative, and actual duration
+  on real vLLM iterations without changing the executed scheduling policy.
+
+The first 500-request shadow run is retained as timing-incompatible: its P95
+timing difference exceeded the predeclared limit. Its error metrics remain
+diagnostic, but it does not establish calibration effectiveness and G3 remains
+incomplete.
+
+Predictor feedback now uses the locked vLLM official iteration boundary, from
+after asynchronous model submission through result collection and sampling;
+Scheduler result updates are excluded. The separate append-only 200-request
+run validated this boundary without replacing the retained run. Its residual
+calibration did not meet every effectiveness criterion, and that negative
+result is retained; the Predictor is accepted for modular integration.
 
 ## 2026-08-21: reopen G0 and prohibit silent parameter inheritance
 

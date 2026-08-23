@@ -6,6 +6,9 @@ vllm/
 data/raw/
 traces/**/*.jsonl
 results/raw/
+results/processed/qwen3_14b_dgx_spark/predictor_iteration_dataset_v1/
+results/dataset/
+artifacts/qwen3_14b_dgx_spark/*_stage/
 
 __pycache__/
 *.py[cod]

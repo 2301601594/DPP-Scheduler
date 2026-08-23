@@ -172,7 +172,10 @@ candidate_generator:
   kv_projection_side_effect_free: true
 
 predictor:
-  family: shallow_random_forest
+  family: ridge_regression
+  model_family_policy: user_selected_ridge_for_current_predictor_round
+  candidate_model_families:
+    - ridge_regression
   training: offline_only
   raw_profile_schema:
     per_iteration:
@@ -188,25 +191,43 @@ predictor:
       - scheduled_tokens
   identity_fields_for_audit_only: true
   feature_engineering: offline_without_held_out_test
-  final_feature_schema: null
+  final_feature_schema:
+    decode_only: [x_4, x_5]
+    mixed: [x_1, x_2, x_3, x_4, x_5, x_6, x_7, x_8]
+    prefill_only: [x_1, x_2, x_3, x_6, x_7, x_8]
   provisional_hyperparameter_ranges:
-    n_estimators: [32, 64]
-    max_depth: [6, 8]
-    min_samples_leaf: 5
-  exact_hyperparameters: null
+    alpha: [0.000001, 1000000.0]
+  exact_hyperparameters:
+    decode_only_alpha: 10.0
+    mixed_alpha: 10.0
+    prefill_only_alpha: 0.000001
   random_seed: null
-  expected_duration_calibration: residual_bucket_mean
-  conservative_duration_calibration: centered_residual_p95
+  online_model_weight_updates: forbidden
+  residual_definition: actual_duration_seconds_minus_base_duration_seconds
+  duration_timing_boundary: >-
+    vllm_official_after_execute_model_submission_through_model_result_and_sampling
+  expected_duration_calibration: per_batch_kind_online_window_mean
+  conservative_duration_calibration: online_window_centered_p95_higher
   residual_groups:
     - prefill_only
     - decode_only
     - mixed
-  residual_token_buckets: null
-  insufficient_bucket_fallback: global_residual_distribution
-  support_domain: null
-  artifact_path: null
-  artifact_sha256: null
-  predictor_version: null
+  residual_token_buckets: disabled
+  residual_window_candidates: [32, 64, 128]
+  residual_window_minimum_samples: 32
+  residual_window_selection: training_oof_only
+  residual_window_sizes:
+    decode_only: 128
+    mixed: 128
+    prefill_only: 128
+  insufficient_window_fallback: offline_oof_same_batch_kind
+  support_domain: artifact_train_marginal_box
+  artifact_path: predictors/qwen3_14b/ridge_three_scenario_online_v1
+  artifact_manifest_sha256: 04b804baa856983e353b4bef877b0730fba7c08609d20724fa3f46f451999930
+  artifact_sha256: c109695d09b9576912f46127bafd7591dce412d01c32457f84de8291b06e2184
+  predictor_version: qwen3-14b-ridge-three-scenario-online-v1
+  validation_status: >-
+    accepted_for_modular_integration_after_timing_aligned_n200_shadow_validation
 
 safe_set:
   hard_filters:

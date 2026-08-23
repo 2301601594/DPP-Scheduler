@@ -14,6 +14,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,74 @@ TARGET_PROFILE_PATH_ENV = "DPP_TARGET_PROFILE_PATH"
 TARGET_PROFILE_RUN_ID_ENV = "DPP_TARGET_PROFILE_RUN_ID"
 TARGET_PROFILE_RECIPE_SEED_ENV = "DPP_TARGET_PROFILE_RECIPE_SEED"
 TARGET_PROFILE_RECIPE_MODE_ENV = "DPP_TARGET_PROFILE_RECIPE_MODE"
+PREDICTOR_EVAL_PATH_ENV = "DPP_PREDICTOR_EVAL_PATH"
+PREDICTOR_EVAL_RUN_ID_ENV = "DPP_PREDICTOR_EVAL_RUN_ID"
+PREDICTOR_ARTIFACT_PATH_ENV = "DPP_PREDICTOR_ARTIFACT_PATH"
+PREDICTOR_EVAL_RECIPE_SEED_ENV = "DPP_PREDICTOR_EVAL_RECIPE_SEED"
+PREDICTOR_EVAL_RECIPE_MODE_ENV = "DPP_PREDICTOR_EVAL_RECIPE_MODE"
+
+VLLM_OFFICIAL_ITERATION_TIMING = "vllm_official_iteration_details"
+VLLM_ALIGNED_ITERATION_TIMING = "vllm_aligned_monotonic"
+
+
+def _build_iteration_timing_bridge(original: Callable[..., Any]) -> Callable[..., Any]:
+    @contextmanager
+    def capture_iteration_details(core: Any, scheduler_output: Any):
+        details = None
+        aligned_duration = 0.0
+        with original(core, scheduler_output) as details:
+            aligned_started = time.monotonic()
+            try:
+                yield details
+            finally:
+                aligned_duration = time.monotonic() - aligned_started
+
+        if (
+            scheduler_output is None
+            or int(scheduler_output.total_num_scheduled_tokens) == 0
+        ):
+            return
+        callback = getattr(core.scheduler, "_dpp_record_iteration_duration", None)
+        if callback is None:
+            return
+        if details is not None:
+            duration_seconds = float(details.elapsed_ms) / 1000.0
+            iteration_index = int(details.iteration_index)
+            timing_source = VLLM_OFFICIAL_ITERATION_TIMING
+        else:
+            duration_seconds = aligned_duration
+            iteration_index = None
+            timing_source = VLLM_ALIGNED_ITERATION_TIMING
+        if not duration_seconds > 0:
+            raise RuntimeError("vLLM iteration duration must be positive")
+        callback(
+            scheduler_output=scheduler_output,
+            iteration_index=iteration_index,
+            duration_seconds=duration_seconds,
+            timing_source=timing_source,
+        )
+
+    return capture_iteration_details
+
+
+def install_vllm_iteration_timing_bridge() -> None:
+    """Forward vLLM's EngineCore iteration boundary to project schedulers.
+
+    The locked vLLM timer starts after asynchronous model submission and ends
+    after model-result collection/sampling, immediately before
+    ``Scheduler.update_from_output``. When official iteration details are
+    disabled, the bridge measures that same context-manager boundary locally.
+    """
+    from vllm.v1.engine.core import EngineCore
+
+    marker = "_dpp_iteration_timing_bridge_installed"
+    if getattr(EngineCore, marker, False):
+        return
+
+    EngineCore.capture_iteration_details = _build_iteration_timing_bridge(
+        EngineCore.capture_iteration_details
+    )
+    setattr(EngineCore, marker, True)
 
 
 def _canonical_sha256(payload: Any) -> str:
@@ -197,6 +266,50 @@ def _selected_shape(record: dict[str, Any]) -> dict[str, int | str]:
         "prefill_tokens": sum(int(request["scheduled_tokens"]) for request in prefills),
         "decode_requests": len(decodes),
     }
+
+
+def build_shadow_plan(
+    *, snapshot: StateSnapshot, scheduler_output: Any
+) -> BatchPlan | None:
+    """Convert one unchanged Stock SchedulerOutput into an auditable BatchPlan."""
+    if int(scheduler_output.total_num_scheduled_tokens) == 0:
+        return None
+    prefill_ids = {
+        request.request_id for request in snapshot.waiting_prefill_requests
+    }
+    decode_ids = {
+        request.request_id for request in snapshot.active_decode_requests
+    }
+    prefill_items: list[tuple[str, int]] = []
+    decode_items: list[str] = []
+    for request_id, token_count in scheduler_output.num_scheduled_tokens.items():
+        if request_id in prefill_ids:
+            prefill_items.append((request_id, int(token_count)))
+        elif request_id in decode_ids:
+            if int(token_count) != 1:
+                raise RuntimeError("shadow Decode work must schedule exactly one token")
+            decode_items.append(request_id)
+        else:
+            raise RuntimeError(f"shadow scheduled unknown request: {request_id}")
+    payload = {
+        "snapshot_hash": snapshot.snapshot_hash,
+        "prefill_items": prefill_items,
+        "decode_items": decode_items,
+    }
+    return BatchPlan(
+        plan_id=f"shadow-{_canonical_sha256(payload)[:24]}",
+        snapshot_hash=snapshot.snapshot_hash,
+        template_id="SHADOW_STOCK_EXECUTED",
+        prefill_items=tuple(prefill_items),
+        decode_items=tuple(decode_items),
+        total_prefill_tokens=sum(tokens for _, tokens in prefill_items),
+        total_decode_tokens=len(decode_items),
+        total_sequences=project_sequence_count(snapshot, tuple(prefill_items)),
+        projected_kv_blocks=project_kv_blocks(
+            snapshot, tuple(prefill_items), tuple(decode_items)
+        ),
+        mandatory_request_ids=(),
+    )
 
 
 class ExactPlanAdapter(ABC):
@@ -584,6 +697,7 @@ def get_modular_scheduler_class() -> type:
 
     from dpp_scheduler.candidate_generator import CandidateGenerator
     from dpp_scheduler.dpp_selector import TemporarySelector
+    from dpp_scheduler.predictor import RidgeDurationPredictor
     from dpp_scheduler.settings import SchedulerSettings
 
     logger = init_logger("dpp_scheduler.vllm_scheduler")
@@ -592,6 +706,7 @@ def get_modular_scheduler_class() -> type:
         """Exact-plan development scheduler, disabled until inputs freeze."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
+            install_vllm_iteration_timing_bridge()
             settings = SchedulerSettings.provisional()
             if not settings.frozen:
                 raise RuntimeError(
@@ -602,11 +717,40 @@ def get_modular_scheduler_class() -> type:
             self._dpp_adapter = VllmAdapter(self)
             self._dpp_generator = CandidateGenerator(settings)
             self._dpp_selector = TemporarySelector()
+            artifact = (
+                Path(__file__).resolve().parents[1]
+                / "predictors"
+                / "qwen3_14b"
+                / "ridge_three_scenario_online_v1"
+            )
+            self._dpp_predictor = RidgeDurationPredictor.from_artifact(artifact)
+            self._dpp_predictor_pending: dict[str, Any] | None = None
+
+        def _dpp_record_iteration_duration(
+            self,
+            *,
+            scheduler_output: Any,
+            iteration_index: int | None,
+            duration_seconds: float,
+            timing_source: str,
+        ) -> None:
+            del iteration_index, timing_source
+            pending = self._dpp_predictor_pending
+            if pending is None:
+                raise RuntimeError("modular Predictor timing has no selected plan")
+            if pending["scheduler_output"] is not scheduler_output:
+                raise RuntimeError("modular Predictor timing output mismatch")
+            if pending["actual_duration_seconds"] is not None:
+                raise RuntimeError("duplicate modular Predictor iteration timing")
+            pending["actual_duration_seconds"] = duration_seconds
 
         def schedule(self, throttle_prefills: bool = False) -> Any:
             del throttle_prefills
             snapshot = self._dpp_adapter.make_snapshot()
             plans = self._dpp_generator.generate(snapshot)
+            predictions = self._dpp_predictor.predict(snapshot, plans)
+            if len(predictions) != len(plans):
+                raise RuntimeError("Predictor did not cover every BatchPlan")
             decision = self._dpp_selector.select(snapshot, plans)
             logger.info(
                 "ModularDPPScheduler frame=%s plans=%d selected=%s",
@@ -620,10 +764,317 @@ def get_modular_scheduler_class() -> type:
                 raise RuntimeError(
                     "no exact BatchPlan; G4 fallback/preemption path is not implemented"
                 )
-            return self._dpp_adapter.build_scheduler_output(decision.selected_plan)
+            audit = self._dpp_predictor.predict_with_audit(
+                snapshot, decision.selected_plan
+            )
+            if not audit.prediction.in_support:
+                raise RuntimeError(
+                    "temporary G2 path selected an out-of-support plan; "
+                    "G4 Safe-Set is required before execution"
+                )
+            scheduler_output = self._dpp_adapter.build_scheduler_output(
+                decision.selected_plan
+            )
+            self._dpp_predictor_pending = {
+                "snapshot": snapshot,
+                "plan": decision.selected_plan,
+                "base_duration_seconds": audit.base_duration_seconds,
+                "scheduler_output": scheduler_output,
+                "actual_duration_seconds": None,
+            }
+            return scheduler_output
+
+        def update_from_output(
+            self, scheduler_output: Any, model_runner_output: Any
+        ) -> Any:
+            pending = self._dpp_predictor_pending
+            result = super().update_from_output(scheduler_output, model_runner_output)
+            if pending is None:
+                raise RuntimeError("modular Predictor feedback has no selected plan")
+            actual_duration = pending["actual_duration_seconds"]
+            if actual_duration is None:
+                raise RuntimeError("modular Predictor iteration timing is missing")
+            self._dpp_predictor_pending = None
+            self._dpp_predictor.observe_actual(
+                pending["snapshot"],
+                pending["plan"],
+                actual_duration,
+                base_duration_seconds=pending["base_duration_seconds"],
+            )
+            return result
 
     ModularDPPScheduler.__module__ = "dpp_scheduler.vllm_scheduler"
     return ModularDPPScheduler
+
+
+def get_predictor_evaluation_scheduler_class() -> type:
+    """Create a real-vLLM shadow scheduler for online Predictor evaluation."""
+    from vllm.v1.core.sched.scheduler import Scheduler
+
+    from dpp_scheduler.predictor import RidgeDurationPredictor
+    from dpp_scheduler.targeted_profile import (
+        TargetBatchPlanner,
+        build_target_recipes,
+    )
+
+    class PredictorEvaluationScheduler(Scheduler):
+        """Execute Stock/target batches unchanged while predicting them online."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            install_vllm_iteration_timing_bridge()
+            super().__init__(*args, **kwargs)
+            output_value = os.environ.get(PREDICTOR_EVAL_PATH_ENV)
+            run_id = os.environ.get(PREDICTOR_EVAL_RUN_ID_ENV)
+            artifact_value = os.environ.get(PREDICTOR_ARTIFACT_PATH_ENV)
+            recipe_seed_value = os.environ.get(PREDICTOR_EVAL_RECIPE_SEED_ENV)
+            recipe_mode = os.environ.get(PREDICTOR_EVAL_RECIPE_MODE_ENV, "formal")
+            if not output_value or not run_id or not artifact_value:
+                raise RuntimeError(
+                    f"{PREDICTOR_EVAL_PATH_ENV}, {PREDICTOR_EVAL_RUN_ID_ENV}, "
+                    f"and {PREDICTOR_ARTIFACT_PATH_ENV} are required"
+                )
+            if recipe_seed_value is None:
+                raise RuntimeError(f"{PREDICTOR_EVAL_RECIPE_SEED_ENV} is required")
+            output_path = Path(output_value)
+            artifact_path = Path(artifact_value)
+            if not output_path.is_absolute() or not artifact_path.is_absolute():
+                raise RuntimeError("Predictor evaluation paths must be absolute")
+            output_path = output_path.resolve()
+            artifact_path = artifact_path.resolve()
+            if not output_path.parent.is_dir():
+                raise RuntimeError(
+                    f"Predictor evaluation parent does not exist: {output_path.parent}"
+                )
+            self._predictor_eval_run_id = run_id
+            self._predictor_eval_stream = output_path.open(
+                "x", encoding="utf-8", buffering=1
+            )
+            self._predictor = RidgeDurationPredictor.from_artifact(artifact_path)
+            self._predictor_eval_iteration = 0
+            self._predictor_eval_pending: dict[str, Any] | None = None
+            self._predictor_eval_adapter = VllmAdapter(self)
+            self._predictor_eval_recipe_seed = int(recipe_seed_value)
+            self._predictor_eval_recipe_mode = recipe_mode
+            self._predictor_eval_planner = TargetBatchPlanner(
+                build_target_recipes(
+                    self._predictor_eval_recipe_seed, mode=recipe_mode
+                )
+            )
+
+        def _selected_requests(
+            self, snapshot: StateSnapshot, plan: BatchPlan
+        ) -> list[dict[str, Any]]:
+            prefill = {
+                request.request_id: request.prefilled_tokens
+                for request in snapshot.waiting_prefill_requests
+            }
+            decode = {
+                request.request_id: request.kv_context_length
+                for request in snapshot.active_decode_requests
+            }
+            selected = [
+                {
+                    "request_id": request_id,
+                    "phase": "prefill",
+                    "current_context_tokens": int(prefill[request_id]),
+                    "scheduled_tokens": int(tokens),
+                }
+                for request_id, tokens in plan.prefill_items
+            ]
+            selected.extend(
+                {
+                    "request_id": request_id,
+                    "phase": "decode",
+                    "current_context_tokens": int(decode[request_id]),
+                    "scheduled_tokens": 1,
+                }
+                for request_id in plan.decode_items
+            )
+            return selected
+
+        def _prepare_pending(
+            self,
+            *,
+            snapshot: StateSnapshot,
+            plan: BatchPlan,
+            sample_role: str,
+            recipe: Any | None,
+            realized_shape: dict[str, Any] | None,
+        ) -> None:
+            if self._predictor_eval_pending is not None:
+                raise RuntimeError("prior Predictor evaluation iteration is unfinished")
+            prediction_started = time.perf_counter()
+            audit = self._predictor.predict_with_audit(snapshot, plan)
+            predictor_cpu_seconds = time.perf_counter() - prediction_started
+            self._predictor_eval_pending = {
+                "snapshot": snapshot,
+                "plan": plan,
+                "audit": audit,
+                "predictor_cpu_seconds": predictor_cpu_seconds,
+                "sample_role": sample_role,
+                "recipe": recipe,
+                "realized_shape": realized_shape,
+                "scheduler_output": None,
+                "official_iteration_index": None,
+                "actual_duration_seconds": None,
+                "timing_source": None,
+            }
+
+        def _bind_scheduler_output(self, scheduler_output: Any) -> None:
+            pending = self._predictor_eval_pending
+            if pending is None:
+                raise RuntimeError("Predictor evaluation output has no pending plan")
+            if pending["scheduler_output"] is not None:
+                raise RuntimeError("Predictor evaluation output is already bound")
+            pending["scheduler_output"] = scheduler_output
+
+        def _dpp_record_iteration_duration(
+            self,
+            *,
+            scheduler_output: Any,
+            iteration_index: int | None,
+            duration_seconds: float,
+            timing_source: str,
+        ) -> None:
+            pending = self._predictor_eval_pending
+            if pending is None:
+                raise RuntimeError("Predictor evaluation timing has no pending plan")
+            if pending["scheduler_output"] is not scheduler_output:
+                raise RuntimeError("Predictor evaluation timing output mismatch")
+            if pending["actual_duration_seconds"] is not None:
+                raise RuntimeError("duplicate Predictor evaluation iteration timing")
+            pending["official_iteration_index"] = iteration_index
+            pending["actual_duration_seconds"] = duration_seconds
+            pending["timing_source"] = timing_source
+
+        def schedule(self, throttle_prefills: bool = False) -> Any:
+            snapshot = self._predictor_eval_adapter.make_snapshot()
+            if not self._predictor_eval_planner.complete:
+                built = self._predictor_eval_planner.build(snapshot)
+                if built is not None:
+                    plan, realized_shape = built
+                    scheduler_output = self._predictor_eval_adapter.build_scheduler_output(
+                        plan
+                    )
+                    recipe = self._predictor_eval_planner.current
+                    assert recipe is not None
+                    self._predictor_eval_planner.advance()
+                    self._prepare_pending(
+                        snapshot=snapshot,
+                        plan=plan,
+                        sample_role="target",
+                        recipe=recipe,
+                        realized_shape=realized_shape,
+                    )
+                    self._bind_scheduler_output(scheduler_output)
+                    return scheduler_output
+
+            scheduler_output = super().schedule(throttle_prefills)
+            plan = build_shadow_plan(
+                snapshot=snapshot, scheduler_output=scheduler_output
+            )
+            if plan is not None:
+                self._prepare_pending(
+                    snapshot=snapshot,
+                    plan=plan,
+                    sample_role=(
+                        "drain" if self._predictor_eval_planner.complete else "setup"
+                    ),
+                    recipe=None,
+                    realized_shape=None,
+                )
+                self._bind_scheduler_output(scheduler_output)
+            return scheduler_output
+
+        def update_from_output(
+            self, scheduler_output: Any, model_runner_output: Any
+        ) -> Any:
+            pending = self._predictor_eval_pending
+            result = super().update_from_output(scheduler_output, model_runner_output)
+            if pending is None:
+                if int(scheduler_output.total_num_scheduled_tokens) != 0:
+                    raise RuntimeError("non-empty iteration has no Predictor evaluation")
+                return result
+            self._predictor_eval_pending = None
+            actual_duration = pending["actual_duration_seconds"]
+            if actual_duration is None:
+                raise RuntimeError("Predictor evaluation iteration timing is missing")
+            official_iteration_index = pending["official_iteration_index"]
+            if official_iteration_index is None:
+                raise RuntimeError("official vLLM iteration timing is required for evaluation")
+            if official_iteration_index != self._predictor_eval_iteration:
+                raise RuntimeError("Predictor evaluation/official iteration index mismatch")
+            if pending["timing_source"] != VLLM_OFFICIAL_ITERATION_TIMING:
+                raise RuntimeError("Predictor evaluation did not receive official timing")
+            snapshot = pending["snapshot"]
+            plan = pending["plan"]
+            audit = pending["audit"]
+            update = None
+            update_error = None
+            if audit.prediction.in_support:
+                try:
+                    update = self._predictor.observe_actual(
+                        snapshot,
+                        plan,
+                        actual_duration,
+                        base_duration_seconds=audit.base_duration_seconds,
+                    )
+                except Exception as error:
+                    update_error = f"{type(error).__name__}: {error}"
+            record = {
+                "schema_version": 2,
+                "run_id": self._predictor_eval_run_id,
+                "iteration_index": self._predictor_eval_iteration,
+                "frame_id": snapshot.frame_id,
+                "snapshot_hash": snapshot.snapshot_hash,
+                "plan_id": plan.plan_id,
+                "sample_role": pending["sample_role"],
+                "batch_kind": audit.batch_kind,
+                "in_support": audit.prediction.in_support,
+                "base_duration_seconds": audit.base_duration_seconds,
+                "expected_duration_seconds": audit.prediction.expected_duration,
+                "conservative_duration_seconds": (
+                    audit.prediction.conservative_duration
+                ),
+                "actual_duration_seconds": actual_duration,
+                "timing_source": pending["timing_source"],
+                "timing_boundary": (
+                    "after_execute_model_submission_through_model_result_and_sampling"
+                ),
+                "residual_seconds": (
+                    update.residual_seconds if update is not None else None
+                ),
+                "calibration_source": audit.calibration_source,
+                "calibration_samples_before": audit.calibration_sample_count,
+                "calibration_samples_after": (
+                    update.samples_after
+                    if update is not None
+                    else audit.calibration_sample_count
+                ),
+                "calibration_updated": update is not None,
+                "predictor_cpu_seconds": pending["predictor_cpu_seconds"],
+                "rejection_reason": audit.rejection_reason or update_error,
+                "predictor_version": audit.prediction.predictor_version,
+                "selected_requests": self._selected_requests(snapshot, plan),
+                "recipe_seed": self._predictor_eval_recipe_seed,
+                "recipe_mode": self._predictor_eval_recipe_mode,
+            }
+            recipe = pending["recipe"]
+            if recipe is not None:
+                record["recipe_id"] = recipe.recipe_id
+                record["requested_shape"] = recipe.as_dict()
+                record["realized_shape"] = pending["realized_shape"]
+            self._predictor_eval_stream.write(
+                json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+            )
+            self._predictor_eval_stream.flush()
+            self._predictor_eval_iteration += 1
+            return result
+
+    PredictorEvaluationScheduler.__module__ = (
+        "dpp_scheduler.predictor_evaluation_scheduler"
+    )
+    return PredictorEvaluationScheduler
 
 
 def get_stock_profiling_scheduler_class() -> type:
