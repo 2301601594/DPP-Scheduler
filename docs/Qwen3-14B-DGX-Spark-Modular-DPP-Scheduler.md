@@ -200,22 +200,14 @@ max_depth = 6~8
 min_samples_leaf = 5
 ```
 
-只使用五个特征：
+Profiling 不预先固定模型特征。每个实际执行的 `BatchPlan` 记录一行基础数据：
+run/plan/snapshot 标识、实际 iteration 时间，以及每个选中请求的
+request ID、Prefill/Decode 阶段、执行前已计算或 KV-context 长度和本轮 token
+数。标识字段只用于关联和审计；基础数据不得包含剩余输出长度或未来 EOS 信息。
 
-| 特征 | 含义 |
-|---|---|
-| `B_P` | Prefill token 总数 |
-| `N_P` | Prefill 请求数 |
-| `N_D` | Decode 请求数 |
-| `K_D` | Decode 请求上下文长度之和 |
-| `L_D_max` | 最大 Decode 上下文长度 |
-
-$$
-K_D
-=
-\sum_{i\in\mathcal D(\mathbf a)}
-c_{i,k}^{KV}
-$$
+训练阶段从基础数据离线构造并比较候选聚合或非线性特征，不使用独立测试集
+选择特征。验证后冻结最终特征 schema、变换、支持域和 Predictor artifact；
+在线特征必须能从当前 `StateSnapshot` 与 `BatchPlan` 直接计算。
 
 基础预测为：
 
@@ -252,7 +244,7 @@ $$
 - DPP Selector 使用 `expected_duration`；
 - Safe-Set 使用 `conservative_duration`；
 - 分桶样本不足时回退到全局残差；
-- 特征超出同机 profiling 范围时设置 `in_support=false`；
+- 输入超出冻结支持域时设置 `in_support=false`；
 - 第一版离线训练，在线只记录残差，不在线更新模型。
 
 训练数据必须来自相同的 `Qwen3-14B + DGX Spark + BF16 + vLLM commit + 运行开关`。
@@ -729,7 +721,7 @@ dpp_scheduler/
 1. 记录 vLLM commit，建立 stock scheduler 的 iteration 日志；
 2. 实现公共数据结构、Snapshot 和精确执行 Adapter；
 3. 实现 Candidate Generator，并用固定规则临时选计划；
-4. 在 DGX Spark 上采集同配置 profiling 数据并训练 Predictor；
+4. 在 DGX Spark 上采集同配置的逐轮 Batch 基础信息，离线进行特征工程并训练 Predictor；
 5. 加入 Safe-Set、Rolling KV 和 Fallback；
 6. 加入 DPP Selector、SLO Ledger 和真实反馈更新；
 7. 在完全相同的模型、请求集和 vLLM 参数下与 stock scheduler 对比。

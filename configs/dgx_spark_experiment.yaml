@@ -1,15 +1,14 @@
 schema_version: 2
-status: provisional
+status: frozen_g0
 campaign: qwen3_14b_dgx_spark_modular_dpp
-stage: g0
+stage: g1
 design_spec: docs/Qwen3-14B-DGX-Spark-Modular-DPP-Scheduler.md
 provisional_reason: >-
-  The DGX software environment exists and the Qwen3-14B snapshot identity is
-  recorded (see configs/qwen3_14b_snapshot_manifest.json). The shared runtime
-  and KV capacity were captured at gpu_memory_utilization=0.84, but stock
-  iteration telemetry, the reviewed length-blind trace manifest, SLOs,
-  predictor, and DPP parameters have not been frozen. This configuration is
-  not executable.
+  G0 is complete: environment, model snapshot, shared runtime/KV facts, the
+  length-blind natural-EOS Poisson trace manifest, and TTFT/TBT event/Goodput
+  definitions are frozen. This configuration is executable for G1 Stock
+  baseline collection. Numeric TTFT/TBT SLOs and final test QPS remain to be
+  calibrated from Stock data and must be frozen before DPP comparisons.
 
 paths:
   workspace: /home/dongj/LLM
@@ -38,7 +37,7 @@ environment:
   torch_cuda_version: "13.0"
   vllm_version: 0.26.1rc1.dev535+g83ad767ee.precompiled
   vllm_commit: 83ad767eed3be3ee7f2df63be693bfaca5c7c922
-  vllm_commit_status: observed_installed_reverify_before_g0_freeze
+  vllm_commit_status: verified_for_g0
   dependency_snapshot: configs/dgx_spark_environment.freeze.txt
   required_env:
     CUDA_VISIBLE_DEVICES: "0"
@@ -49,7 +48,6 @@ environment:
     - results/raw/qwen3_14b_dgx_spark/g0_stock_capture_084
   pending_runtime_capture:
     - python_header_requirement_and_reproducible_source
-    - reverify_remote_root_clean_state_after_legacy_cleanup
 
 model:
   requested_name: Qwen3-14B
@@ -94,7 +92,7 @@ generation:
   completion: natural_eos
   predetermined_output_length: false
   scheduler_output_length_state: forbidden
-  client_safety_ceiling_tokens: 16384
+  client_safety_ceiling_tokens: 2048
   client_safety_ceiling_role: termination_guard_only_never_scheduler_input
   sampling_parameters:
     temperature: 0.0
@@ -111,6 +109,7 @@ trace_source:
   dataset_sha256: 35f0e213ce091ed9b9af2a1f0755e9d39f9ccec34ab281cd4ca60d70f6479ba4
   request_pool: request_pool.jsonl
   request_pool_manifest: request_pool.meta.json
+  trace_manifest: manifest_cap2048_lowqps.json
   enable_thinking: false
   min_input_tokens: 128
   max_input_tokens: 8192
@@ -121,10 +120,17 @@ slo:
   classes: 1
   source: stock_natural_eos_validation
   freeze_before_dpp_results: true
-  ttft_seconds: null
-  tbt_seconds: null
-  request_success_definition: null
-  actual_goodput_definition: null
+  ttft_seconds: 2.0
+  tbt_seconds: 0.25
+  request_success_definition: >-
+    A request is completed successfully when HTTP 200, finish_reason is present,
+    actual streamed token count matches usage, and no client error occurred.
+    Both finish_reason=stop and finish_reason=length are retained and stratified
+    separately; length is a client-guard termination, never a Scheduler input.
+  actual_goodput_definition: >-
+    Request-level Goodput is counted only after a terminal request event. For
+    the natural-EOS Goodput metric, finish_reason=stop counts as success;
+    finish_reason=length is reported separately and is not silently discarded.
 
 contracts:
   immutable_per_decision: true
@@ -137,7 +143,8 @@ contracts:
     - ControlState
   fallback_owner: controller
   dpp_candidate_set_name: safe_candidates
-  ttft_completion_event: null
+  ttft_completion_event: client_receives_first_sse_token_chunk_after_dispatch
+  tbt_completion_event: client_receives_consecutive_single_token_sse_chunks
 
 candidate_generator:
   prefill_caps:
@@ -167,12 +174,21 @@ candidate_generator:
 predictor:
   family: shallow_random_forest
   training: offline_only
-  features:
-    - B_P
-    - N_P
-    - N_D
-    - K_D
-    - L_D_max
+  raw_profile_schema:
+    per_iteration:
+      - run_id
+      - iteration_index
+      - plan_id
+      - snapshot_hash
+      - actual_duration_seconds
+    per_selected_request:
+      - request_id
+      - phase
+      - current_context_tokens
+      - scheduled_tokens
+  identity_fields_for_audit_only: true
+  feature_engineering: offline_without_held_out_test
+  final_feature_schema: null
   provisional_hyperparameter_ranges:
     n_estimators: [32, 64]
     max_depth: [6, 8]
@@ -256,12 +272,17 @@ experiments:
   baseline: stock_scheduler
   treatment: modular_dpp_scheduler
   identical_inputs_and_non_scheduler_settings: true
-  natural_eos_trace_manifest: null
-  arrival_processes: null
-  absolute_offered_loads_requests_per_second: null
-  development_request_count: null
+  natural_eos_trace_manifest: traces/qwen3_14b/manifest_cap2048_lowqps.json
+  arrival_processes:
+    - poisson
+  absolute_offered_loads_requests_per_second:
+    - 0.2
+    - 0.25
+    - 0.3
+  development_request_count: 200
   formal_request_count: null
-  seeds: null
+  seeds:
+    - 1001
   confidence_interval_method: null
   performance_instrumentation: false
   profile_and_performance_namespaces_separate: true
@@ -280,14 +301,24 @@ input_isolation:
   active_trace_namespace: traces/qwen3_14b
   legacy_scheduler_inputs_allowed: false
 
-g0_freeze_blockers:
-  - stock_iteration_event_semantics
-  - natural_eos_trace_manifest
-  - stock_slo_and_goodput_definition
+g0_freeze_blockers: []
 
 g0_blockers_resolved:
   - resolved_2026_08_21_exact_model_repository_revision_and_snapshot
   - resolved_2026_08_21_operator_approved_model_acquisition
   - resolved_2026_08_21_model_license_and_source_review
   - resolved_2026_08_22_qwen3_14b_stock_g0_capture
-  - note: "Qwen3-14B BF16 stock vLLM G0 capture completed at gpu_memory_utilization=0.84: SchedulerConfig, token/sequence budgets, KV block size/capacity, startup log, and a bounded client-guard smoke are recorded in configs/qwen3_14b_g0_stock_capture.json and results/raw/qwen3_14b_dgx_spark/g0_stock_capture_084. The smoke terminated by length as expected for its 16-token guard; it is not a predetermined Scheduler output length. G0 remains provisional until the length-blind trace manifest and stock SLO/Goodput semantics are frozen."
+  - resolved_2026_08_22_stock_iteration_event_semantics
+  - resolved_2026_08_22_natural_eos_trace_manifest
+  - resolved_2026_08_22_stock_slo_and_goodput_definition
+  - note: >-
+      Qwen3-14B BF16 stock vLLM G0 capture completed at
+      gpu_memory_utilization=0.84: SchedulerConfig, token/sequence budgets, KV
+      block size/capacity, startup log, and a bounded client-guard smoke are
+      recorded in configs/qwen3_14b_g0_stock_capture.json and
+      results/raw/qwen3_14b_dgx_spark/g0_stock_capture_084. The smoke
+      terminated by length as expected for its 16-token guard; it is not a
+      predetermined Scheduler output length. The length-blind Poisson trace
+      manifest is traces/qwen3_14b/manifest.json. TTFT/TBT event boundaries
+      and request-level Goodput definitions are frozen; numeric SLOs and final
+      test QPS remain G1 calibration outputs.

@@ -271,13 +271,21 @@ def require_frozen_for_execution(runtime: ActiveRuntime) -> None:
         ("vllm_cli", runtime.vllm_cli),
         ("model_snapshot", runtime.model_path),
     ):
-        resolved = path.resolve()
-        if resolved != user_root and user_root not in resolved.parents:
-            raise ActiveConfigError(f"{label} escapes owned user root: {resolved}")
-        if not resolved.exists():
-            raise ActiveConfigError(f"{label} does not exist: {resolved}")
-        if resolved.stat().st_uid != os.getuid():
-            raise ActiveConfigError(f"{label} is not owned by the current user: {resolved}")
+        # Containment and ownership are checked on the configured path itself so
+        # that a user-owned venv symlink to the system interpreter is allowed.
+        configured = path.absolute()
+        try:
+            configured.relative_to(user_root)
+        except ValueError:
+            raise ActiveConfigError(
+                f"{label} escapes owned user root: {configured}"
+            ) from None
+        if not path.exists():
+            raise ActiveConfigError(f"{label} does not exist: {configured}")
+        if configured.lstat().st_uid != os.getuid():
+            raise ActiveConfigError(
+                f"{label} is not owned by the current user: {configured}"
+            )
     if not runtime.python.is_file() or not os.access(runtime.python, os.X_OK):
         raise ActiveConfigError(f"python is not executable: {runtime.python}")
     if not runtime.vllm_cli.is_file() or not os.access(runtime.vllm_cli, os.X_OK):
@@ -325,6 +333,36 @@ def build_stock_server_command(runtime: ActiveRuntime, *, port: int) -> list[str
         "--stream-interval",
         "1",
     ]
+
+
+def build_stock_profile_server_command(
+    runtime: ActiveRuntime, *, port: int
+) -> list[str]:
+    """Build the locked Stock command with profiling-only observability."""
+    command = build_stock_server_command(runtime, port=port)
+    command.extend(
+        [
+            "--scheduler-cls",
+            "dpp_scheduler.stock_profile_scheduler.StockProfilingScheduler",
+            "--enable-logging-iteration-details",
+        ]
+    )
+    return command
+
+
+def build_targeted_profile_server_command(
+    runtime: ActiveRuntime, *, port: int
+) -> list[str]:
+    """Build the locked command for exact targeted profiling."""
+    command = build_stock_server_command(runtime, port=port)
+    command.extend(
+        [
+            "--scheduler-cls",
+            "dpp_scheduler.targeted_profile_scheduler.TargetedProfilingScheduler",
+            "--enable-logging-iteration-details",
+        ]
+    )
+    return command
 
 
 def resolve_under(root: Path, value: str | Path, *, label: str) -> Path:

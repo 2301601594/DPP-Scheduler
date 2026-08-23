@@ -177,3 +177,53 @@
   compatibility-smoke files. A separately confirmed cleanup deleted the old
   5070 raw results and BurstGPT input. Old model caches and retained Qwen3 raw
   evidence were left untouched. No benchmark or GPU workload was run.
+
+## 2026-08-22 — G0 wrap-up and G1 start
+
+- Completed G0 wrap-up without running a new GPU benchmark.
+- Generated a length-blind natural-EOS Poisson calibration trace set remotely:
+  - 200 requests per trace
+  - seeds 1001, 1002
+  - requested QPS: 0.5, 1.0, 2.0, 4.0, 6.0
+  - arrival process: independent exponential inter-arrivals
+  - no predetermined output length; client safety ceiling remains 16384 tokens
+  - staged under `results/raw/qwen3_14b_dgx_spark/g0_trace_manifest_stage1/`
+- Pulled and promoted the trace files to `traces/qwen3_14b/` and froze
+  `traces/qwen3_14b/manifest.json`.
+- Frozen TTFT/TBT event semantics and request-level Goodput definitions in
+  `configs/dgx_spark_experiment.yaml`.
+- Updated `configs/dgx_spark_experiment.yaml` to `status: frozen_g0`,
+  `stage: g1`, with an empty `g0_freeze_blockers` list.
+- Updated `configs/dgx_spark_environment.json` and
+  `configs/qwen3_14b_g0_stock_capture.json` to frozen status.
+- Updated `docs/experiment_plan.md` to reflect G0 complete and G1 in progress.
+- Numeric TTFT/TBT SLOs and final test QPS remain to be calibrated from the
+  G1 Stock baseline runs.
+
+## 2026-08-22 — G1 Stock matrix trace set with 2048 client cap
+
+- Per user request, changed the client safety ceiling to 2048 tokens for the
+  G1 Stock QPS matrix to bound runtime.
+- Generated a one-seed (1001) Poisson trace set at QPS 0.5/1/2/4/6 with 200
+  requests per trace.
+- Promoted as `traces/qwen3_14b/qps_*_seed_1001_cap2048.jsonl` and froze
+  `traces/qwen3_14b/manifest_cap2048.json`.
+- `configs/dgx_spark_experiment.yaml` now points to
+  `manifest_cap2048.json` and `client_safety_ceiling_tokens: 2048`.
+
+## 2026-08-22 — Freeze G1 SLO and candidate test QPS
+
+- Analyzed the full Stock QPS matrix (0.2/0.25/0.3 plus earlier 0.5–6.0).
+- Saturation estimate: roughly 0.25 req/s (about 200–216 output tokens/s with
+  ~850 mean output tokens).
+- QPS 0.20 and 0.25 are stable/near-saturation; QPS 0.30 shows TTFT
+  degradation and is retained as an overload candidate.
+- Using Stock P95 + margin, froze:
+  - TTFT SLO = 2.0s
+  - TBT SLO = 0.25s
+- Candidate test QPS:
+  - 0.20
+  - 0.25
+  - 0.30
+- Updated `configs/dgx_spark_experiment.yaml` and
+  `docs/experiment_plan.md`.

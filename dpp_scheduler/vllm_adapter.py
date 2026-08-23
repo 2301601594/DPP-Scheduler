@@ -8,10 +8,14 @@ unit tests can import this module without a full vLLM installation.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from dpp_scheduler.contracts import (
@@ -26,6 +30,173 @@ from dpp_scheduler.candidate_generator import (
     project_kv_blocks,
     project_sequence_count,
 )
+
+
+STOCK_PROFILE_PATH_ENV = "DPP_STOCK_PROFILE_PATH"
+STOCK_PROFILE_RUN_ID_ENV = "DPP_STOCK_PROFILE_RUN_ID"
+TARGET_PROFILE_PATH_ENV = "DPP_TARGET_PROFILE_PATH"
+TARGET_PROFILE_RUN_ID_ENV = "DPP_TARGET_PROFILE_RUN_ID"
+TARGET_PROFILE_RECIPE_SEED_ENV = "DPP_TARGET_PROFILE_RECIPE_SEED"
+TARGET_PROFILE_RECIPE_MODE_ENV = "DPP_TARGET_PROFILE_RECIPE_MODE"
+
+
+def _canonical_sha256(payload: Any) -> str:
+    encoded = json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def capture_stock_profile_state(scheduler: Any) -> dict[str, Any]:
+    """Capture only current, length-blind state before stock scheduling."""
+    request_states = []
+    current_context_tokens: dict[str, int] = {}
+    for request_id in sorted(scheduler.requests):
+        request = scheduler.requests[request_id]
+        context_tokens = int(request.num_computed_tokens)
+        current_context_tokens[request_id] = context_tokens
+        request_states.append(
+            {
+                "request_id": request_id,
+                "status": str(request.status),
+                "current_context_tokens": context_tokens,
+                "prompt_tokens": int(request.num_prompt_tokens),
+            }
+        )
+
+    snapshot_payload = {
+        "requests": request_states,
+        "running_request_ids": [request.request_id for request in scheduler.running],
+        "waiting_request_ids": [request.request_id for request in scheduler.waiting],
+        "free_kv_blocks": int(
+            scheduler.kv_cache_manager.block_pool.get_num_free_blocks()
+        ),
+        "token_budget": int(scheduler.max_num_scheduled_tokens),
+        "sequence_budget": int(scheduler.max_num_running_reqs),
+    }
+    return {
+        "snapshot_hash": _canonical_sha256(snapshot_payload),
+        "current_context_tokens": current_context_tokens,
+    }
+
+
+def build_stock_profile_record(
+    *,
+    run_id: str,
+    iteration_index: int,
+    captured_state: dict[str, Any],
+    scheduler_output: Any,
+) -> dict[str, Any] | None:
+    """Bind one unchanged stock decision to its pre-iteration request state."""
+    if int(scheduler_output.total_num_scheduled_tokens) == 0:
+        return None
+
+    new_request_ids = {
+        request.req_id for request in scheduler_output.scheduled_new_reqs
+    }
+    contexts = captured_state["current_context_tokens"]
+    selected_requests: list[dict[str, Any]] = []
+    for request_id, scheduled_tokens in scheduler_output.num_scheduled_tokens.items():
+        if request_id not in contexts:
+            raise RuntimeError(f"scheduled request missing from captured state: {request_id}")
+        is_prefill = request_id in new_request_ids or (
+            scheduler_output.scheduled_cached_reqs.is_context_phase(request_id)
+        )
+        selected_requests.append(
+            {
+                "request_id": request_id,
+                "phase": "prefill" if is_prefill else "decode",
+                "current_context_tokens": int(contexts[request_id]),
+                "scheduled_tokens": int(scheduled_tokens),
+            }
+        )
+
+    if not selected_requests:
+        raise RuntimeError("non-empty stock iteration has no selected requests")
+    if sum(item["scheduled_tokens"] for item in selected_requests) != int(
+        scheduler_output.total_num_scheduled_tokens
+    ):
+        raise RuntimeError("stock profile token total does not match SchedulerOutput")
+
+    plan_hash = _canonical_sha256(selected_requests)
+    return {
+        "schema_version": 1,
+        "run_id": run_id,
+        "iteration_index": iteration_index,
+        "plan_id": f"stock-{plan_hash[:24]}",
+        "snapshot_hash": captured_state["snapshot_hash"],
+        "selected_requests": selected_requests,
+    }
+
+
+def build_target_profile_record(
+    *,
+    run_id: str,
+    iteration_index: int,
+    snapshot: StateSnapshot,
+    plan: BatchPlan,
+    recipe: Any,
+    realized_shape: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind a targeted exact plan to its pre-iteration observable state."""
+    prefill_context = {
+        request.request_id: request.prefilled_tokens
+        for request in snapshot.waiting_prefill_requests
+    }
+    decode_context = {
+        request.request_id: request.kv_context_length
+        for request in snapshot.active_decode_requests
+    }
+    selected_requests = [
+        {
+            "request_id": request_id,
+            "phase": "prefill",
+            "current_context_tokens": int(prefill_context[request_id]),
+            "scheduled_tokens": int(tokens),
+        }
+        for request_id, tokens in plan.prefill_items
+    ]
+    selected_requests.extend(
+        {
+            "request_id": request_id,
+            "phase": "decode",
+            "current_context_tokens": int(decode_context[request_id]),
+            "scheduled_tokens": 1,
+        }
+        for request_id in plan.decode_items
+    )
+    if not selected_requests:
+        raise RuntimeError("targeted exact plan cannot be empty")
+    return {
+        "schema_version": 1,
+        "run_id": run_id,
+        "iteration_index": iteration_index,
+        "plan_id": plan.plan_id,
+        "snapshot_hash": snapshot.snapshot_hash,
+        "sample_role": "target",
+        "recipe_id": recipe.recipe_id,
+        "requested_shape": recipe.as_dict(),
+        "realized_shape": realized_shape,
+        "selected_requests": selected_requests,
+    }
+
+
+def _selected_shape(record: dict[str, Any]) -> dict[str, int | str]:
+    selected = record["selected_requests"]
+    prefills = [request for request in selected if request["phase"] == "prefill"]
+    decodes = [request for request in selected if request["phase"] == "decode"]
+    if prefills and decodes:
+        kind = "mixed"
+    elif prefills:
+        kind = "prefill_only"
+    else:
+        kind = "decode_only"
+    return {
+        "batch_kind": kind,
+        "prefill_requests": len(prefills),
+        "prefill_tokens": sum(int(request["scheduled_tokens"]) for request in prefills),
+        "decode_requests": len(decodes),
+    }
 
 
 class ExactPlanAdapter(ABC):
@@ -453,3 +624,167 @@ def get_modular_scheduler_class() -> type:
 
     ModularDPPScheduler.__module__ = "dpp_scheduler.vllm_scheduler"
     return ModularDPPScheduler
+
+
+def get_stock_profiling_scheduler_class() -> type:
+    """Create a stock Scheduler subclass that only records executed batches."""
+    from vllm.v1.core.sched.scheduler import Scheduler
+
+    class StockProfilingScheduler(Scheduler):
+        """Pass-through stock Scheduler with append-only profiling telemetry."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            output_value = os.environ.get(STOCK_PROFILE_PATH_ENV)
+            run_id = os.environ.get(STOCK_PROFILE_RUN_ID_ENV)
+            if not output_value or not run_id:
+                raise RuntimeError(
+                    f"{STOCK_PROFILE_PATH_ENV} and {STOCK_PROFILE_RUN_ID_ENV} "
+                    "are required for StockProfilingScheduler"
+                )
+            output_path = Path(output_value)
+            if not output_path.is_absolute():
+                raise RuntimeError(f"stock profile path must be absolute: {output_path}")
+            output_path = output_path.resolve()
+            if not output_path.parent.is_dir():
+                raise RuntimeError(
+                    f"stock profile parent does not exist: {output_path.parent}"
+                )
+            self._stock_profile_run_id = run_id
+            self._stock_profile_iteration = 0
+            self._stock_profile_stream = output_path.open(
+                "x", encoding="utf-8", buffering=1
+            )
+
+        def schedule(self, throttle_prefills: bool = False) -> Any:
+            captured_state = capture_stock_profile_state(self)
+            scheduler_output = super().schedule(throttle_prefills)
+            record = build_stock_profile_record(
+                run_id=self._stock_profile_run_id,
+                iteration_index=self._stock_profile_iteration,
+                captured_state=captured_state,
+                scheduler_output=scheduler_output,
+            )
+            if record is not None:
+                self._stock_profile_stream.write(
+                    json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+                )
+                self._stock_profile_stream.flush()
+                self._stock_profile_iteration += 1
+            return scheduler_output
+
+    StockProfilingScheduler.__module__ = "dpp_scheduler.stock_profile_scheduler"
+    return StockProfilingScheduler
+
+
+def get_targeted_profiling_scheduler_class() -> type:
+    """Create an experiment-only scheduler for real targeted BatchPlans."""
+    from vllm.v1.core.sched.scheduler import Scheduler
+
+    from dpp_scheduler.targeted_profile import (
+        TargetBatchPlanner,
+        build_target_recipes,
+    )
+
+    class TargetedProfilingScheduler(Scheduler):
+        """Execute target recipes exactly and use Stock only for setup/drain."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            output_value = os.environ.get(TARGET_PROFILE_PATH_ENV)
+            run_id = os.environ.get(TARGET_PROFILE_RUN_ID_ENV)
+            seed_value = os.environ.get(TARGET_PROFILE_RECIPE_SEED_ENV)
+            recipe_mode = os.environ.get(TARGET_PROFILE_RECIPE_MODE_ENV, "formal")
+            if not output_value or not run_id or seed_value is None:
+                raise RuntimeError(
+                    f"{TARGET_PROFILE_PATH_ENV}, {TARGET_PROFILE_RUN_ID_ENV}, and "
+                    f"{TARGET_PROFILE_RECIPE_SEED_ENV} are required"
+                )
+            output_path = Path(output_value)
+            if not output_path.is_absolute():
+                raise RuntimeError(f"target profile path must be absolute: {output_path}")
+            output_path = output_path.resolve()
+            if not output_path.parent.is_dir():
+                raise RuntimeError(
+                    f"target profile parent does not exist: {output_path.parent}"
+                )
+            recipe_seed = int(seed_value)
+            self._target_profile_run_id = run_id
+            self._target_profile_iteration = 0
+            self._target_recipe_seed = recipe_seed
+            self._target_recipe_mode = recipe_mode
+            self._target_profile_stream = output_path.open(
+                "x", encoding="utf-8", buffering=1
+            )
+            self._target_planner = TargetBatchPlanner(
+                build_target_recipes(recipe_seed, mode=recipe_mode)
+            )
+            self._target_adapter = VllmAdapter(self)
+
+        def _write_record(self, record: dict[str, Any] | None) -> None:
+            if record is None:
+                return
+            record["recipe_seed"] = self._target_recipe_seed
+            record["recipe_mode"] = self._target_recipe_mode
+            self._target_profile_stream.write(
+                json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+            )
+            self._target_profile_stream.flush()
+            self._target_profile_iteration += 1
+
+        def schedule(self, throttle_prefills: bool = False) -> Any:
+            if not self._target_planner.complete:
+                snapshot = self._target_adapter.make_snapshot()
+                built = self._target_planner.build(snapshot)
+                if built is not None:
+                    plan, realized_shape = built
+                    scheduler_output = self._target_adapter.build_scheduler_output(plan)
+                    if tuple(scheduler_output.num_scheduled_tokens.items()) != (
+                        plan.prefill_items
+                        + tuple((request_id, 1) for request_id in plan.decode_items)
+                    ):
+                        raise RuntimeError(
+                            "target BatchPlan does not match materialized SchedulerOutput"
+                        )
+                    recipe = self._target_planner.current
+                    assert recipe is not None
+                    record = build_target_profile_record(
+                        run_id=self._target_profile_run_id,
+                        iteration_index=self._target_profile_iteration,
+                        snapshot=snapshot,
+                        plan=plan,
+                        recipe=recipe,
+                        realized_shape=realized_shape,
+                    )
+                    self._target_planner.advance()
+                    self._write_record(record)
+                    return scheduler_output
+
+            captured_state = capture_stock_profile_state(self)
+            scheduler_output = super().schedule(throttle_prefills)
+            record = build_stock_profile_record(
+                run_id=self._target_profile_run_id,
+                iteration_index=self._target_profile_iteration,
+                captured_state=captured_state,
+                scheduler_output=scheduler_output,
+            )
+            if record is not None:
+                recipe = self._target_planner.current
+                role = "drain" if recipe is None else "setup"
+                record.update(
+                    {
+                        "sample_role": role,
+                        "recipe_id": recipe.recipe_id if recipe is not None else None,
+                        "requested_shape": (
+                            recipe.as_dict() if recipe is not None else None
+                        ),
+                        "realized_shape": _selected_shape(record),
+                    }
+                )
+            self._write_record(record)
+            return scheduler_output
+
+    TargetedProfilingScheduler.__module__ = (
+        "dpp_scheduler.targeted_profile_scheduler"
+    )
+    return TargetedProfilingScheduler

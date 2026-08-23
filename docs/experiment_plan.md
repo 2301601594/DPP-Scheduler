@@ -7,27 +7,32 @@ measured on the target DGX Spark.
 
 ## Current status
 
-The campaign is at **G0**.
+The campaign is at **G1** after completing **G0**.
 
-The Qwen3-14B BF16 snapshot, acquisition approval, bounded model smoke, shared
-runtime (`gpu_memory_utilization=0.84`, `C_tok=2048`, `C_seq=64`), and KV
-capacity (`30149` usable 16-token blocks) have been captured provisionally.
-The snapshot identity, per-file hashes, source, and acquisition command are recorded in
-`configs/qwen3_14b_snapshot_manifest.json` (content-identical to HuggingFace
-`Qwen/Qwen3-14B` main `40c069824f4251a91eefaf281ebe4c544efd3e18`). The
-The following are not yet frozen:
+G0 is frozen:
 
-- reviewed length-blind natural-completion trace manifest and request-level
-  Goodput definition;
-- stock iteration telemetry and the exact TTFT/TBT event boundaries;
-- TTFT/TBT SLOs and obligation event boundaries;
+- Qwen3-14B BF16 snapshot identity, acquisition approval, bounded model smoke,
+  shared runtime (`gpu_memory_utilization=0.84`, `C_tok=2048`, `C_seq=64`), and
+  KV capacity (`30149` usable 16-token blocks) are recorded.
+- TTFT/TBT event boundaries and request-level Goodput definitions are frozen in
+  `configs/dgx_spark_experiment.yaml`.
+- `configs/dgx_spark_experiment.yaml` is `frozen_g0` and executable for G1
+  Stock baseline runs.
+
+G1 Stock SLO/load calibration is now frozen:
+
+- TTFT SLO = 2.0s, TBT SLO = 0.25s, based on Stock P95 + margin.
+- Candidate test QPS = [0.2, 0.25, 0.3].
+- Active length-blind Poisson trace manifest:
+  `traces/qwen3_14b/manifest_cap2048_lowqps.json`
+  (200 requests per trace, seed 1001, client cap 2048).
+
+The following are **not yet frozen** and remain later-gate inputs:
+
 - `C_tok`, `C_seq`, `b_s`, `b_m`, `b_l`, `u`, `H`, `R0`, Top-K,
   Recovery rules, `epsilon^F`, `epsilon^D`, and `V`; and
 - profiling dataset, Random-Forest artifact, support domain, and residual
   calibration.
-
-`configs/dgx_spark_experiment.yaml` therefore remains provisional and must
-not be used for a benchmark.
 
 ## Gate sequence
 
@@ -84,10 +89,11 @@ IDs and token counts may not be reselected after the decision.
 
 ### G3: Predictor
 
-Collect same-model/same-runtime iteration rows with only
-`B_P,N_P,N_D,K_D,L_D_max`. Train the shallow RF offline, calibrate residuals,
-freeze its support domain and artifact hash, and validate expected versus
-conservative duration independently.
+Collect same-model/same-runtime rows containing each executed BatchPlan's
+per-request phase, current context, scheduled tokens, and actual duration.
+Derive and compare features offline without using the held-out test split, then
+freeze the selected schema, support domain, residual calibration, and RF
+artifact.
 
 ### G4: Safety
 

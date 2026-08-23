@@ -1,0 +1,113 @@
+{
+  "arrival_process": "independent_exponential_interarrivals",
+  "client_safety_ceiling_role": "termination_guard_only_never_scheduler_input",
+  "client_safety_ceiling_tokens": 16384,
+  "config_sha256": "05f4c7ceafa6cd0c1ec012b6f2f250d14a48967da81f764b225db5ab2543edb9",
+  "files": [
+    {
+      "arrival_span_s": 370.7925917984216,
+      "file": "qps_0.5_seed_1001.jsonl",
+      "num_requests": 200,
+      "realized_qps": 0.5366881766294423,
+      "requested_qps": 0.5,
+      "seed": 1001,
+      "sha256": "9ffdd51dca38d460a8255533f1cd9abfccb2179ac1246995e088027d8a3e9d52"
+    },
+    {
+      "arrival_span_s": 405.07032739663686,
+      "file": "qps_0.5_seed_1002.jsonl",
+      "num_requests": 200,
+      "realized_qps": 0.4912727162193323,
+      "requested_qps": 0.5,
+      "seed": 1002,
+      "sha256": "e319df0a91f749839cefede53f6a493d865017b6cf985d9362a4b441fe2f1d0a"
+    },
+    {
+      "arrival_span_s": 185.3962958992108,
+      "file": "qps_1.0_seed_1001.jsonl",
+      "num_requests": 200,
+      "realized_qps": 1.0733763532588847,
+      "requested_qps": 1.0,
+      "seed": 1001,
+      "sha256": "6299efebf818500ad95f81231d822bec1c1cccfd81bb9b5dd0965e8ae604b61e"
+    },
+    {
+      "arrival_span_s": 202.53516369831843,
+      "file": "qps_1.0_seed_1002.jsonl",
+      "num_requests": 200,
+      "realized_qps": 0.9825454324386645,
+      "requested_qps": 1.0,
+      "seed": 1002,
+      "sha256": "e1247241f0c3344a8efe21ce297cca1ec140a097a118fcff11d988dd3ce9291e"
+    },
+    {
+      "arrival_span_s": 92.6981479496054,
+      "file": "qps_2.0_seed_1001.jsonl",
+      "num_requests": 200,
+      "realized_qps": 2.1467527065177694,
+      "requested_qps": 2.0,
+      "seed": 1001,
+      "sha256": "54387f40f9316aced1ec0277204eab81cccfff9aad9568a0e0b5949e41a0226b"
+    },
+    {
+      "arrival_span_s": 101.26758184915921,
+      "file": "qps_2.0_seed_1002.jsonl",
+      "num_requests": 200,
+      "realized_qps": 1.965090864877329,
+      "requested_qps": 2.0,
+      "seed": 1002,
+      "sha256": "d8589da58709bcbf2e697d2b35ac38626917794e28117ef4682fff6d1afb2ce1"
+    },
+    {
+      "arrival_span_s": 46.3490739748027,
+      "file": "qps_4.0_seed_1001.jsonl",
+      "num_requests": 200,
+      "realized_qps": 4.293505413035539,
+      "requested_qps": 4.0,
+      "seed": 1001,
+      "sha256": "5ed1b6f9b02ea204ddb55f53417d1ebac51e163112a86d097a5d6a03bf504f1c"
+    },
+    {
+      "arrival_span_s": 50.63379092457961,
+      "file": "qps_4.0_seed_1002.jsonl",
+      "num_requests": 200,
+      "realized_qps": 3.930181729754658,
+      "requested_qps": 4.0,
+      "seed": 1002,
+      "sha256": "50540cb0c49ffdedd8a31b8d8d93279a0d5d6ed51297ff30be0919060640df1e"
+    },
+    {
+      "arrival_span_s": 30.899382649868453,
+      "file": "qps_6.0_seed_1001.jsonl",
+      "num_requests": 200,
+      "realized_qps": 6.44025811955331,
+      "requested_qps": 6.0,
+      "seed": 1001,
+      "sha256": "33333e82f5f798650964d6bcceaf1041140a9845ee6d2e2bcb297c380b36cf9b"
+    },
+    {
+      "arrival_span_s": 33.75586061638641,
+      "file": "qps_6.0_seed_1002.jsonl",
+      "num_requests": 200,
+      "realized_qps": 5.8952725946319875,
+      "requested_qps": 6.0,
+      "seed": 1002,
+      "sha256": "52e8df761e3ce8a1ed1cc1699b645775e53847e5e88baea26ea57c7e1b97621a"
+    }
+  ],
+  "ignore_eos": false,
+  "kind": "qwen3_14b_poisson_length_blind_traces",
+  "model_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+  "num_requests_per_trace": 200,
+  "predetermined_output_length": false,
+  "promoted_from": "results/raw/qwen3_14b_dgx_spark/g0_trace_manifest_stage1",
+  "request_pool": "/home/dongj/LLM/traces/qwen3_14b/request_pool.jsonl",
+  "request_pool_manifest": "/home/dongj/LLM/traces/qwen3_14b/request_pool.meta.json",
+  "request_pool_sha256": "9d5e57900b9580480c7912a65d449bd608e0edc1293578c6c3e5d73fc71dbab5",
+  "schema_version": 2,
+  "seed_source": "per_request_trace",
+  "status": "frozen",
+  "temperature": 0.0,
+  "tokenizer_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+  "top_p": 1.0
+}

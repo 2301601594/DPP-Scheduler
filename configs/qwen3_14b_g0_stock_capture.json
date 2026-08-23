@@ -1,57 +1,57 @@
 {
-  "schema_version": 1,
   "campaign": "qwen3_14b_dgx_spark_modular_dpp",
-  "stage": "g0",
-  "status": "captured_provisional",
-  "captured_at_utc": "2026-08-22T07:30:47Z",
-  "kind": "qwen3_14b_stock_g0_capture",
-  "model": {
-    "requested_name": "Qwen3-14B",
-    "repository": "Qwen/Qwen3-14B",
-    "revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
-    "tokenizer_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
-    "snapshot_path": "/home/dongj/models/Qwen3-14B-BF16",
-    "dtype": "bfloat16",
-    "kv_cache_dtype": "bfloat16",
-    "max_model_len": 40960
-  },
-  "runtime": {
-    "engine": "vllm_v1",
-    "scheduler": "stock_vllm_default",
-    "max_num_batched_tokens": 2048,
-    "max_num_scheduled_tokens": 2048,
-    "max_num_seqs": 64,
-    "enable_chunked_prefill": true,
-    "enable_prefix_caching": false,
-    "speculative_decoding": false,
-    "async_scheduling": false,
-    "gpu_memory_utilization": 0.84
-  },
-  "kv": {
-    "kv_block_size": 16,
-    "gpu_kv_cache_tokens": 482384,
-    "usable_kv_blocks": 30149,
-    "available_kv_cache_gib": 73.61,
-    "kv_cache_max_tokens_per_request": 40960,
-    "kv_cache_max_concurrency": 11.78
-  },
   "capture_artifacts": {
     "raw_dir": "results/raw/qwen3_14b_dgx_spark/g0_stock_capture_084",
     "resolved_config_sha256": "0773d38f530f6fe42f8599a1f76155d2db43997284056aad2f9b8780191ff7fe",
-    "startup_log_sha256": "09d70c3f07c597ab15c9d040d2ac44c895b5e95b72f000821213e5ec5cad90b0",
-    "smoke_completion_sha256": "ab02255919e92e0e0fffa74ff3e27e79a275ba95a4f0c12b4f8f68d1df77b7cd"
+    "smoke_completion_sha256": "ab02255919e92e0e0fffa74ff3e27e79a275ba95a4f0c12b4f8f68d1df77b7cd",
+    "startup_log_sha256": "09d70c3f07c597ab15c9d040d2ac44c895b5e95b72f000821213e5ec5cad90b0"
   },
-  "smoke_completion": {
-    "finish_reason": "length",
-    "prompt_tokens": 9,
-    "completion_tokens": 16,
-    "text": " Scheduling is the process of organizing and planning tasks or events in a specific order"
+  "captured_at_utc": "2026-08-22T07:30:47Z",
+  "kind": "qwen3_14b_stock_g0_capture",
+  "kv": {
+    "available_kv_cache_gib": 73.61,
+    "gpu_kv_cache_tokens": 482384,
+    "kv_block_size": 16,
+    "kv_cache_max_concurrency": 11.78,
+    "kv_cache_max_tokens_per_request": 40960,
+    "usable_kv_blocks": 30149
+  },
+  "model": {
+    "dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat16",
+    "max_model_len": 40960,
+    "repository": "Qwen/Qwen3-14B",
+    "requested_name": "Qwen3-14B",
+    "revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+    "snapshot_path": "/home/dongj/models/Qwen3-14B-BF16",
+    "tokenizer_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18"
   },
   "notes": [
     "Captured with stock vLLM default scheduler; ModularDPPScheduler was not loaded.",
     "Shared runtime parameters are now fixed: gpu_memory_utilization=0.84, max_num_batched_tokens=2048, max_num_seqs=64.",
     "KV facts are captured at 0.84 GPU utilization.",
     "The 16-token smoke ended with finish_reason=length by design: this is a bounded model-execution guard, not natural-EOS workload evidence and not Scheduler input.",
-    "Final length-blind natural-completion trace and SLO/Goodput definitions remain to be frozen separately."
-  ]
+    "Frozen as part of G0 wrap-up on 2026-08-22. The length-blind Poisson trace manifest and TTFT/TBT event/Goodput definitions are recorded in configs/dgx_spark_experiment.yaml and traces/qwen3_14b/manifest.json."
+  ],
+  "runtime": {
+    "async_scheduling": false,
+    "enable_chunked_prefill": true,
+    "enable_prefix_caching": false,
+    "engine": "vllm_v1",
+    "gpu_memory_utilization": 0.84,
+    "max_num_batched_tokens": 2048,
+    "max_num_scheduled_tokens": 2048,
+    "max_num_seqs": 64,
+    "scheduler": "stock_vllm_default",
+    "speculative_decoding": false
+  },
+  "schema_version": 1,
+  "smoke_completion": {
+    "completion_tokens": 16,
+    "finish_reason": "length",
+    "prompt_tokens": 9,
+    "text": " Scheduling is the process of organizing and planning tasks or events in a specific order"
+  },
+  "stage": "g0",
+  "status": "frozen"
 }

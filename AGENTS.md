@@ -5,7 +5,9 @@
 This file applies to the whole repository. A nearer `AGENTS.md` or
 `AGENTS.override.md` may add directory-specific rules. **Must** means that a
 task cannot be declared complete if the rule is unmet; **should** is the
-default and requires an explanation when skipped.
+default when relevant. Requirements do not imply unrelated review,
+documentation, remote work, or reporting. Use process proportional to the
+requested change.
 
 The active project is the first-version modular DPP Scheduler defined in
 `docs/Qwen3-14B-DGX-Spark-Modular-DPP-Scheduler.md`. Its fixed scope is:
@@ -63,7 +65,8 @@ default.
   tests, environment creation, dependency installation, vLLM import/build,
   model smoke tests, profiling, and benchmarks.
 
-All agents must read `docs/remote_dgx_workflow.md` and use
+When a task needs remote execution, source synchronization, or result
+retrieval, read the relevant part of `docs/remote_dgx_workflow.md` and use
 `scripts/remote_dgx.sh`:
 
 ```bash
@@ -75,11 +78,15 @@ All agents must read `docs/remote_dgx_workflow.md` and use
 ./scripts/remote_dgx.sh pull-results
 ```
 
-Before any project command or source synchronization, run `check` and
-`dry-run`, inspect the exact target `~/LLM`, then `push` and `verify`. Never synchronize
-while a benchmark is running. Never use `--delete-excluded` or apply delete
-semantics to `$HOME`, `~/`, or another broad directory. SSH keys and tokens
-stay outside the repository.
+Before source synchronization, run `check` and `dry-run`, inspect the exact
+target `~/LLM`, then `push` and `verify`. For several related remote commands
+against an already verified mirror, one successful preflight is enough; do not
+repeat `check`, `dry-run`, or `push` before every command. If no source changed,
+do not push merely as ceremony. Local-only documentation, Git inspection, and
+dependency-free static checks do not require remote synchronization. Never
+synchronize while a benchmark is running. Never use `--delete-excluded` or
+apply delete semantics to `$HOME`, `~/`, or another broad directory. SSH keys
+and tokens stay outside the repository.
 
 Do not copy the local `.venv`, `.uv-python`, caches, model cache, or compiled
 vLLM artifacts to ARM64. Build or verify the environment remotely. A model
@@ -145,19 +152,18 @@ with Qwen3-14B aggregates.
 
 ## 5. Task workflow
 
-At the start of every task:
+For routine work, inspect `git status --short` and the directly relevant files,
+make the requested change, and run the smallest useful check. Read the active
+config/design or identify a G0–G7 gate only when experiment behavior, Scheduler
+contracts, runners, manifests, results, readiness, or claims are affected.
+Inspect locked vLLM source only for version-specific behavior. Use an explicit
+plan or repository-wide audit only when the task is cross-cutting, ambiguous,
+risky, resource-intensive, or explicitly asks for one.
 
-1. read applicable instructions, `git status --short`, the active config, the
-   design/specification, and the relevant implementation;
-2. identify the current G0–G7 gate;
-3. state inputs, unresolved assumptions, files to change, and acceptance checks;
-4. inspect the locked vLLM source for private/version-specific behavior instead
-   of relying on memory;
-5. reuse compatible parsers, result formats, and remote scripts rather than
-   creating parallel infrastructure;
-6. preview any long run with its matrix size, request count, time/resource
-   estimate, and unique output directory; and
-7. say “not run” when no real remote execution occurred.
+Reuse existing infrastructure. Preview long runs with their matrix, resource
+needs, and output path. Do not produce run previews, “not run” notices, or
+experiment-log/decision/design updates for routine work unless they carry
+material information.
 
 Keep changes small and reviewable. Preserve unrelated user edits. Do not
 commit, publish, open a PR, change the vLLM commit, install dependencies,
@@ -180,8 +186,9 @@ implementation steps in the authoritative design document.
 | G6 | Integrate Selector, Adapter, Observer, and actual-feedback state updates | Remote unit/integration tests and exact-execution/one-settlement invariants pass |
 | G7 | Frozen Stock-versus-DPP experiments, ablations, overhead, and artifact rebuild | Identical model/requests/runtime settings are used; raw-to-table rebuild succeeds and negative results are retained |
 
-Do not skip gates. Interface scaffolding may be built early only when every
-unsupported parameter and behavior is explicitly provisional.
+Gates govern research readiness and claims, not routine maintenance. Mention or
+advance them only when affected. Do not skip gates for research work;
+unsupported early scaffolding remains explicitly provisional.
 
 ## 7. DGX and model contract
 
@@ -189,8 +196,8 @@ Observed environment facts currently include host `convergence`, ARM64/aarch64,
 NVIDIA GB10 compute capability 12.1, driver 580.159.03, CUDA toolkit 13.0,
 system Python 3.12.3, and a project-local vLLM environment. The installed vLLM
 source is currently commit `83ad767eed3be3ee7f2df63be693bfaca5c7c922`;
-reverify and record the exact clean/dirty state before model validation or
-development. Do not silently upgrade it.
+reverify and record its clean/dirty state before model execution, profiling,
+vLLM-internal integration work, or a gate claim. Do not silently upgrade it.
 
 The G0 manifest must record:
 
@@ -283,15 +290,18 @@ construction must never allocate, free, or mutate the real block manager.
 ## 10. Predictor contract
 
 Version 1 uses a shallow offline Random Forest to predict current-plan
-iteration duration. Its only model features are:
+iteration duration. Profiling must record one row per actually executed
+`BatchPlan`: run/plan/snapshot identity, actual iteration duration, and for each
+selected request its request ID, Prefill/Decode phase, pre-iteration computed
+or KV-context length, and scheduled token count. Identity fields are for joins
+and audit only. This raw schema is not the model feature schema and must not
+contain remaining output length or future EOS information.
 
-```text
-B_P, N_P, N_D, K_D, L_D_max
-```
-
-where `K_D` is the sum of selected Decode KV-context lengths. Suggested RF
-ranges (`n_estimators=32–64`, `max_depth=6–8`, `min_samples_leaf=5`) remain
-provisional until profiling and validation freeze an exact seed and artifact.
+Offline training derives and compares candidate aggregate or nonlinear features
+from those raw fields without using the held-out test split. The final feature
+schema, transformations, support domain, exact seed, and artifact are frozen
+only after validation. Suggested RF ranges (`n_estimators=32–64`,
+`max_depth=6–8`, `min_samples_leaf=5`) remain provisional until then.
 
 Calibrate residuals by Prefill-only, Decode-only, Mixed, and coarse token
 buckets. `expected_duration` is the RF prediction plus the bucket mean
@@ -302,13 +312,15 @@ bucket falls back to the global residual distribution.
 Training data must match Qwen3-14B, DGX Spark, BF16, vLLM commit, runtime flags,
 and Scheduler-relevant limits exactly. Version 1 trains offline; online code may
 log residuals but must not modify the Predictor. Missing, NaN/Inf, schema or
-version mismatch, and out-of-support features set `in_support=false` and fail
-normal hard admission. Never extrapolate optimistically.
+version mismatch, and inputs outside the frozen support domain set
+`in_support=false` and fail normal hard admission. Never extrapolate
+optimistically.
 
 Report held-out expected-duration error, conservative coverage and
 underprediction, per-region support/coverage, out-of-support rate, and Predictor
 CPU overhead. Training rows, split, seed, feature ranges, artifact hash, and
-predictor version are reproducible manifest fields.
+predictor version are reproducible manifest fields; the manifest also records
+the raw profiling schema and final feature schema.
 
 ## 11. Safe-Set, Rolling KV, and Fallback
 
@@ -429,9 +441,11 @@ Remote tests must cover at least:
   EOS, and actual-feedback debt non-negativity; and
 - pluggability of Predictor, Safe-Set, and Selector behind the public contracts.
 
-Run the smallest relevant test first, then the configured remote suite. A
-Stock/pass-through diagnostic may be used to validate Adapter observation
-semantics, but it must not replace the exact-plan invariants of the new design.
+Run the smallest relevant test. Use the broader remote suite for cross-module
+or shared execution changes, gate claims, and explicit requests—not every
+narrow change. Documentation-only changes need only local checks. A
+Stock/pass-through diagnostic may validate Adapter observations but cannot
+replace exact-plan invariants.
 
 ## 14. Experiments, statistics, and reproducibility
 
@@ -475,15 +489,16 @@ support region and conservative underprediction behavior; exact-plan execution;
 one-time obligation settlement; safe fallback behavior; and measured Scheduler
 CPU overhead. These are scientific gates, not assumed outcomes.
 
-Every completion report states:
+Routine reports state the outcome, relevant checks, and important limitations.
+Do not automatically repeat full file lists, unchanged facts, gates, commands,
+or work that was not run.
 
-- outcome and changed/deleted files;
-- checks, remote tests, and benchmark results;
-- what was not run and why;
-- current G0–G7 gate and next unmet gate; and
-- reproducible remote verification commands.
+Use expanded, reproducible reporting for formal experiments, gate transitions,
+destructive cleanup, invalid runs, and frozen scientific inputs, or when the
+user asks for it.
 
-For analysis, label observed facts, data-supported inferences, and unverified
-hypotheses separately. Use the locked vLLM source for version-specific
-interfaces. DPP papers provide design ideas only; do not claim their proofs or
-stability results transfer to mixed continuous batching.
+Separate observed facts, data-supported inferences, and unverified hypotheses
+when an analysis actually mixes them; simple factual answers do not need those
+labels. Use the locked vLLM source for version-specific interfaces. DPP papers
+provide design ideas only; do not claim their proofs or stability results
+transfer to mixed continuous batching.

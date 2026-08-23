@@ -1,0 +1,68 @@
+{
+  "arrival_process": "independent_exponential_interarrivals",
+  "client_safety_ceiling_role": "termination_guard_only_never_scheduler_input",
+  "client_safety_ceiling_tokens": 2048,
+  "config_sha256": "78ef7444b6d9eb18bdc662bd319dbe06ad83548b38eac274c780fa0364993fc1",
+  "files": [
+    {
+      "arrival_span_s": 370.7925917984216,
+      "file": "qps_0.5_seed_1001_cap2048.jsonl",
+      "num_requests": 200,
+      "realized_qps": 0.5366881766294423,
+      "requested_qps": 0.5,
+      "seed": 1001,
+      "sha256": "607156ddc973254b3e126a272b30afdd841dac15733dff36b1ebfe6b44d08d4c"
+    },
+    {
+      "arrival_span_s": 185.3962958992108,
+      "file": "qps_1.0_seed_1001_cap2048.jsonl",
+      "num_requests": 200,
+      "realized_qps": 1.0733763532588847,
+      "requested_qps": 1.0,
+      "seed": 1001,
+      "sha256": "aa3a6ac6cf7149becfc08d3c7be809be060e41f68a8a80ecfbedbd1f2488981e"
+    },
+    {
+      "arrival_span_s": 92.6981479496054,
+      "file": "qps_2.0_seed_1001_cap2048.jsonl",
+      "num_requests": 200,
+      "realized_qps": 2.1467527065177694,
+      "requested_qps": 2.0,
+      "seed": 1001,
+      "sha256": "51cfbac0c87f251691f1af4a757faa340873b52214cac52ebc7b68de04cd3a7d"
+    },
+    {
+      "arrival_span_s": 46.3490739748027,
+      "file": "qps_4.0_seed_1001_cap2048.jsonl",
+      "num_requests": 200,
+      "realized_qps": 4.293505413035539,
+      "requested_qps": 4.0,
+      "seed": 1001,
+      "sha256": "6da75d3de8d7d6051857fcd1930fb4b7db3507cf69d7fe950437ff227adc317f"
+    },
+    {
+      "arrival_span_s": 30.899382649868453,
+      "file": "qps_6.0_seed_1001_cap2048.jsonl",
+      "num_requests": 200,
+      "realized_qps": 6.44025811955331,
+      "requested_qps": 6.0,
+      "seed": 1001,
+      "sha256": "c3b531f2a7e3ed0f2968b88e6d45bddf45c70de54c38203bc93645a3f6e51859"
+    }
+  ],
+  "ignore_eos": false,
+  "kind": "qwen3_14b_poisson_length_blind_traces",
+  "model_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+  "num_requests_per_trace": 200,
+  "predetermined_output_length": false,
+  "promoted_from": "results/raw/qwen3_14b_dgx_spark/g1_stock_matrix_cap2048",
+  "request_pool": "/home/dongj/LLM/traces/qwen3_14b/request_pool.jsonl",
+  "request_pool_manifest": "/home/dongj/LLM/traces/qwen3_14b/request_pool.meta.json",
+  "request_pool_sha256": "9d5e57900b9580480c7912a65d449bd608e0edc1293578c6c3e5d73fc71dbab5",
+  "schema_version": 2,
+  "seed_source": "per_request_trace",
+  "status": "frozen",
+  "temperature": 0.0,
+  "tokenizer_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+  "top_p": 1.0
+}

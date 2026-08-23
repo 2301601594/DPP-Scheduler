@@ -25,6 +25,17 @@
   them from actual events; every obligation is settled once, and actual
   request-level Goodput is counted only after natural EOS.
 
+## 2026-08-23: defer Predictor feature selection to offline training
+
+- Profiling records each executed BatchPlan's actual duration and per-selected-
+  request identity, phase, current context, and scheduled token count. Identity
+  fields are used only for joins and audit.
+- Candidate features are derived and compared offline without using the held-
+  out test split. The selected feature schema and support domain are frozen in
+  the Predictor artifact before online use.
+- Raw or derived data must not include remaining output length or future EOS
+  information.
+
 ## 2026-08-21: reopen G0 and prohibit silent parameter inheritance
 
 - The exact Qwen3-14B repository/revision, model snapshot, tokenizer, runtime
