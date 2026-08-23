@@ -624,6 +624,24 @@ $$
 
 平分时依次选择：预计 miss 更少、保守 deadline margin 更大、`plan_id` 更小的计划。
 
+首版 Scheduler 集成冻结以下量纲和参数：
+
+- `epsilon^F = epsilon^D = 0.05`。保留的 Stock 结果在 0.20/0.25
+  req/s 下，TTFT miss 比例为 2.0%/2.5%，TBT obligation miss 比例为
+  3.40%/4.62%；统一向上取 5%。0.30 req/s 的对应比例为 43.0%/5.51%，
+  因而会产生正债务漂移；
+- `Q^P` 和 `mu^P` 在评分时分别除以 `C_tok=2048`，`Z^F/Z^D`、
+  `S/M` 和即时效用分别除以 `C_seq=64`，使四个分子项无量纲；
+- `U_hat = S_hat^F + S_hat^D`，表示本轮预计按时完成的 obligation 数，
+  并非 terminal request-level Goodput；容量归一化后取 `V=1.0`；
+- 分数单位为 `1/second`。所有输入和中间项必须是 IEEE-754 binary64
+  可表示的有限值，非负量下界为零；`expected_duration <= 0`、NaN、Inf、
+  hash/plan 不匹配均 fail-closed，不做截断或乐观外推。
+
+这些值冻结在 `configs/dpp_selector_integration_freeze.json`，用于完成首版
+Scheduler 集成。它们没有经过 DPP 参数搜索，因此不构成正式 benchmark 的
+最优参数声明。
+
 ```text
 select(snapshot, control, safe_candidates):
     if safe_candidates is empty:
@@ -678,6 +696,12 @@ Z_k^D
 \epsilon^D S_k^D
 \right]^+
 $$
+
+`A_k^P` 来自 Adapter 实际接收的新请求 prompt token 数；正常执行的
+`mu_k^{P,actual}` 来自本轮实际 `SchedulerOutput`，并与所选完整 BatchPlan
+核对。取消或 Preemption 改变可见 Prefill 工作量时，下一轮仅以实际
+Snapshot 进行确定性校正。债务只聚合同一轮 ledger 已一次性结算的真实
+TTFT/TBT success 和 miss。
 
 每个 TTFT/TBT obligation 只能结算一次。Decode 返回非 EOS token 时，从真实返回时间创建下一条 TBT obligation；返回 EOS 时完成请求、释放 KV，不创建新 obligation。
 

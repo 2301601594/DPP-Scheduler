@@ -13,6 +13,7 @@ from dpp_scheduler.candidate_generator import (
 )
 from dpp_scheduler.contracts import (
     BatchPlan,
+    ControlState,
     DecodeRequest,
     ExecutionObservation,
     Obligation,
@@ -352,11 +353,23 @@ class CandidateGeneratorTests(unittest.TestCase):
 
 
 class SelectorTests(unittest.TestCase):
+    @staticmethod
+    def control(snapshot: StateSnapshot) -> ControlState:
+        return ControlState(
+            snapshot_hash=snapshot.snapshot_hash,
+            prefill_backlog=sum(
+                request.remaining_tokens
+                for request in snapshot.waiting_prefill_requests
+            ),
+            ttft_debt=0.0,
+            tbt_debt=0.0,
+        )
+
     def test_selector_prefers_non_idle_plan(self) -> None:
         prefill = (PrefillRequest("p1", 0.0, 10, 0, ordinal=0),)
         snap = make_snapshot(prefill=prefill)
         plans = CandidateGenerator().generate(snap)
-        decision = TemporarySelector().select(snap, plans)
+        decision = TemporarySelector().select(snap, self.control(snap), plans)
         self.assertIsNotNone(decision.selected_plan)
         self.assertGreater(
             decision.selected_plan.total_prefill_tokens
@@ -369,13 +382,13 @@ class SelectorTests(unittest.TestCase):
         snap = make_snapshot(prefill=prefill)
         plans = CandidateGenerator().generate(snap)
         selector = TemporarySelector()
-        first = selector.select(snap, plans)
-        second = selector.select(snap, plans)
+        first = selector.select(snap, self.control(snap), plans)
+        second = selector.select(snap, self.control(snap), plans)
         self.assertEqual(first.selected_plan, second.selected_plan)
 
     def test_selector_empty_returns_no_safe_decision(self) -> None:
         snap = make_snapshot()
-        decision = TemporarySelector().select(snap, ())
+        decision = TemporarySelector().select(snap, self.control(snap), ())
         self.assertIsNone(decision.selected_plan)
         self.assertEqual(decision.reason, "NO_SAFE_DECISION")
 

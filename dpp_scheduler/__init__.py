@@ -20,6 +20,7 @@ from dpp_scheduler.contracts import (
     validate_snapshot_hash,
 )
 from dpp_scheduler.candidate_generator import CandidateGenerator
+from dpp_scheduler.dpp_selector import DPPScore, DPPSelector
 
 __all__ = [
     "BatchPlan",
@@ -27,6 +28,8 @@ __all__ = [
     "ControlState",
     "Decision",
     "DecodeRequest",
+    "DPPScore",
+    "DPPSelector",
     "ExecutionObservation",
     "FallbackResult",
     "Obligation",

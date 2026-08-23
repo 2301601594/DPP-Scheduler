@@ -17,6 +17,7 @@ from typing import Any
 import yaml
 
 from dpp_scheduler.settings import (
+    DPPSettings,
     FallbackSettings,
     ObligationSettings,
     SafeSetSettings,
@@ -92,6 +93,46 @@ def load_obligation_settings(runtime: ActiveRuntime) -> ObligationSettings:
         )
     except ValueError as error:
         raise ActiveConfigError(str(error)) from error
+
+
+def load_dpp_settings(runtime: ActiveRuntime) -> DPPSettings:
+    """Load the frozen normalized DPP score and debt-update parameters."""
+    with runtime.config_path.open("r", encoding="utf-8") as stream:
+        config = yaml.safe_load(stream)
+    dpp = config.get("dpp") if isinstance(config, dict) else None
+    if not isinstance(dpp, dict):
+        raise ActiveConfigError("active config dpp section is missing")
+    try:
+        settings = DPPSettings.from_mapping(
+            dpp,
+            token_budget=runtime.max_num_batched_tokens,
+            sequence_budget=runtime.max_num_seqs,
+        )
+    except ValueError as error:
+        raise ActiveConfigError(str(error)) from error
+    manifest_value = dpp.get("freeze_manifest_path")
+    expected_sha = dpp.get("freeze_manifest_sha256")
+    if not isinstance(manifest_value, str) or not isinstance(expected_sha, str):
+        raise ActiveConfigError("DPP freeze manifest path/hash are required")
+    manifest_path = (REPOSITORY_ROOT / manifest_value).resolve()
+    try:
+        manifest_path.relative_to(REPOSITORY_ROOT.resolve())
+    except ValueError:
+        raise ActiveConfigError("DPP freeze manifest escapes repository") from None
+    if not manifest_path.is_file():
+        raise ActiveConfigError(f"DPP freeze manifest is missing: {manifest_path}")
+    if sha256_file(manifest_path) != expected_sha:
+        raise ActiveConfigError("DPP freeze manifest hash mismatch")
+    with manifest_path.open("r", encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    parameters = manifest.get("parameters") if isinstance(manifest, dict) else None
+    if not isinstance(parameters, dict) or parameters != {
+        "epsilon_tbt": settings.epsilon_tbt,
+        "epsilon_ttft": settings.epsilon_ttft,
+        "weight_v": settings.weight_v,
+    }:
+        raise ActiveConfigError("DPP config and freeze manifest disagree")
+    return settings
 
 
 def sha256_file(path: Path) -> str:

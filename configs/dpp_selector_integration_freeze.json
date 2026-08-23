@@ -1,0 +1,48 @@
+{
+  "formal_benchmark_eligible": false,
+  "freeze_id": "dpp_selector_integration_freeze_v1",
+  "freeze_kind": "existing_stock_evidence_and_capacity_normalization",
+  "parameters": {
+    "epsilon_tbt": 0.05,
+    "epsilon_ttft": 0.05,
+    "weight_v": 1.0
+  },
+  "score_contract": {
+    "denominator": "expected_duration_seconds",
+    "normalization": {
+      "obligation_outcomes": 64,
+      "service_utility_obligations": 64,
+      "tbt_debt_obligations": 64,
+      "ttft_debt_obligations": 64,
+      "prefill_backlog_tokens": 2048,
+      "prefill_service_tokens": 2048
+    },
+    "service_utility": "ttft_success_plus_tbt_success",
+    "zero_duration_behavior": "reject_candidate"
+  },
+  "selection_basis": {
+    "epsilon_rule": "round stable and near-saturation Stock miss ratios upward to 0.05",
+    "stock_obligation_counts": {
+      "qps_0.20": {
+        "tbt": {"miss": 5759, "total": 169556, "ratio": 0.033965},
+        "ttft": {"miss": 4, "total": 200, "ratio": 0.02}
+      },
+      "qps_0.25": {
+        "tbt": {"miss": 7859, "total": 169999, "ratio": 0.04623},
+        "ttft": {"miss": 5, "total": 200, "ratio": 0.025}
+      },
+      "qps_0.30_overload_reference": {
+        "tbt": {"miss": 9358, "total": 169902, "ratio": 0.055079},
+        "ttft": {"miss": 86, "total": 200, "ratio": 0.43}
+      }
+    },
+    "stock_sources": [
+      "results/raw/qwen3_14b_dgx_spark/stock_matrix_qps0.2_cap2048/per_request.jsonl",
+      "results/raw/qwen3_14b_dgx_spark/stock_matrix_qps0.25_cap2048/per_request.jsonl",
+      "results/raw/qwen3_14b_dgx_spark/stock_matrix_qps0.3_cap2048/per_request.jsonl"
+    ],
+    "weight_rule": "normalize token terms by C_tok and obligation terms by C_seq, then use unit weight"
+  },
+  "status": "frozen_for_scheduler_integration",
+  "schema_version": 1
+}

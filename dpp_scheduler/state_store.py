@@ -5,12 +5,18 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from dpp_scheduler.contracts import ControlState, Obligation
+from dpp_scheduler.contracts import (
+    ControlState,
+    Obligation,
+    StateSnapshot,
+    validate_snapshot_hash,
+)
+from dpp_scheduler.settings import DPPSettings
 
 
 @dataclass
 class InMemoryStateStore:
-    """Minimal control-state holder retained until the G5 score is frozen."""
+    """Control state updated only from actual queue and ledger observations."""
 
     current: ControlState = ControlState(
         snapshot_hash="unbound",
@@ -18,12 +24,76 @@ class InMemoryStateStore:
         ttft_debt=0.0,
         tbt_debt=0.0,
     )
+    settings: DPPSettings | None = None
+    _applied_event_ids: set[str] = field(default_factory=set, init=False)
+    _pending_prefill_arrivals: int = field(default=0, init=False)
 
     def get(self) -> ControlState:
         return self.current
 
     def set(self, state: ControlState) -> None:
         self.current = state
+
+    def record_prefill_arrival(self, prompt_tokens: int) -> None:
+        if (
+            isinstance(prompt_tokens, bool)
+            or not isinstance(prompt_tokens, int)
+            or prompt_tokens <= 0
+        ):
+            raise ValueError("prompt_tokens must be a positive integer")
+        self._pending_prefill_arrivals += prompt_tokens
+
+    def bind_snapshot(self, snapshot: StateSnapshot) -> ControlState:
+        """Bind debts to a round and reconcile QP from actual visible state."""
+        observed_backlog = sum(
+            request.remaining_tokens
+            for request in snapshot.waiting_prefill_requests
+        )
+        expected_backlog = (
+            self.current.prefill_backlog + self._pending_prefill_arrivals
+        )
+        # Normal rounds follow Q-mu+A exactly. An actual Snapshot remains the
+        # authority after cancellation/preemption changes visible Prefill work.
+        bound_backlog = (
+            expected_backlog
+            if expected_backlog == observed_backlog
+            else observed_backlog
+        )
+        self._pending_prefill_arrivals = 0
+        self.current = ControlState(
+            snapshot_hash=snapshot.snapshot_hash,
+            prefill_backlog=bound_backlog,
+            ttft_debt=self.current.ttft_debt,
+            tbt_debt=self.current.tbt_debt,
+        )
+        return self.current
+
+    def update_from_actual(
+        self,
+        *,
+        snapshot_hash: str,
+        actual_prefill_tokens: int,
+        ledger_updates: tuple[LedgerUpdate, ...] = (),
+    ) -> ControlState:
+        if self.settings is None and ledger_updates:
+            raise RuntimeError("DPP settings are required for debt updates")
+        event_ids = [update.event_id for update in ledger_updates]
+        if len(event_ids) != len(set(event_ids)):
+            raise DuplicateLedgerEvent("duplicate event in control-state update")
+        duplicates = self._applied_event_ids.intersection(event_ids)
+        if duplicates:
+            raise DuplicateLedgerEvent(
+                f"control-state event already applied: {min(duplicates)}"
+            )
+        self.current = advance_control_state(
+            self.current,
+            snapshot_hash=snapshot_hash,
+            actual_prefill_tokens=actual_prefill_tokens,
+            ledger_updates=ledger_updates,
+            settings=self.settings,
+        )
+        self._applied_event_ids.update(event_ids)
+        return self.current
 
 
 class DuplicateLedgerEvent(ValueError):
@@ -42,6 +112,72 @@ class LedgerUpdate:
     tbt_miss: int = 0
     cancelled_obligations: int = 0
     terminal_reason: str | None = None
+
+
+def advance_control_state(
+    state: ControlState,
+    *,
+    snapshot_hash: str,
+    actual_prefill_tokens: int,
+    ledger_updates: tuple[LedgerUpdate, ...],
+    settings: DPPSettings | None,
+) -> ControlState:
+    """Apply the frozen actual-feedback equations as a replayable pure step."""
+    validate_snapshot_hash(state.snapshot_hash, snapshot_hash)
+    if (
+        isinstance(actual_prefill_tokens, bool)
+        or not isinstance(actual_prefill_tokens, int)
+        or actual_prefill_tokens < 0
+    ):
+        raise ValueError("actual_prefill_tokens must be a non-negative integer")
+
+    totals = {
+        "ttft_success": 0,
+        "ttft_miss": 0,
+        "tbt_success": 0,
+        "tbt_miss": 0,
+    }
+    for update in ledger_updates:
+        if not update.event_id:
+            raise ValueError("LedgerUpdate event_id must be non-empty")
+        for key in totals:
+            value = getattr(update, key)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"LedgerUpdate {key} must be non-negative integer")
+            totals[key] += value
+
+    if ledger_updates and settings is None:
+        raise RuntimeError("DPP settings are required for debt updates")
+    epsilon_ttft = settings.epsilon_ttft if settings is not None else 0.0
+    epsilon_tbt = settings.epsilon_tbt if settings is not None else 0.0
+    next_ttft = max(
+        0.0,
+        state.ttft_debt
+        + (1.0 - epsilon_ttft) * totals["ttft_miss"]
+        - epsilon_ttft * totals["ttft_success"],
+    )
+    next_tbt = max(
+        0.0,
+        state.tbt_debt
+        + (1.0 - epsilon_tbt) * totals["tbt_miss"]
+        - epsilon_tbt * totals["tbt_success"],
+    )
+    next_prefill = max(0, state.prefill_backlog - actual_prefill_tokens)
+    maximum = settings.maximum_numeric if settings is not None else float("inf")
+    if (
+        not math.isfinite(next_ttft)
+        or not math.isfinite(next_tbt)
+        or next_ttft > maximum
+        or next_tbt > maximum
+        or next_prefill > maximum
+    ):
+        raise ValueError("actual feedback produced out-of-range ControlState")
+    return ControlState(
+        snapshot_hash=snapshot_hash,
+        prefill_backlog=next_prefill,
+        ttft_debt=next_ttft,
+        tbt_debt=next_tbt,
+    )
 
 
 @dataclass(frozen=True)

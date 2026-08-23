@@ -171,8 +171,12 @@ class ConsequenceEstimator:
                         if conservative_margins
                         else None
                     ),
-                    # G5 must freeze the Goodput-oriented utility definition.
-                    service_utility=None,
+                    # Immediate service utility is obligation-level and is not
+                    # terminal request-level Goodput.
+                    service_utility=float(
+                        expected_counts["TTFT"]["success"]
+                        + expected_counts["TBT"]["success"]
+                    ),
                 )
             )
         return tuple(result)

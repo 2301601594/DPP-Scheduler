@@ -29,12 +29,10 @@ G1 Stock SLO/load calibration is now frozen:
 
 The validated raw iteration dataset is assembled by batch kind under
 `results/processed/qwen3_14b_dgx_spark/predictor_iteration_dataset_v1/`.
-The following are **not yet frozen** and remain later-gate inputs:
-
-- `C_tok`, `C_seq`, Critical Horizon, Prefill knee, `H`, `R0`, Top-K,
-  Recovery rules, `epsilon^F`, `epsilon^D`, and `V`; and
-- dataset split, feature schema, selected Predictor artifact, support domain,
-  and residual calibration.
+`C_tok/C_seq`, the Predictor artifact, and the integration Candidate,
+Safe-Set, and DPP values are versioned. The remaining formal-gate inputs are a
+Recovery-age rule and measured replacements for the explicitly
+integration-only G4/DPP values if they are to support formal benchmark claims.
 
 ## Gate sequence
 
@@ -166,7 +164,15 @@ The live obligation ledger is implemented before the DPP score: request
 arrival creates TTFT, an actual locked-vLLM `EngineCoreOutput` token settles
 TTFT/TBT, a nonterminal token creates the next TBT deadline, and a terminal
 event creates none. Snapshot now carries these obligations and Recovery state.
-The `Q^P/Z^F/Z^D` updates and DPP Selector remain G5/G6 work.
+The normalized DPP Selector and actual-feedback `Q^P/Z^F/Z^D` updates are now
+implemented and wired into the live modular Scheduler. For integration,
+`epsilon^F=epsilon^D=0.05` is frozen from the retained Stock miss ratios,
+token terms are normalized by `C_tok=2048`, obligation terms by `C_seq=64`,
+and `V=1.0`. The freeze is versioned and runtime hash-checked but explicitly
+ineligible for a formal benchmark parameter-optimality claim. Remote model-free
+tests establish the deterministic score, ties, one-time feedback, and live
+factory wiring; a real model integration run remains required before G6 can be
+claimed complete.
 
 ### G7: Evaluation
 

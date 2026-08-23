@@ -93,10 +93,25 @@ model output and sampling. This server-side event drives the live ledger; it
 does not replace the client-receives-SSE boundary used by reported TTFT/TBT
 metrics.
 
-Before G5, the specification must still choose and test:
+Remaining formal-freeze work is limited to the Recovery-age rule and replacing
+integration-only Safe-Set/DPP values if later evidence selects different formal
+benchmark parameters.
 
-- units, numeric ranges, zero-duration handling, tie keys, Recovery rules,
-  Top-K, and every ledger update boundary.
+## 2026-08-23: freeze normalized DPP Selector parameters for integration
+
+- Retained Stock request events give TTFT miss ratios of 2.0%/2.5% and TBT
+  obligation miss ratios of 3.40%/4.62% at 0.20/0.25 req/s. The integration
+  freeze uses `epsilon^F=epsilon^D=0.05`; the overload 0.30 req/s evidence is
+  retained and exceeds this target.
+- Score-time token quantities are normalized by `C_tok=2048`, and debt,
+  obligation outcome, and service-utility quantities by `C_seq=64`. With these
+  dimensionless numerator terms, `V=1.0`.
+- Immediate utility is expected on-time TTFT plus TBT obligation service. It is
+  not request-level Goodput. The denominator is expected iteration seconds;
+  non-positive or non-finite durations fail closed.
+- The exact inputs and raw counts are frozen in
+  `configs/dpp_selector_integration_freeze.json`. This is sufficient for the
+  first integrated Scheduler, but is not a tuned formal-benchmark optimum.
 
 No implementation may resolve these differences implicitly.
 

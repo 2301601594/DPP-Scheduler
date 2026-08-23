@@ -756,15 +756,20 @@ def get_modular_scheduler_class() -> type:
 
     from dpp_scheduler.candidate_generator import CandidateGenerator
     from dpp_scheduler.consequence_estimator import ConsequenceEstimator
-    from dpp_scheduler.dpp_selector import TemporarySelector
+    from dpp_scheduler.dpp_selector import DPPSelector
     from dpp_scheduler.fallback import DeterministicFallback, resolve_fallback
     from dpp_scheduler.predictor import RidgeDurationPredictor
     from dpp_scheduler.safe_set import ResourceAndRiskSafeSet
-    from dpp_scheduler.state_store import LedgerUpdate, ObligationLedger
+    from dpp_scheduler.state_store import (
+        InMemoryStateStore,
+        LedgerUpdate,
+        ObligationLedger,
+    )
     from benchmarks.qwen3_runtime import (
         ACTIVE_CONFIG_RELATIVE,
         REPOSITORY_ROOT,
         load_active_runtime,
+        load_dpp_settings,
         load_fallback_settings,
         load_frozen_candidate_settings,
         load_frozen_safe_set_settings,
@@ -783,6 +788,7 @@ def get_modular_scheduler_class() -> type:
             safe_set_settings = load_frozen_safe_set_settings(runtime)
             fallback_settings = load_fallback_settings(runtime)
             obligation_settings = load_obligation_settings(runtime)
+            dpp_settings = load_dpp_settings(runtime)
             super().__init__(*args, **kwargs)
             self._dpp_obligation_ledger = ObligationLedger(
                 ttft_slo_seconds=obligation_settings.ttft_slo_seconds,
@@ -798,7 +804,8 @@ def get_modular_scheduler_class() -> type:
             self._dpp_consequence_estimator = ConsequenceEstimator()
             self._dpp_safe_set = ResourceAndRiskSafeSet(safe_set_settings)
             self._dpp_fallback = DeterministicFallback(fallback_settings)
-            self._dpp_selector = TemporarySelector()
+            self._dpp_selector = DPPSelector(dpp_settings)
+            self._dpp_state_store = InMemoryStateStore(settings=dpp_settings)
             artifact = (
                 Path(__file__).resolve().parents[1]
                 / "predictors"
@@ -808,6 +815,7 @@ def get_modular_scheduler_class() -> type:
             self._dpp_predictor = RidgeDurationPredictor.from_artifact(artifact)
             self._dpp_predictor_pending: dict[str, Any] | None = None
             self._dpp_obligation_updates: list[LedgerUpdate] = []
+            self._dpp_control_pending_updates: list[LedgerUpdate] = []
             self._dpp_external_event_sequence = 0
 
         def add_request(self, request: Any) -> None:
@@ -816,6 +824,9 @@ def get_modular_scheduler_class() -> type:
             if is_new:
                 self._dpp_obligation_ledger.register_request(
                     request.request_id, float(request.arrival_time)
+                )
+                self._dpp_state_store.record_prefill_arrival(
+                    int(request.num_prompt_tokens)
                 )
 
         @staticmethod
@@ -828,6 +839,8 @@ def get_modular_scheduler_class() -> type:
         def _dpp_record_obligation_update(self, update: LedgerUpdate) -> None:
             self._dpp_obligation_updates.append(update)
             del self._dpp_obligation_updates[:-1024]
+            if self._dpp_predictor_pending is not None:
+                self._dpp_control_pending_updates.append(update)
 
         def finish_requests(self, request_ids: Any, finished_status: Any) -> Any:
             finished = super().finish_requests(request_ids, finished_status)
@@ -873,6 +886,7 @@ def get_modular_scheduler_class() -> type:
         def schedule(self, throttle_prefills: bool = False) -> Any:
             del throttle_prefills
             snapshot = self._dpp_adapter.make_snapshot()
+            control = self._dpp_state_store.bind_snapshot(snapshot)
             plans = self._dpp_generator.generate(snapshot)
             predictions = self._dpp_predictor.predict(snapshot, plans)
             if len(predictions) != len(plans):
@@ -884,7 +898,7 @@ def get_modular_scheduler_class() -> type:
             if safe_result.snapshot_hash != snapshot.snapshot_hash:
                 raise RuntimeError("Safe-Set snapshot_hash mismatch")
             decision = self._dpp_selector.select(
-                snapshot, safe_result.safe_candidates
+                snapshot, control, safe_result.safe_candidates
             )
             fallback_result = None
             if decision.selected_plan is None:
@@ -905,9 +919,31 @@ def get_modular_scheduler_class() -> type:
                     selected_plan=fallback_plan,
                     reason=fallback_result.reason,
                 )
+            selected_score = None
+            selected_terms = None
+            if (
+                decision.reason == "DPP_MAX_SCORE"
+                and decision.selected_plan is not None
+            ):
+                selected_candidate = next(
+                    candidate
+                    for candidate in safe_result.safe_candidates
+                    if candidate.plan.plan_id == decision.selected_plan.plan_id
+                )
+                score_audit = self._dpp_selector.score_candidate(
+                    snapshot, control, selected_candidate
+                )
+                selected_score = score_audit.score
+                selected_terms = (
+                    score_audit.prefill_term,
+                    score_audit.ttft_term,
+                    score_audit.tbt_term,
+                    score_audit.utility_term,
+                )
             logger.info(
                 "ModularDPPScheduler frame=%s plans=%d safe=%d rejected=%d "
-                "selected=%s reason=%s fallback_rejected=%s",
+                "selected=%s reason=%s control=(%s,%.6f,%.6f) "
+                "score=%s terms=%s fallback_rejected=%s",
                 snapshot.frame_id,
                 len(plans),
                 len(safe_result.safe_candidates),
@@ -916,6 +952,11 @@ def get_modular_scheduler_class() -> type:
                 if decision.selected_plan is not None
                 else "NONE",
                 decision.reason,
+                control.prefill_backlog,
+                control.ttft_debt,
+                control.tbt_debt,
+                selected_score,
+                selected_terms,
                 fallback_result.rejection_reasons if fallback_result else (),
             )
             if decision.selected_plan is None:
@@ -940,6 +981,7 @@ def get_modular_scheduler_class() -> type:
                     "actual_duration_seconds": None,
                     "skip_predictor_update": True,
                 }
+                self._dpp_control_pending_updates = []
                 return scheduler_output
             audit = self._dpp_predictor.predict_with_audit(
                 snapshot, decision.selected_plan
@@ -959,6 +1001,7 @@ def get_modular_scheduler_class() -> type:
                 "actual_duration_seconds": None,
                 "skip_predictor_update": False,
             }
+            self._dpp_control_pending_updates = []
             return scheduler_output
 
         def update_from_output(
@@ -976,6 +1019,15 @@ def get_modular_scheduler_class() -> type:
                     terminal_reason = self._dpp_terminal_reason(output.finish_reason)
                     if token_count == 0 and terminal_reason is None:
                         continue
+                    if not self._dpp_obligation_ledger.has_request(
+                        output.request_id
+                    ):
+                        if token_count == 0 and terminal_reason is not None:
+                            # finish_requests already recorded this terminal event.
+                            continue
+                        raise RuntimeError(
+                            "actual token output has no active obligation ledger"
+                        )
                     update = self._dpp_obligation_ledger.observe_output(
                         event_id=(
                             f"frame:{pending['snapshot'].frame_id}:"
@@ -988,6 +1040,33 @@ def get_modular_scheduler_class() -> type:
                         terminal_reason=terminal_reason,
                     )
                     self._dpp_record_obligation_update(update)
+            prefill_ids = {
+                request.request_id
+                for request in pending["snapshot"].waiting_prefill_requests
+            }
+            actual_prefill_tokens = sum(
+                int(tokens)
+                for request_id, tokens in scheduler_output.num_scheduled_tokens.items()
+                if request_id in prefill_ids
+            )
+            if actual_prefill_tokens != pending["plan"].total_prefill_tokens:
+                raise RuntimeError("actual Prefill service does not match BatchPlan")
+            next_control = self._dpp_state_store.update_from_actual(
+                snapshot_hash=pending["snapshot"].snapshot_hash,
+                actual_prefill_tokens=actual_prefill_tokens,
+                ledger_updates=tuple(self._dpp_control_pending_updates),
+            )
+            logger.info(
+                "ModularDPPScheduler feedback frame=%s actual_prefill=%s "
+                "ledger_events=%s next_control=(%s,%.6f,%.6f)",
+                pending["snapshot"].frame_id,
+                actual_prefill_tokens,
+                len(self._dpp_control_pending_updates),
+                next_control.prefill_backlog,
+                next_control.ttft_debt,
+                next_control.tbt_debt,
+            )
+            self._dpp_control_pending_updates = []
             if pending["skip_predictor_update"]:
                 self._dpp_predictor_pending = None
                 return result

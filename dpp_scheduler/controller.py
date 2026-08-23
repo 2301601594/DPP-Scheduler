@@ -1,9 +1,4 @@
-"""Controller for the modular exact-BatchPlan scheduler.
-
-G2 version: snapshot -> candidates -> temporary selector -> exact adapter ->
-observation/decision log.  It intentionally leaves DPP scoring and real
-feedback updates to later gates.
-"""
+"""Controller for the modular exact-BatchPlan Scheduler."""
 
 from __future__ import annotations
 
@@ -25,7 +20,7 @@ from dpp_scheduler.fallback import (
 )
 from dpp_scheduler.predictor import DurationPredictor, NullDurationPredictor
 from dpp_scheduler.safe_set import PassThroughSafeSet, SafeSet
-from dpp_scheduler.dpp_selector import TemporarySelector
+from dpp_scheduler.dpp_selector import DPPSelector, TemporarySelector
 from dpp_scheduler.state_store import InMemoryStateStore
 from dpp_scheduler.vllm_adapter import ExactPlanAdapter
 
@@ -43,7 +38,7 @@ class Controller:
             ConsequenceEstimator | NullConsequenceEstimator | None
         ) = None,
         safe_set: SafeSet | None = None,
-        selector: TemporarySelector | None = None,
+        selector: DPPSelector | TemporarySelector | None = None,
         fallback: DeterministicFallback | NullFallback | None = None,
         observer: InMemoryObserver | None = None,
         state_store: InMemoryStateStore | None = None,
@@ -62,6 +57,7 @@ class Controller:
 
     def schedule_once(self) -> Decision:
         snapshot = self.adapter.make_snapshot()
+        control = self.state_store.bind_snapshot(snapshot)
         plans = self.generator.generate(snapshot)
         predictions = self.predictor.predict(snapshot, plans)
         predictions = self.consequence_estimator.attach(
@@ -86,7 +82,7 @@ class Controller:
                 reason=fallback_result.reason,
             )
         else:
-            decision = self.selector.select(snapshot, safe_candidates)
+            decision = self.selector.select(snapshot, control, safe_candidates)
         validate_snapshot_hash(decision.snapshot_hash, snapshot.snapshot_hash)
 
         observation: ExecutionObservation | None = None
@@ -101,6 +97,13 @@ class Controller:
             if not observation.matches(decision.selected_plan):
                 raise RuntimeError(
                     "Controller: executed plan does not match selected BatchPlan"
+                )
+            if observation.error is None:
+                self.state_store.update_from_actual(
+                    snapshot_hash=snapshot.snapshot_hash,
+                    actual_prefill_tokens=sum(
+                        tokens for _, tokens in observation.executed_prefill_items
+                    ),
                 )
 
         self.observer.record(snapshot, decision, observation)

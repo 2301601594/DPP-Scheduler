@@ -1,8 +1,4 @@
-"""G2 settings container.
-
-These values are deliberately provisional until G0/G1 profiling freezes them.
-They are used by the pure Candidate Generator and temporary Selector.
-"""
+"""Validated settings for the modular Scheduler components."""
 
 from __future__ import annotations
 
@@ -217,3 +213,111 @@ class ObligationSettings:
             raise ValueError(
                 "recovery_age_threshold_seconds must be finite and non-negative"
             )
+
+
+@dataclass(frozen=True)
+class DPPSettings:
+    """Frozen integration settings for the normalized DPP score."""
+
+    epsilon_ttft: float
+    epsilon_tbt: float
+    weight_v: float
+    token_normalization: int
+    obligation_normalization: int
+    maximum_numeric: float
+    zero_duration_behavior: str = "reject_candidate"
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("epsilon_ttft", self.epsilon_ttft),
+            ("epsilon_tbt", self.epsilon_tbt),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or not 0.0 <= value <= 1.0
+            ):
+                raise ValueError(f"{label} must be finite and in [0, 1]")
+        if (
+            isinstance(self.weight_v, bool)
+            or not isinstance(self.weight_v, (int, float))
+            or not math.isfinite(self.weight_v)
+            or self.weight_v < 0
+        ):
+            raise ValueError("weight_v must be finite and non-negative")
+        for label, value in (
+            ("token_normalization", self.token_normalization),
+            ("obligation_normalization", self.obligation_normalization),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{label} must be a positive integer")
+        if not math.isfinite(self.maximum_numeric) or self.maximum_numeric <= 0:
+            raise ValueError("maximum_numeric must be finite and positive")
+        if self.zero_duration_behavior != "reject_candidate":
+            raise ValueError("zero_duration_behavior must be reject_candidate")
+
+    @classmethod
+    def from_mapping(
+        cls,
+        value: Mapping[str, Any],
+        *,
+        token_budget: int,
+        sequence_budget: int,
+    ) -> DPPSettings:
+        if not isinstance(value, Mapping):
+            raise ValueError("dpp settings must be a mapping")
+        if value.get("parameter_status") != "frozen_for_scheduler_integration":
+            raise ValueError("DPP parameters are not frozen for integration")
+        if value.get("denominator") != "expected_duration":
+            raise ValueError("DPP denominator must be expected_duration")
+        if value.get("service_utility") != "ttft_success_plus_tbt_success":
+            raise ValueError("DPP service utility definition mismatch")
+        if value.get("updates_from_actual_observation_only") is not True:
+            raise ValueError("DPP state must update from actual observations only")
+        if value.get("obligation_settlement_exactly_once") is not True:
+            raise ValueError("DPP obligations must settle exactly once")
+        if tuple(value.get("tie_break", ())) != (
+            "fewer_predicted_misses",
+            "larger_conservative_deadline_margin",
+            "smaller_plan_id",
+        ):
+            raise ValueError("DPP tie-break contract mismatch")
+
+        normalization = value.get("normalization")
+        ranges = value.get("score_numeric_ranges")
+        if not isinstance(normalization, Mapping) or not isinstance(ranges, Mapping):
+            raise ValueError("DPP normalization/numeric ranges must be mappings")
+        token_scales = {
+            normalization.get("prefill_backlog_tokens"),
+            normalization.get("prefill_service_tokens"),
+        }
+        obligation_scales = {
+            normalization.get("ttft_debt_obligations"),
+            normalization.get("tbt_debt_obligations"),
+            normalization.get("obligation_outcomes"),
+            normalization.get("service_utility_obligations"),
+        }
+        if token_scales != {token_budget}:
+            raise ValueError("DPP token normalization must equal C_tok")
+        if obligation_scales != {sequence_budget}:
+            raise ValueError("DPP obligation normalization must equal C_seq")
+        if ranges.get("nonnegative_minimum") != 0.0:
+            raise ValueError("DPP nonnegative minimum must be 0.0")
+        maximum = ranges.get("finite_absolute_maximum")
+        if isinstance(maximum, bool) or not isinstance(maximum, (int, float)):
+            raise ValueError("DPP finite_absolute_maximum must be numeric")
+
+        required = ("epsilon_ttft", "epsilon_tbt", "weight_v")
+        missing = [key for key in required if value.get(key) is None]
+        if missing:
+            raise ValueError("DPP parameters are unresolved: " + ", ".join(missing))
+        return cls(
+            epsilon_ttft=value["epsilon_ttft"],
+            epsilon_tbt=value["epsilon_tbt"],
+            weight_v=value["weight_v"],
+            token_normalization=token_budget,
+            obligation_normalization=sequence_budget,
+            maximum_numeric=float(maximum),
+            zero_duration_behavior=value.get("zero_duration_behavior"),
+        )
