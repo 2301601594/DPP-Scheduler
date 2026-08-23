@@ -265,16 +265,27 @@ each TTFT/TBT obligation.
 
 ## 9. Candidate Generator contract
 
-The action is a complete `BatchPlan`, not a scalar Prefill cap. Prefill caps are
-exactly `{0, b_s, b_m, b_l}`; positive values are frozen from same-machine
-profiling. Decode profiles are:
+The action is a complete `BatchPlan`, not a scalar Prefill cap. Seed Prefill
+breakpoints are `ZERO`, `FINISH`, `KNEE`, and `BINDABLE_MAX`. `FINISH` is
+generated only when the highest-priority bindable Prefill request can complete;
+`KNEE` is frozen from same-configuration profiling; and `BINDABLE_MAX` is only
+a native token/backlog bound, never an SLO-safe bound. Decode profiles are:
 
 - `MANDATORY`: Recovery and otherwise mandatory protected Decode only;
-- `URGENT(u)`: Mandatory plus at most the `u` earliest deadlines; and
+- `CRITICAL`: Mandatory plus live Decode whose current TBT slack is no larger
+  than a frozen, snapshot-only Critical Horizon; and
 - `ALL`: as many Decode requests as resources permit.
 
 Generate at most 12 profile/cap combinations before canonical deduplication.
 Never enumerate arbitrary request subsets.
+
+Critical Horizon and Prefill knee values that have not been measured remain
+`null`/provisional and cannot support a formal benchmark. Candidate generation
+must not import or call Predictor, Safe-Set, or Selector. If the horizon is
+unset, `CRITICAL` conservatively collapses to `MANDATORY`; if the knee is unset,
+the `KNEE` seed is omitted. A normal partial Prefill chunk is either zero or at
+least the configured minimum; a smaller chunk is allowed only when it completes
+the request.
 
 Decode order is: oldest Recovery request whose age threshold is reached;
 non-violated requests by TBT deadline using EDF; then remaining Recovery by
@@ -397,7 +408,7 @@ non-negative, replayable from the decision/observation log, and immune to
 duplicate callbacks.
 
 Parameters that must be measured/reviewed and frozen include `C_tok`, `C_seq`,
-`b_s`, `b_m`, `b_l`, `u`, `H`, `R0`, Recovery age, hard-TTFT protection,
+Critical Horizon, Prefill knee, `H`, `R0`, Recovery age, hard-TTFT protection,
 Top-K, minimum Prefill chunk, TTFT/TBT SLOs, `epsilon^F`, `epsilon^D`, `V`,
 residual windows, Predictor model family/artifact/version, and every stable tie
 key.

@@ -110,30 +110,37 @@ ControlState
 
 ### 4.1 模板
 
-Prefill cap 只保留四档：
+Prefill seed breakpoint 只保留四类：
 
 $$
 \mathcal B^P
 =
 \left\{
-0,
-b_s,
-b_m,
-b_l
+P_{zero},
+P_{finish},
+P_{knee},
+P_{bindable}
 \right\}
 $$
 
-初始可令 `b_s`、`b_m`、`b_l` 分别约为 token budget 的四分之一、二分之一和全部，之后根据同机 profiling 结果冻结。
+- `ZERO` 为 0；
+- `FINISH` 完整结束当前最高优先级且可绑定的 Prefill 请求，无法完整结束时省略；
+- `KNEE` 为同配置 profiling 冻结的效率拐点，并受当前可绑定上限约束；
+- `BINDABLE_MAX` 为 token budget 与可见 Prefill backlog 给出的最大尝试值，不代表 SLO-safe。
+
+未冻结的 knee 保持 `null`，此时省略 `KNEE` 候选。
 
 Decode profile 只保留三种：
 
 | Profile | 内容 |
 |---|---|
 | `MANDATORY` | 仅强制 Recovery 和必须保护的 Decode |
-| `URGENT(u)` | Mandatory 加 deadline 最早的至多 `u` 个 Decode |
+| `CRITICAL` | Mandatory 加当前 TBT slack 不大于 Critical Horizon 的 live Decode |
 | `ALL` | 在资源范围内尽可能加入全部 Decode |
 
 因此去重前最多生成 12 个候选，不枚举任意请求子集。
+Critical Horizon 是只读取 Snapshot 的冻结阈值，不是候选执行时间，也不读取
+Predictor。未冻结时保持 `null`，`CRITICAL` 退化为 `MANDATORY`。
 
 ### 4.2 请求排序
 
@@ -167,6 +174,9 @@ $$
 
 Prefix Caching 关闭后，可依据每个请求的当前已分配 slot、计划新增 token 数和 block size，纯计算本轮新增 KV block；不得在候选阶段修改真实 block manager。
 
+普通 partial Prefill chunk 必须为 0 或不小于配置的 minimum；仅当请求本身
+剩余不足 minimum 且本轮完整完成时允许更小的 chunk。
+
 ### 4.4 伪代码
 
 ```text
@@ -176,10 +186,10 @@ generate(snapshot):
     prefill_order = rank_prefill(snapshot)
     plans = []
 
-    for profile in [MANDATORY, URGENT(u), ALL]:
+    for profile in [MANDATORY, CRITICAL, ALL]:
         decode_items = bind_decode(profile, mandatory, decode_order)
 
-        for cap in [0, b_s, b_m, b_l]:
+        for cap in [ZERO, FINISH, KNEE, BINDABLE_MAX]:
             plan = fill_prefill(decode_items, prefill_order, cap)
             if native_limits_hold(plan):
                 plan.projected_kv_blocks = project_kv_without_side_effect(plan)
@@ -187,6 +197,9 @@ generate(snapshot):
 
     return canonical_deduplicate(plans)
 ```
+
+完整计划生成后才依次执行 Predictor、Safe-Set 和 DPP Selector；它们的输出
+不得反向改变本轮候选构造。
 
 ## 5. Predictor
 

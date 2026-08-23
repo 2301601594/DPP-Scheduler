@@ -8,8 +8,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
-from dpp_scheduler.contracts import BatchPlan, DecodeRequest, PrefillRequest, StateSnapshot
+
+from dpp_scheduler.contracts import (
+    BatchPlan,
+    DecodeRequest,
+    PrefillRequest,
+    StateSnapshot,
+)
 from dpp_scheduler.settings import SchedulerSettings
+
 
 def _oldest_due_recovery(snapshot: StateSnapshot) -> str | None:
     recovery_set = set(snapshot.recovery_requests)
@@ -112,28 +119,28 @@ def _mandatory_decode(
 def _bind_decode(
     profile: str,
     ordered: tuple[DecodeRequest, ...],
+    snapshot: StateSnapshot,
     settings: SchedulerSettings,
     oldest_due_recovery: str | None,
     recovery_set: set[str],
 ) -> tuple[str, ...]:
-    mandatory = _mandatory_decode(ordered, oldest_due_recovery)
+    mandatory = set(_mandatory_decode(ordered, oldest_due_recovery))
     if profile == "MANDATORY":
-        return tuple(mandatory)
-    if profile == "URGENT":
-        result = list(mandatory)
-        urgent_added = 0
-        for item in ordered:
-            if item.request_id in result:
-                continue
-            # URGENT means earliest live deadlines. A request without a TBT
-            # deadline, or already in Recovery, is not promoted arbitrarily.
-            if item.tbt_deadline is None or item.request_id in recovery_set:
-                continue
-            if urgent_added >= settings.urgent_limit_u:
-                break
-            result.append(item.request_id)
-            urgent_added += 1
-        return tuple(result)
+        return tuple(
+            item.request_id for item in ordered if item.request_id in mandatory
+        )
+    if profile == "CRITICAL":
+        selected = set(mandatory)
+        horizon = settings.critical_horizon_seconds
+        if horizon is not None:
+            for item in ordered:
+                if item.request_id in recovery_set or item.tbt_deadline is None:
+                    continue
+                if item.tbt_deadline - snapshot.timestamp <= horizon:
+                    selected.add(item.request_id)
+        return tuple(
+            item.request_id for item in ordered if item.request_id in selected
+        )
     if profile == "ALL":
         return tuple(item.request_id for item in ordered)
     raise ValueError(f"unknown decode profile: {profile}")
@@ -150,7 +157,10 @@ def _trim_decode_to_budget(
     kept as long as they individually fit; later items are trimmed from the end
     in ranked order.
     """
-    if len(decode_ids) <= snapshot.sequence_budget and len(decode_ids) <= snapshot.token_budget:
+    if (
+        len(decode_ids) <= snapshot.sequence_budget
+        and len(decode_ids) <= snapshot.token_budget
+    ):
         return decode_ids
 
     by_id = {item.request_id: item for item in ordered}
@@ -164,15 +174,59 @@ def _trim_decode_to_budget(
         # A profile that silently drops protected Decode work is not the same
         # action. Let later fallback/preemption ownership handle this state.
         return None
-    remaining = [rid for rid in decode_ids if rid not in mandatory_ids]
-    selected = list(mandatory_ids)
-    for rid in remaining:
-        if len(selected) + 1 > snapshot.sequence_budget:
+    selected = set(mandatory_ids)
+    for rid in decode_ids:
+        if rid in selected:
+            continue
+        if len(selected) >= limit:
             break
-        if len(selected) + 1 > snapshot.token_budget:
-            break
-        selected.append(rid)
-    return tuple(selected)
+        selected.add(rid)
+    return tuple(rid for rid in decode_ids if rid in selected)
+
+
+def _highest_bindable_prefill(
+    snapshot: StateSnapshot,
+    prefill_order: tuple[PrefillRequest, ...],
+) -> PrefillRequest | None:
+    running_prefill = sum(
+        request.is_running for request in snapshot.waiting_prefill_requests
+    )
+    active_sequences = len(snapshot.active_decode_requests) + running_prefill
+    new_sequence_slots = max(0, snapshot.sequence_budget - active_sequences)
+    for request in prefill_order:
+        if request.remaining_tokens <= 0:
+            continue
+        if request.is_running or new_sequence_slots > 0:
+            return request
+    return None
+
+
+def _prefill_breakpoints(
+    snapshot: StateSnapshot,
+    decode_count: int,
+    prefill_order: tuple[PrefillRequest, ...],
+    settings: SchedulerSettings,
+) -> tuple[tuple[str, int], ...]:
+    """Return snapshot-only seed caps in stable semantic order."""
+    breakpoints: list[tuple[str, int]] = [("ZERO", 0)]
+    visible_backlog = sum(request.remaining_tokens for request in prefill_order)
+    bindable_max = min(
+        max(0, snapshot.token_budget - decode_count),
+        visible_backlog,
+    )
+    if bindable_max <= 0:
+        return tuple(breakpoints)
+
+    highest = _highest_bindable_prefill(snapshot, prefill_order)
+    if highest is not None and highest.remaining_tokens <= bindable_max:
+        breakpoints.append(("FINISH", highest.remaining_tokens))
+
+    if settings.prefill_knee_tokens is not None:
+        breakpoints.append(
+            ("KNEE", min(settings.prefill_knee_tokens, bindable_max))
+        )
+    breakpoints.append(("BINDABLE_MAX", bindable_max))
+    return tuple(breakpoints)
 
 
 def _fill_prefill(
@@ -224,12 +278,9 @@ def _fill_prefill(
         else:
             if not settings.allow_partial_prefill:
                 continue
-            scheduled = max(
-                settings.minimum_prefill_chunk_tokens,
-                min(available, remaining),
-            )
-            # Do not exceed the remaining cap.
-            scheduled = min(scheduled, remaining_cap - scheduled_tokens)
+            if available < settings.minimum_prefill_chunk_tokens:
+                continue
+            scheduled = available
 
         if scheduled <= 0:
             break
@@ -306,23 +357,36 @@ class CandidateGenerator:
         self.settings = settings or SchedulerSettings.provisional()
 
     def generate(self, snapshot: StateSnapshot) -> tuple[BatchPlan, ...]:
+        if (
+            not snapshot.waiting_prefill_requests
+            and not snapshot.active_decode_requests
+        ):
+            return ()
+
         ordered_decode = _rank_decode(snapshot)
         ordered_prefill = _rank_prefill(snapshot)
         recovery_set = set(snapshot.recovery_requests)
         oldest_due = _oldest_due_recovery(snapshot)
 
         raw_plans: list[tuple[str, BatchPlan]] = []
-        profile_order = ("MANDATORY", "URGENT", "ALL")
-        cap_order = self.settings.prefill_caps
+        profile_order = self.settings.template_names
 
         for profile in profile_order:
             decode_ids = _bind_decode(
-                profile, ordered_decode, self.settings, oldest_due, recovery_set
+                profile,
+                ordered_decode,
+                snapshot,
+                self.settings,
+                oldest_due,
+                recovery_set,
             )
             decode_ids = _trim_decode_to_budget(decode_ids, snapshot, ordered_decode)
             if decode_ids is None:
                 continue
-            for cap in cap_order:
+            cap_order = _prefill_breakpoints(
+                snapshot, len(decode_ids), ordered_prefill, self.settings
+            )
+            for cap_source, cap in cap_order:
                 prefill_items = _fill_prefill(
                     snapshot, len(decode_ids), cap, ordered_prefill, self.settings
                 )
@@ -336,7 +400,7 @@ class CandidateGenerator:
                 projected_kv = project_kv_blocks(
                     snapshot, prefill_items, decode_ids
                 )
-                template_id = f"{profile}:cap_{cap}"
+                template_id = f"{profile}:{cap_source}:requested_{cap}"
                 plan = BatchPlan(
                     plan_id="",  # assigned after canonical dedup
                     snapshot_hash=snapshot.snapshot_hash,
@@ -359,6 +423,9 @@ class CandidateGenerator:
                     ),
                 )
                 raw_plans.append((template_id, plan))
+
+        if len(raw_plans) > self.settings.maximum_seed_candidates:
+            raise RuntimeError("Candidate Generator exceeded the 12-seed bound")
 
         return self._canonical_deduplicate(raw_plans)
 
@@ -385,4 +452,4 @@ class CandidateGenerator:
             result.append(
                 replace(plan, plan_id=f"plan-{index:03d}")
             )
-        return tuple(result[: self.settings.maximum_candidates])
+        return tuple(result)

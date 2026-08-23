@@ -147,18 +147,20 @@ contracts:
   tbt_completion_event: client_receives_consecutive_single_token_sse_chunks
 
 candidate_generator:
-  prefill_caps:
+  prefill_breakpoints:
     zero: 0
-    small: null
-    medium: null
-    large: null
-    source: same_configuration_dgx_profiling
+    finish: highest_priority_bindable_request_completion
+    knee_tokens: null
+    bindable_max: native_token_budget_and_visible_backlog
+    knee_source: same_configuration_dgx_profiling
   decode_profiles:
     - MANDATORY
-    - URGENT
+    - CRITICAL
     - ALL
-  urgent_limit_u: null
-  maximum_candidates_before_deduplication: 12
+  critical_horizon_seconds: null
+  critical_horizon_source: same_configuration_decode_only_profiling
+  parameters_frozen: false
+  maximum_seed_candidates: 12
   canonical_deduplication: true
   decode_order:
     - oldest_due_recovery

@@ -31,7 +31,7 @@ The validated raw iteration dataset is assembled by batch kind under
 `results/processed/qwen3_14b_dgx_spark/predictor_iteration_dataset_v1/`.
 The following are **not yet frozen** and remain later-gate inputs:
 
-- `C_tok`, `C_seq`, `b_s`, `b_m`, `b_l`, `u`, `H`, `R0`, Top-K,
+- `C_tok`, `C_seq`, Critical Horizon, Prefill knee, `H`, `R0`, Top-K,
   Recovery rules, `epsilon^F`, `epsilon^D`, and `V`; and
 - dataset split, feature schema, selected Predictor artifact, support domain,
   and residual calibration.
@@ -85,9 +85,11 @@ observing DPP test results.
 ### G2: Exact BatchPlan path
 
 Implement public immutable contracts and `snapshot_hash` validation. Generate
-`{0,b_s,b_m,b_l}` × `{MANDATORY,URGENT(u),ALL}`, canonically deduplicate, and
-use a deterministic temporary selector. Adapter execution is atomic: request
-IDs and token counts may not be reselected after the decision.
+`{ZERO,FINISH,KNEE,BINDABLE_MAX}` × `{MANDATORY,CRITICAL,ALL}`, canonically
+deduplicate, and use a deterministic temporary selector. `CRITICAL` uses only
+Snapshot slack and a frozen Critical Horizon; Predictor and Safe-Set run only
+after complete BatchPlans exist. Adapter execution is atomic: request IDs and
+token counts may not be reselected after the decision.
 
 ### G3: Predictor
 
