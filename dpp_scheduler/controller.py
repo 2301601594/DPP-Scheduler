@@ -8,14 +8,21 @@ feedback updates to later gates.
 from __future__ import annotations
 
 from dpp_scheduler.candidate_generator import CandidateGenerator
-from dpp_scheduler.consequence_estimator import NullConsequenceEstimator
+from dpp_scheduler.consequence_estimator import (
+    ConsequenceEstimator,
+    NullConsequenceEstimator,
+)
 from dpp_scheduler.contracts import (
     Decision,
     ExecutionObservation,
     validate_snapshot_hash,
 )
 from dpp_scheduler.observer import InMemoryObserver
-from dpp_scheduler.fallback import NullFallback
+from dpp_scheduler.fallback import (
+    DeterministicFallback,
+    NullFallback,
+    resolve_fallback,
+)
 from dpp_scheduler.predictor import DurationPredictor, NullDurationPredictor
 from dpp_scheduler.safe_set import PassThroughSafeSet, SafeSet
 from dpp_scheduler.dpp_selector import TemporarySelector
@@ -32,10 +39,12 @@ class Controller:
         *,
         generator: CandidateGenerator | None = None,
         predictor: DurationPredictor | None = None,
-        consequence_estimator: NullConsequenceEstimator | None = None,
+        consequence_estimator: (
+            ConsequenceEstimator | NullConsequenceEstimator | None
+        ) = None,
         safe_set: SafeSet | None = None,
         selector: TemporarySelector | None = None,
-        fallback: NullFallback | None = None,
+        fallback: DeterministicFallback | NullFallback | None = None,
         observer: InMemoryObserver | None = None,
         state_store: InMemoryStateStore | None = None,
     ) -> None:
@@ -62,11 +71,22 @@ class Controller:
         validate_snapshot_hash(safe_result.snapshot_hash, snapshot.snapshot_hash)
         safe_candidates = safe_result.safe_candidates
         if not safe_candidates:
-            fallback_plan = self.fallback.build(snapshot)
-            if fallback_plan is not None:
-                fallback_plan.validate_snapshot(snapshot)
-                safe_candidates = (fallback_plan,)
-        decision = self.selector.select(snapshot, safe_candidates)
+            fallback_result = resolve_fallback(
+                snapshot, self.fallback, self.predictor, self.safe_set
+            )
+            fallback_plan = (
+                fallback_result.plan
+                if not fallback_result.rejection_reasons
+                else None
+            )
+            decision = Decision(
+                frame_id=snapshot.frame_id,
+                snapshot_hash=snapshot.snapshot_hash,
+                selected_plan=fallback_plan,
+                reason=fallback_result.reason,
+            )
+        else:
+            decision = self.selector.select(snapshot, safe_candidates)
         validate_snapshot_hash(decision.snapshot_hash, snapshot.snapshot_hash)
 
         observation: ExecutionObservation | None = None

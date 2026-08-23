@@ -1,0 +1,167 @@
+{
+  "artifact_id": "candidate_parameter_freeze_v1",
+  "bootstrap_replicates": 2000,
+  "bootstrap_seed": 20260823,
+  "created_at_utc": "2026-08-23T12:54:30.705266+00:00",
+  "critical_horizon_seconds": null,
+  "git": {
+    "root": {
+      "commit": "f85ab0b17f8761a10ccf5b2768cffafbcc0a4963",
+      "dirty": true,
+      "status": [
+        " M benchmarks/qwen3_runtime.py",
+        " M benchmarks/run_targeted_predictor_profile.py",
+        " M benchmarks/targeted_predictor_profile.py",
+        " M configs/dgx_spark_experiment.yaml",
+        " M docs/experiment_plan.md",
+        " M dpp_scheduler/settings.py",
+        " M dpp_scheduler/targeted_profile.py",
+        " M tests/unit/test_targeted_predictor_profile.py",
+        "?? benchmarks/freeze_candidate_parameters.py",
+        "?? benchmarks/run_candidate_knee_profile_campaign.py",
+        "?? logs/",
+        "?? results/",
+        "?? scripts/candidate_knee_profile_campaign.sh",
+        "?? tests/unit/test_candidate_parameter_freeze.py",
+        "?? traces/manifest.json"
+      ]
+    },
+    "vllm": {
+      "commit": "83ad767eed3be3ee7f2df63be693bfaca5c7c922",
+      "dirty": false,
+      "status": []
+    }
+  },
+  "implementation_sha256": {
+    "benchmarks/freeze_candidate_parameters.py": "48957ccfd53838c547dca48b1a7d7ed4e72a00074e04eb4457a01f0cf4f796b8",
+    "benchmarks/run_candidate_knee_profile_campaign.py": "dfc02bdcae6cd8e8b4d3bae0f76bdee340739355c9cb5ce14c649b83f2eaa60a",
+    "benchmarks/run_targeted_predictor_profile.py": "a0f5a94e4aa6bacf5063e6b54eac31c39aafa33400e7b40e32dde2b3257d4893",
+    "dpp_scheduler/targeted_profile.py": "cde2e3f9a18a1868fda480b9efd041ab62660b1a20c0654bf66d35b0b29b89df",
+    "dpp_scheduler/vllm_adapter.py": "8684bae25fdbde8a9b962e7cd804811f887e69531850664fa0d96d6522c1bc7e",
+    "scripts/candidate_knee_profile_campaign.sh": "d6083060b0368b1dad483192c0fc61e49d45240c5fbbb830ee811d493b3ec487"
+  },
+  "official_timing_boundary": "vllm_official_after_execute_model_submission_through_model_result_and_sampling",
+  "parameters_frozen": false,
+  "predictor_training_use": "knee campaign is excluded from Predictor training",
+  "prefill_knee_tokens": null,
+  "reports": {
+    "horizon_report.json": "be5327593041372e66286dbe9ffd7352cfb8deb2f9a37900104ef07a663591bc",
+    "knee_report.json": "6d4ce6053c574eaffdc71ddc94c63d8714853177d1336edf47a320b04a7d9d06"
+  },
+  "runtime_signature": {
+    "chunked_prefill": true,
+    "dtype": "bfloat16",
+    "duration_timing_boundary": "vllm_official_after_execute_model_submission_through_model_result_and_sampling",
+    "engine": "vllm_v1",
+    "gpu_memory_utilization": 0.84,
+    "kv_block_size": 16,
+    "kv_cache_dtype": "bfloat16",
+    "max_model_len": 40960,
+    "model_name": "Qwen3-14B",
+    "model_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+    "model_snapshot_sha256": "f48a9e0e58bd23f01869ef5706f5dfe9c6a0f0b21b20cdc54e1745af15c30841",
+    "prefix_caching": false,
+    "sequence_budget": 64,
+    "speculative_decoding": false,
+    "token_budget": 2048,
+    "tokenizer_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+    "usable_kv_blocks": 30149,
+    "vllm_commit": "83ad767eed3be3ee7f2df63be693bfaca5c7c922"
+  },
+  "runtime_signature_sha256": "826d7ab93de1cd5353647e711c70ac11891affbf26aada65ab2bea7cdf63c251",
+  "schema_version": 1,
+  "seed_count": 1,
+  "single_seed_limitation": "Knee uses one seed; no cross-seed stability claim",
+  "source": {
+    "campaign_manifest_sha256": "db0fe736d882e00d9faa93ec2cf5f896747075ccbab0f095b111e57a7134d5b1",
+    "checkpoint_sha256": "582123d07befc15db006d2da91637938029eca393e1de28f48e4246f1902107b",
+    "config_sha256": "ac01fc682d50d40200b81ddf439ee36c24f251e68c222fcb73b8402d82009b53",
+    "git": {
+      "root": {
+        "commit": "f85ab0b17f8761a10ccf5b2768cffafbcc0a4963",
+        "dirty": true,
+        "status": [
+          " M benchmarks/qwen3_runtime.py",
+          " M benchmarks/run_targeted_predictor_profile.py",
+          " M benchmarks/targeted_predictor_profile.py",
+          " M configs/dgx_spark_experiment.yaml",
+          " M docs/experiment_plan.md",
+          " M dpp_scheduler/settings.py",
+          " M dpp_scheduler/targeted_profile.py",
+          " M tests/unit/test_targeted_predictor_profile.py",
+          "?? benchmarks/freeze_candidate_parameters.py",
+          "?? benchmarks/run_candidate_knee_profile_campaign.py",
+          "?? logs/",
+          "?? scripts/candidate_knee_profile_campaign.sh",
+          "?? tests/unit/test_candidate_parameter_freeze.py",
+          "?? traces/manifest.json"
+        ]
+      },
+      "vllm": {
+        "commit": "83ad767eed3be3ee7f2df63be693bfaca5c7c922",
+        "dirty": false,
+        "status": []
+      }
+    },
+    "horizon_allowed_seeds": [
+      1001,
+      1003,
+      1005,
+      1007,
+      1009,
+      1011
+    ],
+    "horizon_dataset_id": "predictor_iteration_dataset_v1",
+    "horizon_dataset_manifest_sha256": "6a7aff4a19d06d42db4bd70c3c2810be1d91a6f5b309cf4833178fb4d98e01cb",
+    "horizon_decode_file_sha256": "c292e3addb7d2e0955048fe1048911d1f94513217339d92e3b12196ba9cbab27",
+    "horizon_run_ids": [
+      "qps_0p25_seed_1003_attempt_01",
+      "qps_0p2_seed_1001_attempt_01",
+      "qps_0p3_seed_1005_attempt_01",
+      "qps_0p5_seed_1007_attempt_01",
+      "qps_1p0_seed_1009_attempt_01",
+      "qps_2p0_seed_1011_attempt_01"
+    ],
+    "iteration_profile_sha256": "8af970888a60c5d4ed82ef27576e0d11aab62d678dc4ab7a9f16711a5e4074f2",
+    "knee_campaign_id": "candidate_knee_profile_n500_v1",
+    "run_id": "source_qps_0p2_seed_1001_recipe_3001_attempt_01",
+    "run_manifest_sha256": "6e0bc7f69420a1898959dd114c622b9e98d441d6225f9314e27992db748b8960",
+    "validation": {
+      "campaign_id": "candidate_knee_profile_n500_v1",
+      "request_count_per_run": 500,
+      "schema_version": 1,
+      "target_batch_kind_counts": {
+        "prefill_only": 480
+      },
+      "target_rows": 480,
+      "total_requests": 500,
+      "valid": true,
+      "valid_runs": 1
+    }
+  },
+  "statistical_rules": {
+    "horizon": {
+      "context_buckets": "within-count quartiles",
+      "decode_count_bins": [
+        "1",
+        "2-8",
+        "9-16",
+        "17-32",
+        "33-64"
+      ],
+      "minimum_rows_per_bucket": 200,
+      "minimum_runs_per_bucket": 2,
+      "p95_quantile_method": "higher",
+      "rounding": "ceil_to_1ms",
+      "ucb": "one-sided 95% stratified bootstrap"
+    },
+    "knee": {
+      "interpolation": false,
+      "maximum_later_gain": 0.05,
+      "minimum_exact_repeats": 4,
+      "normalized_efficiency_lcb_minimum": 0.9,
+      "repeats_per_cell": 5
+    }
+  },
+  "status": "ineligible"
+}

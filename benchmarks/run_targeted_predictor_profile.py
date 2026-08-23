@@ -42,8 +42,14 @@ from benchmarks.run_stock_natural_eos import (
     summarize,
     verify_trace_manifest,
 )
-from benchmarks.targeted_predictor_profile import validate_target_rows
+from benchmarks.targeted_predictor_profile import (
+    validate_reused_stock_trace,
+    validate_target_rows,
+)
 from dpp_scheduler.targeted_profile import (
+    KNEE_CAMPAIGN_ID,
+    KNEE_REQUEST_COUNT,
+    KNEE_SMOKE_CAMPAIGN_ID,
     TARGET_CAMPAIGN_ID,
     TARGET_REQUEST_COUNT,
     TARGET_REQUEST_TIMEOUT_SECONDS,
@@ -130,7 +136,11 @@ def main() -> int:
     parser.add_argument("--source-seed", type=int, required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--recipe-seed", type=int, required=True)
-    parser.add_argument("--recipe-mode", choices=("formal", "smoke"), default="formal")
+    parser.add_argument(
+        "--recipe-mode",
+        choices=("formal", "smoke", "knee", "knee_smoke"),
+        default="formal",
+    )
     parser.add_argument("--request-count", type=int, default=TARGET_REQUEST_COUNT)
     parser.add_argument("--dispatch-interval", type=float, default=0.002)
     parser.add_argument("--port", type=int, default=8010)
@@ -150,11 +160,12 @@ def main() -> int:
     ):
         if not RUN_ID_PATTERN.fullmatch(value):
             raise ActiveConfigError(f"invalid {label}: {value!r}")
-    expected_campaign_id = (
-        TARGET_SMOKE_CAMPAIGN_ID
-        if args.recipe_mode == "smoke"
-        else TARGET_CAMPAIGN_ID
-    )
+    expected_campaign_id = {
+        "formal": TARGET_CAMPAIGN_ID,
+        "smoke": TARGET_SMOKE_CAMPAIGN_ID,
+        "knee": KNEE_CAMPAIGN_ID,
+        "knee_smoke": KNEE_SMOKE_CAMPAIGN_ID,
+    }[args.recipe_mode]
     if args.campaign_id != expected_campaign_id:
         raise ActiveConfigError(
             f"{args.recipe_mode} targeted profiling requires campaign "
@@ -186,9 +197,21 @@ def main() -> int:
         campaign_root, Path("runs") / args.run_id, label="target run output"
     )
     source_rows = load_trace(trace_path, runtime)
-    source_manifest = verify_trace_manifest(
-        trace_path, trace_manifest_path, runtime
-    )
+    if args.recipe_mode in {"knee", "knee_smoke"}:
+        validate_reused_stock_trace(
+            trace_path,
+            trace_manifest_path,
+            runtime,
+            source_qps=args.source_qps,
+            source_seed=args.source_seed,
+            expected_request_count=KNEE_REQUEST_COUNT,
+        )
+        with trace_manifest_path.open("r", encoding="utf-8") as stream:
+            source_manifest = json.load(stream)
+    else:
+        source_manifest = verify_trace_manifest(
+            trace_path, trace_manifest_path, runtime
+        )
     _verify_source_trace(
         source_manifest,
         trace_name=trace_path.name,

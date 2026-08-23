@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, fields, is_dataclass
 from typing import Any, TypeVar
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 T = TypeVar("T")
 
@@ -234,6 +234,14 @@ class Prediction:
     conservative_duration: float | None
     in_support: bool
     predictor_version: str | None = None
+    ttft_success: int | None = None
+    ttft_miss: int | None = None
+    tbt_success: int | None = None
+    tbt_miss: int | None = None
+    predicted_violation_count: int | None = None
+    predicted_total_lateness_seconds: float | None = None
+    conservative_deadline_margin_seconds: float | None = None
+    service_utility: float | None = None
     schema_version: int = SCHEMA_VERSION
 
 
@@ -249,12 +257,37 @@ class ControlState:
 
 
 @dataclass(frozen=True)
-class SafeSetResult:
-    """Result container reserved for G4; G2 may pass all candidates through."""
+class SafeCandidate:
+    """A resource-feasible plan bound to its prediction and SLO risk."""
 
     snapshot_hash: str
-    safe_candidates: tuple[BatchPlan, ...]
+    plan: BatchPlan
+    prediction: Prediction
+    predicted_violation_count: int
+    predicted_total_lateness_seconds: float
+    conservative_deadline_margin_seconds: float | None
+    schema_version: int = SCHEMA_VERSION
+
+
+@dataclass(frozen=True)
+class SafeSetResult:
+    """Safe candidates and deterministic per-plan rejection reasons."""
+
+    snapshot_hash: str
+    safe_candidates: tuple[SafeCandidate, ...]
     rejected: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    schema_version: int = SCHEMA_VERSION
+
+
+@dataclass(frozen=True)
+class FallbackResult:
+    """Controller-owned fallback construction and hard-admission outcome."""
+
+    snapshot_hash: str
+    plan: BatchPlan | None
+    prediction: Prediction | None
+    reason: str
+    rejection_reasons: tuple[str, ...] = ()
     schema_version: int = SCHEMA_VERSION
 
 

@@ -3,10 +3,15 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 
 from benchmarks.run_targeted_predictor_profile import _prepare_controlled_rows
-from benchmarks.targeted_predictor_profile import validate_target_rows
+from benchmarks.targeted_predictor_profile import (
+    validate_reused_stock_trace,
+    validate_target_rows,
+)
 from dpp_scheduler.contracts import DecodeRequest, PrefillRequest, StateSnapshot
 from dpp_scheduler.targeted_profile import (
     TARGET_CAMPAIGN_MATRIX,
@@ -41,6 +46,69 @@ def make_snapshot(
 
 
 class TargetRecipeTests(unittest.TestCase):
+    def test_knee_trace_reuse_allows_only_stale_whole_config_hash(self) -> None:
+        runtime = SimpleNamespace(
+            model_revision="model-revision",
+            tokenizer_revision="tokenizer-revision",
+            client_safety_ceiling_tokens=2048,
+            ignore_eos=False,
+            temperature=0.0,
+            top_p=1.0,
+            seed_source="per_request_trace",
+            config_sha256="current-config",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trace = root / "qps_0.2_seed_1001.jsonl"
+            trace.write_text("{}\n", encoding="utf-8")
+            manifest = {
+                "kind": "qwen3_14b_poisson_length_blind_traces",
+                "model_revision": runtime.model_revision,
+                "tokenizer_revision": runtime.tokenizer_revision,
+                "client_safety_ceiling_tokens": 2048,
+                "client_safety_ceiling_role": (
+                    "termination_guard_only_never_scheduler_input"
+                ),
+                "predetermined_output_length": False,
+                "ignore_eos": False,
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "seed_source": "per_request_trace",
+                "num_requests_per_trace": 500,
+                "config_sha256": "old-config",
+                "files": [
+                    {
+                        "file": trace.name,
+                        "requested_qps": 0.2,
+                        "seed": 1001,
+                        "num_requests": 500,
+                        "sha256": sha256(trace.read_bytes()).hexdigest(),
+                    }
+                ],
+            }
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = validate_reused_stock_trace(
+                trace,
+                manifest_path,
+                runtime,
+                source_qps=0.2,
+                source_seed=1001,
+                expected_request_count=500,
+            )
+            self.assertTrue(result["config_hash_mismatch_allowed"])
+            manifest["model_revision"] = "wrong-model"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "model_revision mismatch"):
+                validate_reused_stock_trace(
+                    trace,
+                    manifest_path,
+                    runtime,
+                    source_qps=0.2,
+                    source_seed=1001,
+                    expected_request_count=500,
+                )
+
     def test_formal_matrix_has_two_runs_and_expected_target_counts(self) -> None:
         self.assertEqual(len(TARGET_CAMPAIGN_MATRIX), 2)
         recipes = build_target_recipes(2001)

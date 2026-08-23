@@ -1,0 +1,1468 @@
+{
+  "analysis": "prefill_knee",
+  "bootstrap": {
+    "method": "within-cell row resampling",
+    "one_sided_lcb_quantile": 0.05,
+    "quantile_method": "lower",
+    "replicates": 2000,
+    "seed": 20260823
+  },
+  "caps": [
+    256,
+    384,
+    512,
+    768,
+    1024,
+    1280,
+    1536,
+    2048
+  ],
+  "caps_summary": [],
+  "cells": [
+    {
+      "eligible": true,
+      "exact_count": 5,
+      "median_efficiency_tokens_per_second": 1634.3207354443311,
+      "prefill_token_cap": 256,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2117.452440033085,
+      "prefill_token_cap": 384,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 5,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2276.6685935346172,
+      "prefill_token_cap": 512,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2565.7894736842104,
+      "prefill_token_cap": 768,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2587.949858471492,
+      "prefill_token_cap": 1024,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2223.8437749748077,
+      "prefill_token_cap": 1280,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 1,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 1163.438762714226,
+      "prefill_token_cap": 1536,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2400.07153715461,
+      "prefill_token_cap": 2048,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 4,
+      "median_efficiency_tokens_per_second": 1630.3655585275758,
+      "prefill_token_cap": 256,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 1817.5359658989994,
+      "prefill_token_cap": 384,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2265.286257853287,
+      "prefill_token_cap": 512,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 5,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2586.032729476732,
+      "prefill_token_cap": 768,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 1714.7739061451148,
+      "prefill_token_cap": 1024,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2282.982859792748,
+      "prefill_token_cap": 1280,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2594.651840084723,
+      "prefill_token_cap": 1536,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 1003.3684512291264,
+      "prefill_token_cap": 2048,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 1576.3546798029556,
+      "prefill_token_cap": 256,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2118.854494289025,
+      "prefill_token_cap": 384,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2203.7618904144965,
+      "prefill_token_cap": 512,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 2015.8102766798418,
+      "prefill_token_cap": 768,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 2034.6562325321408,
+      "prefill_token_cap": 1024,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 1862.5827814569536,
+      "prefill_token_cap": 1280,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2435.4278647195924,
+      "prefill_token_cap": 1536,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 1,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 1086.5705560684612,
+      "prefill_token_cap": 2048,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 4,
+      "median_efficiency_tokens_per_second": 1614.327153487199,
+      "prefill_token_cap": 256,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2102.8166675889547,
+      "prefill_token_cap": 384,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 1,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 4,
+      "median_efficiency_tokens_per_second": 2213.7668626772743,
+      "prefill_token_cap": 512,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2472.8212439850295,
+      "prefill_token_cap": 768,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 1,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 982.4309788454644,
+      "prefill_token_cap": 1024,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2301.7442905952166,
+      "prefill_token_cap": 1280,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 2629.401820078415,
+      "prefill_token_cap": 1536,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 1,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 2664.85880420328,
+      "prefill_token_cap": 2048,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 1,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 1650.0161134386076,
+      "prefill_token_cap": 256,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 4,
+      "median_efficiency_tokens_per_second": 2119.907254057635,
+      "prefill_token_cap": 384,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 1532.79006596818,
+      "prefill_token_cap": 512,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 1533.961650958726,
+      "prefill_token_cap": 768,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2426.1603375527425,
+      "prefill_token_cap": 1024,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2424.790771318706,
+      "prefill_token_cap": 1280,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 1293.9001848428834,
+      "prefill_token_cap": 1536,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 2518.773728487565,
+      "prefill_token_cap": 2048,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 5,
+      "median_efficiency_tokens_per_second": 1668.622083170382,
+      "prefill_token_cap": 256,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 4,
+      "median_efficiency_tokens_per_second": 2114.4210120588073,
+      "prefill_token_cap": 384,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 4,
+      "median_efficiency_tokens_per_second": 2260.7850929482934,
+      "prefill_token_cap": 512,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2522.6476228261586,
+      "prefill_token_cap": 768,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2649.075151985513,
+      "prefill_token_cap": 1024,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2300.585930479169,
+      "prefill_token_cap": 1280,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 4,
+      "median_efficiency_tokens_per_second": 2618.2115705860297,
+      "prefill_token_cap": 1536,
+      "realized_request_count_median": 4.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2705.4285065933786,
+      "prefill_token_cap": 2048,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 1624.0563344541015,
+      "prefill_token_cap": 256,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 4,
+      "median_efficiency_tokens_per_second": 2098.4753265205745,
+      "prefill_token_cap": 384,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 4,
+      "median_efficiency_tokens_per_second": 2279.1008235032273,
+      "prefill_token_cap": 512,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2648.0932349493137,
+      "prefill_token_cap": 768,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2504.3384596972055,
+      "prefill_token_cap": 1024,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 1963.1205673758866,
+      "prefill_token_cap": 1280,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2581.9031450135317,
+      "prefill_token_cap": 1536,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 1,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2743.763564749069,
+      "prefill_token_cap": 2048,
+      "realized_request_count_median": 4.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 1636.8286445012786,
+      "prefill_token_cap": 256,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 0,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 1955.6714471968708,
+      "prefill_token_cap": 384,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2212.8100959460626,
+      "prefill_token_cap": 512,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 1,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 1228.5181862102286,
+      "prefill_token_cap": 768,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2411.314630187804,
+      "prefill_token_cap": 1024,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 1,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2425.511495005017,
+      "prefill_token_cap": 1280,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2591.5740100221024,
+      "prefill_token_cap": 1536,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 0,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 2587.8112040795395,
+      "prefill_token_cap": 2048,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 4,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 5,
+      "median_efficiency_tokens_per_second": 1638.295149110457,
+      "prefill_token_cap": 256,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 1189.4995898277275,
+      "prefill_token_cap": 384,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2250.2527139278336,
+      "prefill_token_cap": 512,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2718.872800651396,
+      "prefill_token_cap": 768,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2548.214507900958,
+      "prefill_token_cap": 1024,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2276.7262063449743,
+      "prefill_token_cap": 1280,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 5,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 1117.514759628901,
+      "prefill_token_cap": 1536,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 1503.0774214447686,
+      "prefill_token_cap": 2048,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 1586.8886576482832,
+      "prefill_token_cap": 256,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2110.469909315746,
+      "prefill_token_cap": 384,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 4,
+      "median_efficiency_tokens_per_second": 2202.05582555589,
+      "prefill_token_cap": 512,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 1838.3850136715344,
+      "prefill_token_cap": 768,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 1253.7653667670766,
+      "prefill_token_cap": 1024,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 4,
+      "median_efficiency_tokens_per_second": 2302.779526850769,
+      "prefill_token_cap": 1280,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2537.147102526003,
+      "prefill_token_cap": 1536,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2505.8797651477976,
+      "prefill_token_cap": 2048,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "fresh"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 5,
+      "median_efficiency_tokens_per_second": 1635.1558507920286,
+      "prefill_token_cap": 256,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 1,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2036.5950676213204,
+      "prefill_token_cap": 384,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2265.887767746504,
+      "prefill_token_cap": 512,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2309.480243311409,
+      "prefill_token_cap": 768,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2622.2791293213827,
+      "prefill_token_cap": 1024,
+      "realized_request_count_median": 8.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2308.0945597489945,
+      "prefill_token_cap": 1280,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2545.617262467061,
+      "prefill_token_cap": 1536,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 1562.9087104368298,
+      "prefill_token_cap": 2048,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 0,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "balanced",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 1552.3618943666243,
+      "prefill_token_cap": 256,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": true,
+      "exact_count": 5,
+      "median_efficiency_tokens_per_second": 2125.304405578924,
+      "prefill_token_cap": 384,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2252.8270339244073,
+      "prefill_token_cap": 512,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2514.8767356191556,
+      "prefill_token_cap": 768,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 4,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 2,
+      "median_efficiency_tokens_per_second": 2463.165506643768,
+      "prefill_token_cap": 1024,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 3,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 3,
+      "median_efficiency_tokens_per_second": 2300.875411191602,
+      "prefill_token_cap": 1280,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 1,
+      "median_efficiency_tokens_per_second": 2570.8012562185595,
+      "prefill_token_cap": 1536,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 1,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    },
+    {
+      "eligible": false,
+      "exact_count": 0,
+      "median_efficiency_tokens_per_second": 2356.3991431275845,
+      "prefill_token_cap": 2048,
+      "realized_request_count_median": 1.0,
+      "requested_state_match_count": 2,
+      "row_count": 5,
+      "shape": {
+        "prefill_distribution": "skewed",
+        "prefill_request_cap": 8,
+        "prefill_state": "partial"
+      }
+    }
+  ],
+  "efficiency": "realized_prefill_tokens / actual_duration_seconds",
+  "eligible": false,
+  "failures": [
+    "shape=(1, 'fresh', 'balanced'), cap=384: rows=5, exact=3",
+    "shape=(1, 'fresh', 'balanced'), cap=512: rows=5, exact=3",
+    "shape=(1, 'fresh', 'balanced'), cap=768: rows=5, exact=2",
+    "shape=(1, 'fresh', 'balanced'), cap=1024: rows=5, exact=3",
+    "shape=(1, 'fresh', 'balanced'), cap=1280: rows=5, exact=2",
+    "shape=(1, 'fresh', 'balanced'), cap=1536: rows=5, exact=0",
+    "shape=(1, 'fresh', 'balanced'), cap=2048: rows=5, exact=2",
+    "shape=(1, 'fresh', 'skewed'), cap=384: rows=5, exact=2",
+    "shape=(1, 'fresh', 'skewed'), cap=512: rows=5, exact=3",
+    "shape=(1, 'fresh', 'skewed'), cap=768: rows=5, exact=3",
+    "shape=(1, 'fresh', 'skewed'), cap=1024: rows=5, exact=1",
+    "shape=(1, 'fresh', 'skewed'), cap=1280: rows=5, exact=2",
+    "shape=(1, 'fresh', 'skewed'), cap=1536: rows=5, exact=1",
+    "shape=(1, 'fresh', 'skewed'), cap=2048: rows=5, exact=0",
+    "shape=(1, 'partial', 'balanced'), cap=256: rows=5, exact=3",
+    "shape=(1, 'partial', 'balanced'), cap=384: rows=5, exact=3",
+    "shape=(1, 'partial', 'balanced'), cap=512: rows=5, exact=3",
+    "shape=(1, 'partial', 'balanced'), cap=768: rows=5, exact=0",
+    "shape=(1, 'partial', 'balanced'), cap=1024: rows=5, exact=0",
+    "shape=(1, 'partial', 'balanced'), cap=1280: rows=5, exact=0",
+    "shape=(1, 'partial', 'balanced'), cap=1536: rows=5, exact=2",
+    "shape=(1, 'partial', 'balanced'), cap=2048: rows=5, exact=0",
+    "shape=(1, 'partial', 'skewed'), cap=384: rows=5, exact=1",
+    "shape=(1, 'partial', 'skewed'), cap=768: rows=5, exact=2",
+    "shape=(1, 'partial', 'skewed'), cap=1024: rows=5, exact=0",
+    "shape=(1, 'partial', 'skewed'), cap=1280: rows=5, exact=1",
+    "shape=(1, 'partial', 'skewed'), cap=1536: rows=5, exact=0",
+    "shape=(1, 'partial', 'skewed'), cap=2048: rows=5, exact=0",
+    "shape=(4, 'fresh', 'balanced'), cap=256: rows=5, exact=3",
+    "shape=(4, 'fresh', 'balanced'), cap=512: rows=5, exact=2",
+    "shape=(4, 'fresh', 'balanced'), cap=768: rows=5, exact=0",
+    "shape=(4, 'fresh', 'balanced'), cap=1024: rows=5, exact=2",
+    "shape=(4, 'fresh', 'balanced'), cap=1280: rows=5, exact=1",
+    "shape=(4, 'fresh', 'balanced'), cap=1536: rows=5, exact=1",
+    "shape=(4, 'fresh', 'balanced'), cap=2048: rows=5, exact=0",
+    "shape=(4, 'fresh', 'skewed'), cap=768: rows=5, exact=2",
+    "shape=(4, 'fresh', 'skewed'), cap=1024: rows=5, exact=3",
+    "shape=(4, 'fresh', 'skewed'), cap=1280: rows=5, exact=1",
+    "shape=(4, 'fresh', 'skewed'), cap=2048: rows=5, exact=2",
+    "shape=(4, 'partial', 'balanced'), cap=256: rows=5, exact=3",
+    "shape=(4, 'partial', 'balanced'), cap=768: rows=5, exact=3",
+    "shape=(4, 'partial', 'balanced'), cap=1024: rows=5, exact=1",
+    "shape=(4, 'partial', 'balanced'), cap=1280: rows=5, exact=1",
+    "shape=(4, 'partial', 'balanced'), cap=1536: rows=5, exact=1",
+    "shape=(4, 'partial', 'balanced'), cap=2048: rows=5, exact=3",
+    "shape=(4, 'partial', 'skewed'), cap=256: rows=5, exact=3",
+    "shape=(4, 'partial', 'skewed'), cap=384: rows=5, exact=1",
+    "shape=(4, 'partial', 'skewed'), cap=512: rows=5, exact=3",
+    "shape=(4, 'partial', 'skewed'), cap=768: rows=5, exact=1",
+    "shape=(4, 'partial', 'skewed'), cap=1024: rows=5, exact=1",
+    "shape=(4, 'partial', 'skewed'), cap=1280: rows=5, exact=1",
+    "shape=(4, 'partial', 'skewed'), cap=1536: rows=5, exact=1",
+    "shape=(4, 'partial', 'skewed'), cap=2048: rows=5, exact=0",
+    "shape=(8, 'fresh', 'balanced'), cap=384: rows=5, exact=1",
+    "shape=(8, 'fresh', 'balanced'), cap=512: rows=5, exact=3",
+    "shape=(8, 'fresh', 'balanced'), cap=768: rows=5, exact=3",
+    "shape=(8, 'fresh', 'balanced'), cap=1024: rows=5, exact=2",
+    "shape=(8, 'fresh', 'balanced'), cap=1280: rows=5, exact=1",
+    "shape=(8, 'fresh', 'balanced'), cap=1536: rows=5, exact=0",
+    "shape=(8, 'fresh', 'balanced'), cap=2048: rows=5, exact=1",
+    "shape=(8, 'fresh', 'skewed'), cap=256: rows=5, exact=3",
+    "shape=(8, 'fresh', 'skewed'), cap=384: rows=5, exact=3",
+    "shape=(8, 'fresh', 'skewed'), cap=768: rows=5, exact=1",
+    "shape=(8, 'fresh', 'skewed'), cap=1024: rows=5, exact=0",
+    "shape=(8, 'fresh', 'skewed'), cap=1536: rows=5, exact=1",
+    "shape=(8, 'fresh', 'skewed'), cap=2048: rows=5, exact=1",
+    "shape=(8, 'partial', 'balanced'), cap=384: rows=5, exact=3",
+    "shape=(8, 'partial', 'balanced'), cap=512: rows=5, exact=3",
+    "shape=(8, 'partial', 'balanced'), cap=768: rows=5, exact=2",
+    "shape=(8, 'partial', 'balanced'), cap=1024: rows=5, exact=3",
+    "shape=(8, 'partial', 'balanced'), cap=1280: rows=5, exact=2",
+    "shape=(8, 'partial', 'balanced'), cap=1536: rows=5, exact=2",
+    "shape=(8, 'partial', 'balanced'), cap=2048: rows=5, exact=0",
+    "shape=(8, 'partial', 'skewed'), cap=256: rows=5, exact=3",
+    "shape=(8, 'partial', 'skewed'), cap=512: rows=5, exact=3",
+    "shape=(8, 'partial', 'skewed'), cap=768: rows=5, exact=2",
+    "shape=(8, 'partial', 'skewed'), cap=1024: rows=5, exact=2",
+    "shape=(8, 'partial', 'skewed'), cap=1280: rows=5, exact=3",
+    "shape=(8, 'partial', 'skewed'), cap=1536: rows=5, exact=1",
+    "shape=(8, 'partial', 'skewed'), cap=2048: rows=5, exact=0"
+  ],
+  "knee_tokens": null,
+  "minimum_exact_repeats": 4,
+  "qps_role": "source trace reuse and audit only; not an analysis input",
+  "recipe_seed": 3001,
+  "repeats_per_cell": 5,
+  "schema_version": 1,
+  "seed_count": 1,
+  "selection": {
+    "interpolation": false,
+    "maximum_later_gain": 0.05,
+    "minimum_normalized_efficiency_lcb": 0.9
+  },
+  "shape_count": 12,
+  "single_seed_limitation": "no cross-seed stability claim",
+  "source_campaign_id": "candidate_knee_profile_n500_v1",
+  "source_seed": 1001,
+  "target_row_count": 480
+}

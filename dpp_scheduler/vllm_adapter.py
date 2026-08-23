@@ -22,6 +22,7 @@ from typing import Any
 from dpp_scheduler.contracts import (
     BatchPlan,
     DecodeRequest,
+    Decision,
     ExecutionObservation,
     PrefillRequest,
     StateSnapshot,
@@ -31,6 +32,7 @@ from dpp_scheduler.candidate_generator import (
     project_kv_blocks,
     project_sequence_count,
 )
+from dpp_scheduler.state_store import ObligationLedger
 
 
 STOCK_PROFILE_PATH_ENV = "DPP_STOCK_PROFILE_PATH"
@@ -39,6 +41,11 @@ TARGET_PROFILE_PATH_ENV = "DPP_TARGET_PROFILE_PATH"
 TARGET_PROFILE_RUN_ID_ENV = "DPP_TARGET_PROFILE_RUN_ID"
 TARGET_PROFILE_RECIPE_SEED_ENV = "DPP_TARGET_PROFILE_RECIPE_SEED"
 TARGET_PROFILE_RECIPE_MODE_ENV = "DPP_TARGET_PROFILE_RECIPE_MODE"
+ISOLATED_PROFILE_PATH_ENV = "DPP_ISOLATED_PROFILE_PATH"
+ISOLATED_PROFILE_EVENT_PATH_ENV = "DPP_ISOLATED_PROFILE_EVENT_PATH"
+ISOLATED_PROFILE_RUN_ID_ENV = "DPP_ISOLATED_PROFILE_RUN_ID"
+ISOLATED_PROFILE_RECIPE_SEED_ENV = "DPP_ISOLATED_PROFILE_RECIPE_SEED"
+ISOLATED_PROFILE_RECIPE_MODE_ENV = "DPP_ISOLATED_PROFILE_RECIPE_MODE"
 PREDICTOR_EVAL_PATH_ENV = "DPP_PREDICTOR_EVAL_PATH"
 PREDICTOR_EVAL_RUN_ID_ENV = "DPP_PREDICTOR_EVAL_RUN_ID"
 PREDICTOR_ARTIFACT_PATH_ENV = "DPP_PREDICTOR_ARTIFACT_PATH"
@@ -357,11 +364,20 @@ class VllmAdapter(ExactPlanAdapter):
     only needs the simple prefill/decode path.
     """
 
-    def __init__(self, scheduler: Any, *, frame_start: int = 1) -> None:
+    def __init__(
+        self,
+        scheduler: Any,
+        *,
+        frame_start: int = 1,
+        obligation_ledger: ObligationLedger | None = None,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
         self._scheduler = scheduler
         self._frame = frame_start
         self._last_snapshot: StateSnapshot | None = None
         self._poisoned = False
+        self._obligation_ledger = obligation_ledger
+        self._clock = clock
 
     def make_snapshot(self) -> StateSnapshot:
         scheduler = self._require_scheduler()
@@ -374,7 +390,14 @@ class VllmAdapter(ExactPlanAdapter):
         sequence_budget = scheduler.max_num_running_reqs
         frame_id = self._frame
         self._frame += 1
-        now = time.time()
+        now = self._clock()
+
+        ledger_views = {}
+        if self._obligation_ledger is not None:
+            for request_id in requests:
+                ledger_views[request_id] = self._obligation_ledger.request_view(
+                    request_id, now
+                )
 
         waiting: list[PrefillRequest] = []
         decode: list[DecodeRequest] = []
@@ -384,22 +407,41 @@ class VllmAdapter(ExactPlanAdapter):
             if str(request.status) != "RUNNING":
                 raise RuntimeError("running queue contains a non-RUNNING request")
             if request.num_computed_tokens < request.num_prompt_tokens:
+                ledger_view = ledger_views.get(request.request_id)
                 waiting.append(
                     PrefillRequest(
                         request_id=request.request_id,
                         arrival_time=request.arrival_time,
                         token_count=request.num_prompt_tokens,
                         prefilled_tokens=request.num_computed_tokens,
+                        ttft_deadline=(
+                            ledger_view.ttft_deadline if ledger_view else None
+                        ),
                         is_running=True,
                         ordinal=ordinal,
                     )
                 )
             else:
+                ledger_view = ledger_views.get(request.request_id)
                 decode.append(
                     DecodeRequest(
                         request_id=request.request_id,
                         arrival_time=request.arrival_time,
                         kv_context_length=request.num_computed_tokens,
+                        tbt_deadline=(
+                            ledger_view.tbt_deadline if ledger_view else None
+                        ),
+                        recovery_due=(
+                            ledger_view.recovery_due if ledger_view else False
+                        ),
+                        recovery_first_miss_time=(
+                            ledger_view.recovery_first_miss_time
+                            if ledger_view
+                            else None
+                        ),
+                        mandatory=(
+                            ledger_view.recovery_due if ledger_view else False
+                        ),
                         ordinal=ordinal,
                     )
                 )
@@ -419,12 +461,16 @@ class VllmAdapter(ExactPlanAdapter):
                 raise RuntimeError(
                     "non-plain waiting/preempted requests require the G4 Recovery path"
                 )
+            ledger_view = ledger_views.get(request.request_id)
             waiting.append(
                 PrefillRequest(
                     request_id=request.request_id,
                     arrival_time=request.arrival_time,
                     token_count=request.num_prompt_tokens,
                     prefilled_tokens=0,
+                    ttft_deadline=(
+                        ledger_view.ttft_deadline if ledger_view else None
+                    ),
                     is_running=False,
                     ordinal=ordinal,
                 )
@@ -433,15 +479,28 @@ class VllmAdapter(ExactPlanAdapter):
 
         free_blocks = block_pool.get_num_free_blocks()
         total_blocks = block_pool.num_gpu_blocks
+        active_ttft = ()
+        active_tbt = ()
+        recovery_requests = ()
+        if self._obligation_ledger is not None:
+            live_ids = set(requests)
+            active_ttft, active_tbt = self._obligation_ledger.active_obligations(
+                live_ids
+            )
+            recovery_requests = tuple(
+                request_id
+                for request_id in sorted(live_ids)
+                if ledger_views[request_id].recovery
+            )
 
         snapshot = StateSnapshot.create(
             frame_id=frame_id,
             timestamp=now,
             waiting_prefill_requests=tuple(waiting),
             active_decode_requests=tuple(decode),
-            active_ttft_obligations=(),
-            active_tbt_obligations=(),
-            recovery_requests=(),
+            active_ttft_obligations=active_ttft,
+            active_tbt_obligations=active_tbt,
+            recovery_requests=recovery_requests,
             free_kv_blocks=free_blocks,
             kv_block_size=block_size,
             token_budget=token_budget,
@@ -696,9 +755,21 @@ def get_modular_scheduler_class() -> type:
     from vllm.v1.core.sched.scheduler import Scheduler
 
     from dpp_scheduler.candidate_generator import CandidateGenerator
+    from dpp_scheduler.consequence_estimator import ConsequenceEstimator
     from dpp_scheduler.dpp_selector import TemporarySelector
+    from dpp_scheduler.fallback import DeterministicFallback, resolve_fallback
     from dpp_scheduler.predictor import RidgeDurationPredictor
-    from dpp_scheduler.settings import SchedulerSettings
+    from dpp_scheduler.safe_set import ResourceAndRiskSafeSet
+    from dpp_scheduler.state_store import LedgerUpdate, ObligationLedger
+    from benchmarks.qwen3_runtime import (
+        ACTIVE_CONFIG_RELATIVE,
+        REPOSITORY_ROOT,
+        load_active_runtime,
+        load_fallback_settings,
+        load_frozen_candidate_settings,
+        load_frozen_safe_set_settings,
+        load_obligation_settings,
+    )
 
     logger = init_logger("dpp_scheduler.vllm_scheduler")
 
@@ -707,15 +778,26 @@ def get_modular_scheduler_class() -> type:
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             install_vllm_iteration_timing_bridge()
-            settings = SchedulerSettings.provisional()
-            if not settings.frozen:
-                raise RuntimeError(
-                    "ModularDPPScheduler is not executable while its G0/G1 "
-                    "candidate parameters are provisional"
-                )
+            runtime = load_active_runtime(REPOSITORY_ROOT / ACTIVE_CONFIG_RELATIVE)
+            candidate = load_frozen_candidate_settings(runtime)
+            safe_set_settings = load_frozen_safe_set_settings(runtime)
+            fallback_settings = load_fallback_settings(runtime)
+            obligation_settings = load_obligation_settings(runtime)
             super().__init__(*args, **kwargs)
-            self._dpp_adapter = VllmAdapter(self)
-            self._dpp_generator = CandidateGenerator(settings)
+            self._dpp_obligation_ledger = ObligationLedger(
+                ttft_slo_seconds=obligation_settings.ttft_slo_seconds,
+                tbt_slo_seconds=obligation_settings.tbt_slo_seconds,
+                recovery_age_threshold_seconds=(
+                    obligation_settings.recovery_age_threshold_seconds
+                ),
+            )
+            self._dpp_adapter = VllmAdapter(
+                self, obligation_ledger=self._dpp_obligation_ledger
+            )
+            self._dpp_generator = CandidateGenerator(candidate.settings)
+            self._dpp_consequence_estimator = ConsequenceEstimator()
+            self._dpp_safe_set = ResourceAndRiskSafeSet(safe_set_settings)
+            self._dpp_fallback = DeterministicFallback(fallback_settings)
             self._dpp_selector = TemporarySelector()
             artifact = (
                 Path(__file__).resolve().parents[1]
@@ -725,6 +807,50 @@ def get_modular_scheduler_class() -> type:
             )
             self._dpp_predictor = RidgeDurationPredictor.from_artifact(artifact)
             self._dpp_predictor_pending: dict[str, Any] | None = None
+            self._dpp_obligation_updates: list[LedgerUpdate] = []
+            self._dpp_external_event_sequence = 0
+
+        def add_request(self, request: Any) -> None:
+            is_new = request.request_id not in self.requests
+            super().add_request(request)
+            if is_new:
+                self._dpp_obligation_ledger.register_request(
+                    request.request_id, float(request.arrival_time)
+                )
+
+        @staticmethod
+        def _dpp_terminal_reason(value: Any) -> str | None:
+            if value is None:
+                return None
+            name = getattr(value, "name", None)
+            return str(name if name is not None else value).lower()
+
+        def _dpp_record_obligation_update(self, update: LedgerUpdate) -> None:
+            self._dpp_obligation_updates.append(update)
+            del self._dpp_obligation_updates[:-1024]
+
+        def finish_requests(self, request_ids: Any, finished_status: Any) -> Any:
+            finished = super().finish_requests(request_ids, finished_status)
+            reason = self._dpp_terminal_reason(
+                getattr(finished_status, "name", finished_status)
+            )
+            returned_at = time.time()
+            for request in finished:
+                if not self._dpp_obligation_ledger.has_request(request.request_id):
+                    continue
+                self._dpp_external_event_sequence += 1
+                update = self._dpp_obligation_ledger.observe_output(
+                    event_id=(
+                        f"external:{self._dpp_external_event_sequence}:"
+                        f"{request.request_id}"
+                    ),
+                    request_id=request.request_id,
+                    returned_at=returned_at,
+                    token_count=0,
+                    terminal_reason=reason,
+                )
+                self._dpp_record_obligation_update(update)
+            return finished
 
         def _dpp_record_iteration_duration(
             self,
@@ -751,26 +877,76 @@ def get_modular_scheduler_class() -> type:
             predictions = self._dpp_predictor.predict(snapshot, plans)
             if len(predictions) != len(plans):
                 raise RuntimeError("Predictor did not cover every BatchPlan")
-            decision = self._dpp_selector.select(snapshot, plans)
+            predictions = self._dpp_consequence_estimator.attach(
+                snapshot, plans, predictions
+            )
+            safe_result = self._dpp_safe_set.filter(snapshot, plans, predictions)
+            if safe_result.snapshot_hash != snapshot.snapshot_hash:
+                raise RuntimeError("Safe-Set snapshot_hash mismatch")
+            decision = self._dpp_selector.select(
+                snapshot, safe_result.safe_candidates
+            )
+            fallback_result = None
+            if decision.selected_plan is None:
+                fallback_result = resolve_fallback(
+                    snapshot,
+                    self._dpp_fallback,
+                    self._dpp_predictor,
+                    self._dpp_safe_set,
+                )
+                fallback_plan = (
+                    fallback_result.plan
+                    if not fallback_result.rejection_reasons
+                    else None
+                )
+                decision = Decision(
+                    frame_id=snapshot.frame_id,
+                    snapshot_hash=snapshot.snapshot_hash,
+                    selected_plan=fallback_plan,
+                    reason=fallback_result.reason,
+                )
             logger.info(
-                "ModularDPPScheduler frame=%s plans=%d selected=%s",
+                "ModularDPPScheduler frame=%s plans=%d safe=%d rejected=%d "
+                "selected=%s reason=%s fallback_rejected=%s",
                 snapshot.frame_id,
                 len(plans),
+                len(safe_result.safe_candidates),
+                len(safe_result.rejected),
                 decision.selected_plan.plan_id
                 if decision.selected_plan is not None
                 else "NONE",
+                decision.reason,
+                fallback_result.rejection_reasons if fallback_result else (),
             )
             if decision.selected_plan is None:
-                raise RuntimeError(
-                    "no exact BatchPlan; G4 fallback/preemption path is not implemented"
+                idle_plan = BatchPlan(
+                    plan_id=f"idle-frame-{snapshot.frame_id}",
+                    snapshot_hash=snapshot.snapshot_hash,
+                    template_id=f"IDLE:{decision.reason}",
+                    prefill_items=(),
+                    decode_items=(),
+                    total_prefill_tokens=0,
+                    total_decode_tokens=0,
+                    total_sequences=project_sequence_count(snapshot, ()),
+                    projected_kv_blocks=project_kv_blocks(snapshot, (), ()),
+                    mandatory_request_ids=(),
                 )
+                scheduler_output = self._dpp_adapter.build_scheduler_output(idle_plan)
+                self._dpp_predictor_pending = {
+                    "snapshot": snapshot,
+                    "plan": idle_plan,
+                    "base_duration_seconds": None,
+                    "scheduler_output": scheduler_output,
+                    "actual_duration_seconds": None,
+                    "skip_predictor_update": True,
+                }
+                return scheduler_output
             audit = self._dpp_predictor.predict_with_audit(
                 snapshot, decision.selected_plan
             )
             if not audit.prediction.in_support:
                 raise RuntimeError(
-                    "temporary G2 path selected an out-of-support plan; "
-                    "G4 Safe-Set is required before execution"
+                    "Safe-Set selected an out-of-support plan"
                 )
             scheduler_output = self._dpp_adapter.build_scheduler_output(
                 decision.selected_plan
@@ -781,6 +957,7 @@ def get_modular_scheduler_class() -> type:
                 "base_duration_seconds": audit.base_duration_seconds,
                 "scheduler_output": scheduler_output,
                 "actual_duration_seconds": None,
+                "skip_predictor_update": False,
             }
             return scheduler_output
 
@@ -791,6 +968,29 @@ def get_modular_scheduler_class() -> type:
             result = super().update_from_output(scheduler_output, model_runner_output)
             if pending is None:
                 raise RuntimeError("modular Predictor feedback has no selected plan")
+            returned_at = time.time()
+            for client_index in sorted(result):
+                outputs = result[client_index].outputs
+                for output_index, output in enumerate(outputs):
+                    token_count = len(output.new_token_ids)
+                    terminal_reason = self._dpp_terminal_reason(output.finish_reason)
+                    if token_count == 0 and terminal_reason is None:
+                        continue
+                    update = self._dpp_obligation_ledger.observe_output(
+                        event_id=(
+                            f"frame:{pending['snapshot'].frame_id}:"
+                            f"client:{client_index}:output:{output_index}:"
+                            f"{output.request_id}"
+                        ),
+                        request_id=output.request_id,
+                        returned_at=returned_at,
+                        token_count=token_count,
+                        terminal_reason=terminal_reason,
+                    )
+                    self._dpp_record_obligation_update(update)
+            if pending["skip_predictor_update"]:
+                self._dpp_predictor_pending = None
+                return result
             actual_duration = pending["actual_duration_seconds"]
             if actual_duration is None:
                 raise RuntimeError("modular Predictor iteration timing is missing")
@@ -1239,3 +1439,251 @@ def get_targeted_profiling_scheduler_class() -> type:
         "dpp_scheduler.targeted_profile_scheduler"
     )
     return TargetedProfilingScheduler
+
+
+def get_isolated_profiling_scheduler_class() -> type:
+    """Create a profiling scheduler with one clean, exact target per batch."""
+    from vllm.v1.core.sched.output import SchedulerOutput
+    from vllm.v1.core.sched.scheduler import Scheduler
+    from vllm.v1.request import RequestStatus
+
+    from dpp_scheduler.targeted_profile import (
+        TargetBatchPlanner,
+        build_isolated_setup_plan,
+        build_isolated_target_plan,
+        build_target_recipes,
+        resolve_isolated_request_ids,
+    )
+
+    class IsolatedProfilingScheduler(Scheduler):
+        """Prepare, execute, abort, and fully release one recipe at a time."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            install_vllm_iteration_timing_bridge()
+            super().__init__(*args, **kwargs)
+            output_value = os.environ.get(ISOLATED_PROFILE_PATH_ENV)
+            event_value = os.environ.get(ISOLATED_PROFILE_EVENT_PATH_ENV)
+            run_id = os.environ.get(ISOLATED_PROFILE_RUN_ID_ENV)
+            seed_value = os.environ.get(ISOLATED_PROFILE_RECIPE_SEED_ENV)
+            recipe_mode = os.environ.get(
+                ISOLATED_PROFILE_RECIPE_MODE_ENV, "isolated_knee"
+            )
+            if not output_value or not event_value or not run_id or seed_value is None:
+                raise RuntimeError("isolated profiling environment is incomplete")
+            output_path = Path(output_value).resolve()
+            event_path = Path(event_value).resolve()
+            if not output_path.is_absolute() or not event_path.is_absolute():
+                raise RuntimeError("isolated profiling paths must be absolute")
+            if not output_path.parent.is_dir() or not event_path.parent.is_dir():
+                raise RuntimeError("isolated profiling output parent does not exist")
+            self._isolated_run_id = run_id
+            self._isolated_recipe_seed = int(seed_value)
+            self._isolated_recipe_mode = recipe_mode
+            self._isolated_stream = output_path.open("x", encoding="utf-8", buffering=1)
+            self._isolated_event_stream = event_path.open(
+                "x", encoding="utf-8", buffering=1
+            )
+            self._isolated_planner = TargetBatchPlanner(
+                build_target_recipes(self._isolated_recipe_seed, mode=recipe_mode)
+            )
+            self._isolated_adapter = VllmAdapter(self)
+            self._isolated_pending: dict[str, Any] | None = None
+            self._isolated_admission_closed = False
+            self._isolated_baseline_free_blocks = int(
+                self.kv_cache_manager.block_pool.get_num_free_blocks()
+            )
+            self._isolated_target_ordinal = 0
+
+        def _event(self, event: str, **values: Any) -> None:
+            recipe = self._isolated_planner.current
+            payload = {
+                "schema_version": 2,
+                "event": event,
+                "run_id": self._isolated_run_id,
+                "recipe_id": recipe.recipe_id if recipe is not None else None,
+                **values,
+            }
+            self._isolated_event_stream.write(
+                json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
+            )
+            self._isolated_event_stream.flush()
+
+        @staticmethod
+        def _materialization_matches(plan: BatchPlan, output: Any) -> bool:
+            return tuple(output.num_scheduled_tokens.items()) == (
+                plan.prefill_items
+                + tuple((request_id, 1) for request_id in plan.decode_items)
+            )
+
+        def _clean_current(self, *, status: str, reason: str | None = None) -> dict[str, Any]:
+            recipe = self._isolated_planner.current
+            if recipe is None:
+                raise RuntimeError("isolated cleanup has no current recipe")
+            live_before = sorted(self.requests)
+            self.finish_requests(live_before, RequestStatus.FINISHED_ABORTED)
+            free_blocks = int(self.kv_cache_manager.block_pool.get_num_free_blocks())
+            queue_empty = not self.running and not self.waiting and not self.requests
+            recovered = queue_empty and free_blocks == self._isolated_baseline_free_blocks
+            cleanup = {
+                "cleanup_started_after_timing": True,
+                "aborted_request_ids": live_before,
+                "post_cleanup_request_count": len(self.requests),
+                "post_cleanup_running_count": len(self.running),
+                "post_cleanup_waiting_count": len(self.waiting),
+                "baseline_free_kv_blocks": self._isolated_baseline_free_blocks,
+                "post_cleanup_free_kv_blocks": free_blocks,
+                "resource_recovered": recovered,
+            }
+            self._event(status, reason=reason, cleanup=cleanup)
+            if not recovered:
+                raise RuntimeError(
+                    "isolated profiling cleanup did not restore the KV/request baseline"
+                )
+            self._isolated_planner.advance()
+            self._isolated_admission_closed = False
+            return cleanup
+
+        def _fail_current(self, reason: str) -> None:
+            self._clean_current(status="batch_failed", reason=reason)
+
+        def _dpp_record_iteration_duration(
+            self,
+            *,
+            scheduler_output: Any,
+            iteration_index: int | None,
+            duration_seconds: float,
+            timing_source: str,
+        ) -> None:
+            pending = self._isolated_pending
+            if pending is None or pending["scheduler_output"] is not scheduler_output:
+                raise RuntimeError("isolated timing callback does not match pending plan")
+            if timing_source != VLLM_OFFICIAL_ITERATION_TIMING or iteration_index is None:
+                raise RuntimeError("isolated profiling requires official vLLM timing")
+            pending["actual_duration_seconds"] = duration_seconds
+            pending["official_iteration_index"] = iteration_index
+            pending["timing_source"] = timing_source
+
+        def schedule(self, throttle_prefills: bool = False) -> Any:
+            if self._isolated_pending is not None:
+                raise RuntimeError("isolated scheduler has overlapping iterations")
+            recipe = self._isolated_planner.current
+            if recipe is None:
+                return super().schedule(throttle_prefills)
+
+            observed = set(self.requests)
+            try:
+                resolved_prefills, resolved_decodes = resolve_isolated_request_ids(
+                    observed, recipe, require_complete=False
+                )
+            except RuntimeError as error:
+                self.finish_requests(sorted(observed), RequestStatus.FINISHED_ABORTED)
+                raise RuntimeError(f"isolated admission rejected: {error}") from error
+            expected_count = recipe.prefill_request_cap + recipe.decode_request_cap
+            admission_complete = (
+                len(resolved_prefills) + len(resolved_decodes) == expected_count
+            )
+            if not self._isolated_admission_closed:
+                if not admission_complete:
+                    if not observed:
+                        return super().schedule(throttle_prefills)
+                    return SchedulerOutput.make_empty()
+                self._isolated_admission_closed = True
+                self._event(
+                    "admission_closed",
+                    request_count=len(observed),
+                    requested_shape=recipe.as_dict(),
+                )
+            elif not admission_complete:
+                self._fail_current("request_finished_during_setup")
+                return super().schedule(throttle_prefills)
+
+            snapshot = self._isolated_adapter.make_snapshot()
+            try:
+                setup_plan = build_isolated_setup_plan(snapshot, recipe)
+                if setup_plan is None:
+                    plan, realized = build_isolated_target_plan(snapshot, recipe)
+                    role = "target"
+                else:
+                    plan = setup_plan
+                    realized = None
+                    role = "setup"
+            except Exception as error:
+                self._fail_current(f"{type(error).__name__}: {error}")
+                return super().schedule(throttle_prefills)
+
+            output = self._isolated_adapter.build_scheduler_output(plan)
+            if not self._materialization_matches(plan, output):
+                raise RuntimeError("isolated Exact BatchPlan materialization mismatch")
+            self._isolated_pending = {
+                "role": role,
+                "snapshot": snapshot,
+                "plan": plan,
+                "realized": realized,
+                "scheduler_output": output,
+                "actual_duration_seconds": None,
+                "official_iteration_index": None,
+                "timing_source": None,
+            }
+            return output
+
+        def update_from_output(self, scheduler_output: Any, model_runner_output: Any) -> Any:
+            pending = self._isolated_pending
+            result = super().update_from_output(scheduler_output, model_runner_output)
+            if pending is None or pending["scheduler_output"] is not scheduler_output:
+                raise RuntimeError("isolated update does not match pending iteration")
+            if pending["actual_duration_seconds"] is None:
+                raise RuntimeError("isolated iteration has no official duration")
+            self._isolated_pending = None
+            if pending["role"] == "setup":
+                self._event(
+                    "setup_complete",
+                    plan_id=pending["plan"].plan_id,
+                    official_iteration_index=pending["official_iteration_index"],
+                )
+                return result
+
+            recipe = self._isolated_planner.current
+            assert recipe is not None
+            record = build_target_profile_record(
+                run_id=self._isolated_run_id,
+                iteration_index=int(pending["official_iteration_index"]),
+                snapshot=pending["snapshot"],
+                plan=pending["plan"],
+                recipe=recipe,
+                realized_shape=pending["realized"],
+            )
+            record.update(
+                {
+                    "schema_version": 2,
+                    "recipe_seed": self._isolated_recipe_seed,
+                    "recipe_mode": self._isolated_recipe_mode,
+                    "target_ordinal": self._isolated_target_ordinal,
+                    "actual_duration_seconds": pending["actual_duration_seconds"],
+                    "timing_source": pending["timing_source"],
+                    "execution_match": self._materialization_matches(
+                        pending["plan"], scheduler_output
+                    ),
+                    "admission_closed": self._isolated_admission_closed,
+                    "prefill_ratio": (
+                        pending["plan"].total_prefill_tokens
+                        / (
+                            pending["plan"].total_prefill_tokens
+                            + pending["plan"].total_decode_tokens
+                        )
+                    ),
+                }
+            )
+            cleanup = self._clean_current(status="batch_complete")
+            record["cleanup"] = cleanup
+            record["valid"] = bool(record["execution_match"] and cleanup["resource_recovered"])
+            self._isolated_stream.write(
+                json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+            )
+            self._isolated_stream.flush()
+            self._isolated_target_ordinal += 1
+            return result
+
+    IsolatedProfilingScheduler.__module__ = (
+        "dpp_scheduler.isolated_profile_scheduler"
+    )
+    return IsolatedProfilingScheduler

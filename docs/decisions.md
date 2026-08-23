@@ -87,9 +87,14 @@ The following interface choices are now fixed:
 - the canonical candidate-set name is `safe_candidates`; and
 - Controller owns Fallback construction.
 
+For Scheduler-internal obligation settlement, the locked-vLLM event is the
+`EngineCoreOutput` created by `Scheduler.update_from_output`, after actual
+model output and sampling. This server-side event drives the live ledger; it
+does not replace the client-receives-SSE boundary used by reported TTFT/TBT
+metrics.
+
 Before G5, the specification must still choose and test:
 
-- the locked-vLLM event that completes TTFT; and
 - units, numeric ranges, zero-duration handling, tie keys, Recovery rules,
   Top-K, and every ledger update boundary.
 

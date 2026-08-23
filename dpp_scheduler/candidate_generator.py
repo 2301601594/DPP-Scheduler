@@ -106,6 +106,16 @@ def _rank_prefill(snapshot: StateSnapshot) -> tuple[PrefillRequest, ...]:
     return tuple(sorted(prefill, key=sort_key))
 
 
+def rank_decode_requests(snapshot: StateSnapshot) -> tuple[DecodeRequest, ...]:
+    """Expose the frozen Decode order for Controller-owned Fallback reuse."""
+    return _rank_decode(snapshot)
+
+
+def rank_prefill_requests(snapshot: StateSnapshot) -> tuple[PrefillRequest, ...]:
+    """Expose the frozen Prefill order for Controller-owned Fallback reuse."""
+    return _rank_prefill(snapshot)
+
+
 def _mandatory_decode(
     ordered: tuple[DecodeRequest, ...], oldest_due_recovery: str | None
 ) -> list[str]:
@@ -199,6 +209,11 @@ def _highest_bindable_prefill(
         if request.is_running or new_sequence_slots > 0:
             return request
     return None
+
+
+def highest_bindable_prefill(snapshot: StateSnapshot) -> PrefillRequest | None:
+    """Return the first ranked Prefill request that can consume a sequence slot."""
+    return _highest_bindable_prefill(snapshot, _rank_prefill(snapshot))
 
 
 def _prefill_breakpoints(

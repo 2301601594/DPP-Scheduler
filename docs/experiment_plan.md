@@ -91,6 +91,27 @@ Snapshot slack and a frozen Critical Horizon; Predictor and Safe-Set run only
 after complete BatchPlans exist. Adapter execution is atomic: request IDs and
 token counts may not be reselected after the decision.
 
+Freeze Candidate parameters with
+`benchmarks/freeze_candidate_parameters.py`: Horizon uses only odd-seed Stock
+Decode-only development rows and official iteration durations; knee uses the
+independent `candidate_knee_profile_isolated_v2` campaign. Each target cell is
+prepared in isolation, executed as one Exact BatchPlan, timed at the official
+iteration boundary, then aborted and required to restore an empty queue and
+the baseline free-KV count before the next cell. The frozen sequence budget
+makes 64-Decode mixed cells infeasible, so the largest common mixed count is
+48. Likewise, the 2048-token Prefill cap is sampled only with Decode=0 because
+adding Decode work would exceed the frozen 2048-token iteration budget. Only
+Decode=0 rows select the base knee; mixed rows validate sensitivity.
+The measured freeze artifact is append-only. Any sparse Horizon bucket, knee
+cell with fewer than 4/5 exact realizations, cleanup failure, or failed knee
+rule leaves that artifact ineligible. The retained v1 artifact therefore
+remains negative evidence. At the user's explicit direction, no replacement
+Knee profiling is run: Scheduler integration instead uses the versioned
+`candidate_parameter_integration_freeze_v1` artifact with measured
+`critical_horizon_seconds=0.220` and the existing `knee_tokens=768`. Runtime
+loading is hash/signature checked, but this user-directed integration freeze is
+explicitly ineligible for formal DPP benchmark claims.
+
 ### G3: Predictor
 
 Collect same-model/same-runtime rows containing each executed BatchPlan's
@@ -117,12 +138,35 @@ filters. Use conservative duration for SLO-risk estimation. Prefer zero-new-
 violation plans; otherwise send risk-ranked Top-K to DPP. Keep the independent
 Fallback and Preemption/Idle paths deterministic and audited.
 
+For end-to-end Scheduler integration only, the active config provisionally
+uses `H=8` Decode iterations, `R0=64` KV blocks, and user-selected `Top-K=3`.
+These are design-derived scaffolding values: 16-token KV blocks and at most one
+Decode token per request make eight iterations half a block period, while 64
+reserve blocks provide one extra block per maximum active sequence and consume
+about 0.21% of the observed 30,149-block capacity. They are not a measured G4
+freeze, do not make G4 complete, and are ineligible for formal DPP results.
+Fallback integration provisionally uses a 6-token minimum Prefill chunk, equal
+to the frozen Prefill-only Predictor support-domain lower bound for total
+scheduled Prefill tokens. A completion chunk may be smaller, but it must still
+pass Predictor support; otherwise the explicit Idle path is used.
+
+The integration implementation now wires the resource filters, risk ranking,
+Controller-owned Fallback, and explicit Preemption-required/Idle result into
+the live modular Scheduler. The relevant remote unit tests pass, but the
+provisional parameters above still keep G4 ineligible for formal claims.
+
 ### G5–G6: Control and integration
 
 Freeze `Psi_k`, its units/ranges, `Q^P/Z^F/Z^D` ledger, event boundaries, and
 tie-break. Integrate Selector, Adapter, Observer, and actual-only updates. Every
 TTFT/TBT obligation is created and settled exactly once; natural EOS releases
 KV and creates no next obligation.
+
+The live obligation ledger is implemented before the DPP score: request
+arrival creates TTFT, an actual locked-vLLM `EngineCoreOutput` token settles
+TTFT/TBT, a nonterminal token creates the next TBT deadline, and a terminal
+event creates none. Snapshot now carries these obligations and Recovery state.
+The `Q^P/Z^F/Z^D` updates and DPP Selector remain G5/G6 work.
 
 ### G7: Evaluation
 

@@ -9,11 +9,75 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks.predictor_profile import load_scheduled_batches
+from benchmarks.qwen3_runtime import ActiveRuntime, sha256_file
 from dpp_scheduler.targeted_profile import (
     TARGET_PROFILE_SCHEMA_VERSION,
     TargetCampaignRun,
     build_target_recipes,
 )
+
+
+def validate_reused_stock_trace(
+    trace_path: Path,
+    manifest_path: Path,
+    runtime: ActiveRuntime,
+    *,
+    source_qps: float,
+    source_seed: int,
+    expected_request_count: int,
+) -> dict[str, Any]:
+    """Validate a Stock trace while permitting only its stale whole-config hash."""
+    with manifest_path.open("r", encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    required = {
+        "kind": "qwen3_14b_poisson_length_blind_traces",
+        "model_revision": runtime.model_revision,
+        "tokenizer_revision": runtime.tokenizer_revision,
+        "client_safety_ceiling_tokens": runtime.client_safety_ceiling_tokens,
+        "client_safety_ceiling_role": (
+            "termination_guard_only_never_scheduler_input"
+        ),
+        "predetermined_output_length": False,
+        "ignore_eos": runtime.ignore_eos,
+        "temperature": runtime.temperature,
+        "top_p": runtime.top_p,
+        "seed_source": runtime.seed_source,
+    }
+    for key, expected in required.items():
+        if manifest.get(key) != expected:
+            raise ValueError(
+                f"reused Stock trace {key} mismatch: expected {expected!r}, "
+                f"got {manifest.get(key)!r}"
+            )
+    if int(manifest.get("num_requests_per_trace", 0)) != expected_request_count:
+        raise ValueError("reused Stock trace request count mismatch")
+    matches = [
+        entry
+        for entry in manifest.get("files", [])
+        if entry.get("file") == trace_path.name
+    ]
+    if len(matches) != 1:
+        raise ValueError("reused Stock trace identity is ambiguous")
+    entry = matches[0]
+    if (
+        float(entry.get("requested_qps", -1.0)) != source_qps
+        or int(entry.get("seed", -1)) != source_seed
+        or int(entry.get("num_requests", 0)) != expected_request_count
+    ):
+        raise ValueError("reused Stock trace QPS/seed/count mismatch")
+    observed_hash = sha256_file(trace_path)
+    if entry.get("sha256") != observed_hash:
+        raise ValueError("reused Stock trace SHA256 mismatch")
+    return {
+        "valid": True,
+        "trace_sha256": observed_hash,
+        "source_config_sha256": manifest.get("config_sha256"),
+        "current_config_sha256": runtime.config_sha256,
+        "config_hash_mismatch_allowed": (
+            manifest.get("config_sha256") != runtime.config_sha256
+        ),
+        "compatibility_scope": "model_tokenizer_generation_and_trace_content",
+    }
 
 
 def validate_target_rows(

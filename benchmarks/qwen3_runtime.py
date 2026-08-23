@@ -8,12 +8,20 @@ argument and keeps the client safety ceiling outside Scheduler-facing state.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from dpp_scheduler.settings import (
+    FallbackSettings,
+    ObligationSettings,
+    SafeSetSettings,
+    SchedulerSettings,
+)
 
 
 ACTIVE_CONFIG_RELATIVE = Path("configs/dgx_spark_experiment.yaml")
@@ -30,6 +38,60 @@ class FrozenPredictor:
     artifact_root: Path
     artifact_manifest_sha256: str
     predictor_version: str
+
+
+@dataclass(frozen=True)
+class FrozenCandidateSettings:
+    settings: SchedulerSettings
+    manifest_path: Path
+    manifest_sha256: str
+    runtime_signature_sha256: str
+
+
+def load_frozen_safe_set_settings(runtime: ActiveRuntime) -> SafeSetSettings:
+    """Load Safe-Set parameters, rejecting every unresolved/null value."""
+    with runtime.config_path.open("r", encoding="utf-8") as stream:
+        config = yaml.safe_load(stream)
+    safe_set = config.get("safe_set") if isinstance(config, dict) else None
+    if not isinstance(safe_set, dict):
+        raise ActiveConfigError("active config safe_set section is missing")
+    try:
+        return SafeSetSettings.from_mapping(safe_set)
+    except ValueError as error:
+        raise ActiveConfigError(str(error)) from error
+
+
+def load_fallback_settings(runtime: ActiveRuntime) -> FallbackSettings:
+    """Load the deterministic Fallback construction policy."""
+    with runtime.config_path.open("r", encoding="utf-8") as stream:
+        config = yaml.safe_load(stream)
+    fallback = config.get("fallback") if isinstance(config, dict) else None
+    if not isinstance(fallback, dict):
+        raise ActiveConfigError("active config fallback section is missing")
+    try:
+        return FallbackSettings.from_mapping(fallback)
+    except ValueError as error:
+        raise ActiveConfigError(str(error)) from error
+
+
+def load_obligation_settings(runtime: ActiveRuntime) -> ObligationSettings:
+    """Load live TTFT/TBT ledger deadlines from the active configuration."""
+    with runtime.config_path.open("r", encoding="utf-8") as stream:
+        config = yaml.safe_load(stream)
+    slo = config.get("slo") if isinstance(config, dict) else None
+    candidate = config.get("candidate_generator") if isinstance(config, dict) else None
+    if not isinstance(slo, dict) or not isinstance(candidate, dict):
+        raise ActiveConfigError("active config SLO/Candidate sections are missing")
+    try:
+        return ObligationSettings(
+            ttft_slo_seconds=slo.get("ttft_seconds"),
+            tbt_slo_seconds=slo.get("tbt_seconds"),
+            recovery_age_threshold_seconds=candidate.get(
+                "recovery_age_threshold_seconds"
+            ),
+        )
+    except ValueError as error:
+        raise ActiveConfigError(str(error)) from error
 
 
 def sha256_file(path: Path) -> str:
@@ -377,6 +439,24 @@ def build_targeted_profile_server_command(
     return command
 
 
+def build_isolated_profile_server_command(
+    runtime: ActiveRuntime, *, port: int
+) -> list[str]:
+    """Build the locked command for clean-baseline exact-batch profiling."""
+    command = build_stock_server_command(runtime, port=port)
+    command.extend(
+        [
+            "--scheduler-cls",
+            (
+                "dpp_scheduler.isolated_profile_scheduler."
+                "IsolatedProfilingScheduler"
+            ),
+            "--enable-logging-iteration-details",
+        ]
+    )
+    return command
+
+
 def build_predictor_evaluation_server_command(
     runtime: ActiveRuntime, *, port: int
 ) -> list[str]:
@@ -432,6 +512,144 @@ def load_frozen_predictor(runtime: ActiveRuntime) -> FrozenPredictor:
     ) != payload:
         raise ActiveConfigError("Predictor artifact version mismatch")
     return FrozenPredictor(root, observed_hash, str(version))
+
+
+def candidate_runtime_signature(runtime: ActiveRuntime) -> tuple[dict[str, Any], str]:
+    """Hash runtime facts that affect Horizon and Prefill-knee measurements."""
+    with runtime.config_path.open("r", encoding="utf-8") as stream:
+        config = yaml.safe_load(stream)
+    if not isinstance(config, dict):
+        raise ActiveConfigError("active config must be a mapping")
+    model = config.get("model", {})
+    engine = config.get("runtime", {})
+    predictor = config.get("predictor", {})
+    environment = config.get("environment", {})
+    payload = {
+        "model_name": runtime.model_name,
+        "model_revision": runtime.model_revision,
+        "tokenizer_revision": runtime.tokenizer_revision,
+        "model_snapshot_sha256": model.get("snapshot_sha256"),
+        "dtype": model.get("dtype"),
+        "kv_cache_dtype": model.get("kv_cache_dtype"),
+        "max_model_len": runtime.max_model_len,
+        "gpu_memory_utilization": runtime.gpu_memory_utilization,
+        "engine": engine.get("engine"),
+        "chunked_prefill": engine.get("enable_chunked_prefill"),
+        "prefix_caching": engine.get("enable_prefix_caching"),
+        "speculative_decoding": engine.get("speculative_decoding"),
+        "token_budget": runtime.max_num_batched_tokens,
+        "sequence_budget": runtime.max_num_seqs,
+        "kv_block_size": runtime.kv_block_size,
+        "usable_kv_blocks": runtime.usable_kv_blocks,
+        "vllm_commit": environment.get("vllm_commit"),
+        "duration_timing_boundary": predictor.get("duration_timing_boundary"),
+    }
+    canonical = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return payload, hashlib.sha256(canonical).hexdigest()
+
+
+def load_frozen_candidate_settings(runtime: ActiveRuntime) -> FrozenCandidateSettings:
+    """Load Candidate Generator settings only from a matching frozen artifact."""
+    with runtime.config_path.open("r", encoding="utf-8") as stream:
+        config = yaml.safe_load(stream)
+    candidate = config.get("candidate_generator") if isinstance(config, dict) else None
+    if not isinstance(candidate, dict):
+        raise ActiveConfigError("active config candidate_generator section is missing")
+    try:
+        settings = SchedulerSettings.from_mapping(candidate)
+    except ValueError as error:
+        raise ActiveConfigError(str(error)) from error
+    if not settings.frozen:
+        raise ActiveConfigError("Candidate Generator parameters are not frozen")
+    value = candidate.get("freeze_manifest_path")
+    expected_hash = candidate.get("freeze_manifest_sha256")
+    expected_signature = candidate.get("runtime_signature_sha256")
+    freeze_kind = candidate.get("freeze_kind", "measured")
+    if not value or not expected_hash or not expected_signature:
+        raise ActiveConfigError("candidate freeze manifest/hash/signature is incomplete")
+    if freeze_kind not in {"measured", "user_directed_integration"}:
+        raise ActiveConfigError("unknown candidate freeze kind")
+    manifest_path = Path(str(value))
+    if not manifest_path.is_absolute():
+        manifest_path = runtime.workspace / manifest_path
+    manifest_path = manifest_path.resolve()
+    if freeze_kind == "measured":
+        allowed_root = runtime.processed_results.resolve()
+        expected_name = "manifest.json"
+        escape_error = "candidate freeze manifest escapes processed results"
+    else:
+        allowed_root = (runtime.workspace / "configs").resolve()
+        expected_name = "candidate_generator_integration_freeze.json"
+        escape_error = "candidate integration freeze escapes configs"
+        if candidate.get("formal_benchmark_eligible") is not False:
+            raise ActiveConfigError(
+                "integration-frozen Candidate parameters cannot enable formal benchmarks"
+            )
+    if allowed_root not in manifest_path.parents:
+        raise ActiveConfigError(escape_error)
+    if not manifest_path.is_file() or manifest_path.name != expected_name:
+        raise ActiveConfigError(f"candidate freeze manifest is absent: {manifest_path}")
+    if manifest_path.lstat().st_uid != os.getuid():
+        raise ActiveConfigError("candidate freeze manifest is not user-owned")
+    observed_hash = sha256_file(manifest_path)
+    if observed_hash != str(expected_hash):
+        raise ActiveConfigError("candidate freeze manifest hash mismatch")
+    with manifest_path.open("r", encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    expected_identity = (
+        (2, "candidate_parameter_freeze_v2", "frozen")
+        if freeze_kind == "measured"
+        else (
+            1,
+            "candidate_parameter_integration_freeze_v1",
+            "frozen_for_scheduler_integration",
+        )
+    )
+    if (
+        manifest.get("schema_version"),
+        manifest.get("artifact_id"),
+        manifest.get("status"),
+    ) != expected_identity:
+        raise ActiveConfigError("candidate freeze manifest schema/identity mismatch")
+    _, observed_signature = candidate_runtime_signature(runtime)
+    if observed_signature != str(expected_signature) or manifest.get(
+        "runtime_signature_sha256"
+    ) != observed_signature:
+        raise ActiveConfigError("candidate runtime signature mismatch")
+    if manifest.get("parameters_frozen") is not True:
+        raise ActiveConfigError("candidate freeze manifest is not frozen")
+    if freeze_kind == "user_directed_integration" and manifest.get(
+        "formal_benchmark_eligible"
+    ) is not False:
+        raise ActiveConfigError(
+            "candidate integration freeze manifest must reject formal benchmarks"
+        )
+    manifest_horizon = manifest.get("critical_horizon_seconds")
+    manifest_knee = manifest.get("prefill_knee_tokens")
+    if isinstance(manifest_horizon, bool) or not isinstance(
+        manifest_horizon, (int, float)
+    ):
+        raise ActiveConfigError("candidate manifest critical horizon is invalid")
+    if isinstance(manifest_knee, bool) or not isinstance(manifest_knee, int):
+        raise ActiveConfigError("candidate manifest Prefill knee is invalid")
+    if float(manifest_horizon) != settings.critical_horizon_seconds:
+        raise ActiveConfigError("critical horizon differs from freeze manifest")
+    if manifest_knee != settings.prefill_knee_tokens:
+        raise ActiveConfigError("Prefill knee differs from freeze manifest")
+    if freeze_kind == "user_directed_integration" and (
+        manifest.get("maximum_seed_candidates") != settings.maximum_seed_candidates
+        or manifest.get("minimum_prefill_chunk_tokens")
+        != settings.minimum_prefill_chunk_tokens
+    ):
+        raise ActiveConfigError("Candidate integration settings differ from manifest")
+    return FrozenCandidateSettings(
+        settings=settings,
+        manifest_path=manifest_path,
+        manifest_sha256=observed_hash,
+        runtime_signature_sha256=observed_signature,
+    )
 
 
 def resolve_under(root: Path, value: str | Path, *, label: str) -> Path:

@@ -1,0 +1,21 @@
+{
+  "artifact_id": "candidate_parameter_integration_freeze_v1",
+  "critical_horizon_seconds": 0.22,
+  "formal_benchmark_eligible": false,
+  "maximum_seed_candidates": 12,
+  "minimum_prefill_chunk_tokens": 6,
+  "parameters_frozen": true,
+  "prefill_knee_tokens": 768,
+  "runtime_signature_sha256": "826d7ab93de1cd5353647e711c70ac11891affbf26aada65ab2bea7cdf63c251",
+  "schema_version": 1,
+  "selection": {
+    "critical_horizon": "Measured 0.220 second value from the eligible odd-seed Decode-only development report.",
+    "prefill_knee": "User-directed integration freeze of the existing provisional 768-token value; no additional profiling requested."
+  },
+  "source": {
+    "critical_horizon_report": "results/processed/qwen3_14b_dgx_spark/candidate_parameter_freeze_v1/horizon_report.json",
+    "prefill_knee_report": "results/processed/qwen3_14b_dgx_spark/candidate_parameter_freeze_v1/knee_report.json"
+  },
+  "status": "frozen_for_scheduler_integration",
+  "user_direction_date": "2026-08-23"
+}
