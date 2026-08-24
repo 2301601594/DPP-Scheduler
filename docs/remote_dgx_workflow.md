@@ -150,12 +150,16 @@ commit. Do not substitute `nightly`, `latest`, an x86 wheel, or a different
 source commit. A C++/CUDA/kernel change invalidates this Python-only install and
 requires a separately reviewed full source-build plan.
 
-The standalone compatibility smoke created a user-space CPython header tree
-under remote `.uv-python`, which routine synchronization intentionally
-excludes and `setup_dgx_vllm_env.sh` does not recreate. The Qwen3-14B G0 smoke
-must determine whether those headers are required. If they are, add a reviewed,
-pinned, user-space reconstruction step and record its source/hash/size before
-freezing G0; do not silently depend on the existing directory.
+The DPP smoke observed that torch.compile first probes `/usr/include/python3.12`
+and emits a recoverable `Python.h` compile error when the system development
+headers are absent. The runner therefore supplies `CPATH` from the active
+configuration and uses the existing user-owned managed-CPython 3.12.3 headers
+under remote `.uv-python`. `setup_dgx_vllm_env.sh verify-python-headers` checks
+the 214-file include-tree hash; 83,135,352 bytes is the initial observed
+installation size, not an identity check because Python may add bytecode cache.
+Routine synchronization still excludes `.uv-python`. If the tree is absent,
+the separately guarded `install-python-headers` command reconstructs it with
+the pinned uv 0.11.28 managed-Python catalog; do not install it implicitly.
 
 After verification, use the project interpreter explicitly:
 
@@ -169,6 +173,11 @@ suite also runs with the standard library:
 ```bash
 ./scripts/remote_dgx.sh run .venv/bin/python -m unittest discover -v -s tests/unit
 ```
+
+Server commands also take the active configuration's bounded
+`--shutdown-timeout 10`. This drains an already completed EngineCore before
+process teardown; vLLM's zero-second abort default can otherwise emit a false
+`EngineDeadError` traceback while the API output handler is shutting down.
 
 Stage a candidate length-blind trace under a unique raw-results directory. QPS,
 seeds, and request count remain review inputs until G0 freezes them:
@@ -203,6 +212,34 @@ Long benchmarks must run under a disconnect-safe mechanism such as `tmux` or
 under remote `results/raw`. Run the new campaign only from the frozen
 `configs/dgx_spark_experiment.yaml`; its current provisional state must be
 rejected by launchers.
+
+The bounded single-seed Scheduler engineering comparison is launched through:
+
+```bash
+./scripts/remote_dgx.sh run ./scripts/scheduler_comparison_campaign.sh preview
+./scripts/remote_dgx.sh run \
+  ./scripts/scheduler_comparison_campaign.sh smoke --resource-approved
+./scripts/remote_dgx.sh run ./scripts/scheduler_comparison_campaign.sh status
+./scripts/remote_dgx.sh run \
+  ./scripts/scheduler_comparison_campaign.sh start --resource-approved
+./scripts/remote_dgx.sh run ./scripts/scheduler_comparison_campaign.sh validate
+```
+
+`smoke` creates deterministic 300-request Poisson traces for QPS 0.20, 0.25,
+and 0.30 with seed 1001 inside the append-only campaign namespace. It launches
+a detached named `tmux` worker, runs one unchanged trace-prefix request under
+Stock and DPP, validates their paired-input identity, records `smoke_passed`,
+and stops without starting a main run. `start` refuses to launch until that
+checkpoint exists. The main matrix contains exactly six runs: both policies at
+all three absolute loads. Detailed per-iteration logging is disabled. Failed
+attempts are retained; `smoke` or `resume --resource-approved` creates new
+attempts without overwriting them.
+
+This campaign is deliberately marked `development_nonformal_single_seed` and
+`formal_benchmark_eligible=false`. Its staged traces are not promoted into the
+frozen active trace namespace, its single seed has no cross-seed confidence
+interval, and the provisional G4/DPP integration parameters prevent it from
+supporting a formal G7 claim.
 
 ## Result retrieval
 

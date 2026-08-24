@@ -17,6 +17,13 @@ UV_INSTALL_SHA256="b7b3fe80cad1142a2a5794050b7db7b3291d1bac1423b0732571dd9366e8c
 UV_CACHE_DIR="/home/dongj/.cache/uv"
 NVCC_BIN="/usr/local/cuda/bin/nvcc"
 
+PYTHON_HEADER_VERSION="3.12.3"
+PYTHON_HEADER_ROOT="${PROJECT_ROOT}/.uv-python/cpython-3.12.3-linux-aarch64-gnu"
+PYTHON_HEADER_INCLUDE="${PYTHON_HEADER_ROOT}/include/python3.12"
+PYTHON_HEADER_TREE_SHA256="d822ddffe62de3eafa3dd7415a0042f2a5790a779551281df64fdc1aa30c966d"
+PYTHON_HEADER_FILE_COUNT="214"
+PYTHON_HEADER_INITIAL_SIZE_BYTES="83135352"
+
 VLLM_COMMIT="83ad767eed3be3ee7f2df63be693bfaca5c7c922"
 VLLM_VERSION="0.26.1rc1.dev535+g83ad767ee"
 VLLM_WHEEL_VARIANT="cu130"
@@ -30,6 +37,10 @@ Commands:
   preflight      Validate DGX architecture, CUDA, source commit, and free space.
   bootstrap-uv   Install pinned uv under /home/dongj/.local/bin if absent.
   create-venv    Create the project-local Python 3.12 environment if absent.
+  install-python-headers
+                 Install pinned user-space CPython headers (about 80 MiB).
+  verify-python-headers
+                 Verify the existing user-space CPython header tree.
   dry-run        Resolve the pinned ARM64/CUDA 13 vLLM wheel and dependencies.
   install        Install the editable vLLM environment after explicit approval.
   verify         Import torch/vLLM and run a tiny CUDA operation.
@@ -41,6 +52,9 @@ The install and all commands require:
 
 Set it only after confirming the 4-6 GiB trusted-source download and the
 roughly 10-15 GiB environment-plus-cache footprint are operator-approved.
+
+Installing the separate 80 MiB managed-Python header artifact requires:
+  DGX_PYTHON_HEADERS_INSTALL_CONFIRMED=1
 EOF
 }
 
@@ -151,6 +165,62 @@ create_venv() {
   "${UV_BIN}" venv --python /usr/bin/python3.12 "${VENV_PATH}"
 }
 
+verify_python_headers() {
+  local observed_count
+  local observed_hash
+  local observed_size
+
+  [[ -d "${PYTHON_HEADER_INCLUDE}" ]] || {
+    printf 'Pinned CPython header directory is absent: %s\n' \
+      "${PYTHON_HEADER_INCLUDE}" >&2
+    return 1
+  }
+  [[ "$(stat -c '%U' "${PYTHON_HEADER_ROOT}")" == "dongj" ]]
+  [[ -f "${PYTHON_HEADER_INCLUDE}/Python.h" ]]
+  [[ -f "${PYTHON_HEADER_INCLUDE}/pyconfig.h" ]]
+  "${PYTHON_HEADER_ROOT}/bin/python3.12" -c \
+    'import platform; assert platform.python_version() == "3.12.3"'
+
+  observed_count="$(
+    find "${PYTHON_HEADER_INCLUDE}" -type f -printf '.' | wc -c
+  )"
+  observed_hash="$(
+    cd "${PYTHON_HEADER_INCLUDE}"
+    find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}'
+  )"
+  observed_size="$(du -sb "${PYTHON_HEADER_ROOT}" | awk '{print $1}')"
+  [[ "${observed_count}" == "${PYTHON_HEADER_FILE_COUNT}" ]] || {
+    printf 'CPython header file count mismatch: expected %s, found %s.\n' \
+      "${PYTHON_HEADER_FILE_COUNT}" "${observed_count}" >&2
+    return 1
+  }
+  [[ "${observed_hash}" == "${PYTHON_HEADER_TREE_SHA256}" ]] || {
+    printf 'CPython header tree hash mismatch: expected %s, found %s.\n' \
+      "${PYTHON_HEADER_TREE_SHA256}" "${observed_hash}" >&2
+    return 1
+  }
+  printf 'python_headers=passed\n'
+  printf 'python_header_include=%s\n' "${PYTHON_HEADER_INCLUDE}"
+  printf 'python_header_tree_sha256=%s\n' "${observed_hash}"
+  printf 'python_header_initial_size_bytes=%s\n' \
+    "${PYTHON_HEADER_INITIAL_SIZE_BYTES}"
+  printf 'python_header_current_size_bytes=%s\n' "${observed_size}"
+}
+
+install_python_headers() {
+  [[ "${DGX_PYTHON_HEADERS_INSTALL_CONFIRMED:-0}" == "1" ]] || {
+    printf 'Refusing the managed-Python header download without ' >&2
+    printf 'DGX_PYTHON_HEADERS_INSTALL_CONFIRMED=1.\n' >&2
+    return 2
+  }
+  bootstrap_uv
+  if [[ ! -d "${PYTHON_HEADER_ROOT}" ]]; then
+    "${UV_BIN}" python install "${PYTHON_HEADER_VERSION}" \
+      --install-dir "${PROJECT_ROOT}/.uv-python" --no-bin
+  fi
+  verify_python_headers
+}
+
 resolve_dependencies() {
   [[ -x "${VENV_PATH}/bin/python" ]] || {
     printf 'Project environment is absent; run create-venv first.\n' >&2
@@ -187,6 +257,7 @@ verify_environment() {
   local dependency_check
 
   [[ -x "${VENV_PATH}/bin/python" ]]
+  verify_python_headers
   "${VENV_PATH}/bin/python" - <<'PY'
 import ctypes
 import platform
@@ -254,6 +325,14 @@ case "${command}" in
   create-venv)
     require_remote_dgx
     create_venv
+    ;;
+  install-python-headers)
+    require_remote_dgx
+    install_python_headers
+    ;;
+  verify-python-headers)
+    require_remote_dgx
+    verify_python_headers
     ;;
   dry-run)
     require_remote_dgx

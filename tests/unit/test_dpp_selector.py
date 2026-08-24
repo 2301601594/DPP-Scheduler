@@ -183,6 +183,9 @@ class DPPSelectorTests(unittest.TestCase):
         source = inspect.getsource(get_modular_scheduler_class)
         self.assertIn("DPPSelector(dpp_settings)", source)
         self.assertIn("_dpp_state_store.update_from_actual", source)
+        self.assertIn("_dpp_diagnostic_iteration_log", source)
+        self.assertIn("load_frozen_predictor(runtime)", source)
+        self.assertIn('init_logger("vllm.dpp_scheduler")', source)
 
 
 if __name__ == "__main__":

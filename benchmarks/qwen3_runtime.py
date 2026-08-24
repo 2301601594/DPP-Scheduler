@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import site
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,9 @@ from dpp_scheduler.settings import (
 ACTIVE_CONFIG_RELATIVE = Path("configs/dgx_spark_experiment.yaml")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 EXECUTABLE_STATUSES = frozenset({"frozen_g0", "frozen"})
+MODULAR_DPP_SCHEDULER_CLASS = (
+    "dpp_scheduler.vllm_scheduler.ModularDPPScheduler"
+)
 
 
 class ActiveConfigError(ValueError):
@@ -166,6 +170,7 @@ class ActiveRuntime:
     gpu_memory_utilization: float
     max_num_batched_tokens: int
     max_num_seqs: int
+    shutdown_timeout_seconds: int
     kv_block_size: int
     usable_kv_blocks: int
     raw_results: Path
@@ -265,6 +270,14 @@ def load_active_runtime(config_path: str | Path) -> ActiveRuntime:
     if mismatches:
         raise ActiveConfigError("; ".join(mismatches))
 
+    shutdown_timeout_seconds = int(
+        _require(runtime, "shutdown_timeout_seconds", where="runtime")
+    )
+    if not 1 <= shutdown_timeout_seconds <= 60:
+        raise ActiveConfigError(
+            "runtime.shutdown_timeout_seconds must be in [1, 60]"
+        )
+
     sampling = _require(generation, "sampling_parameters", where="generation")
     if not isinstance(sampling, dict):
         raise ActiveConfigError("generation.sampling_parameters must be a mapping")
@@ -342,6 +355,7 @@ def load_active_runtime(config_path: str | Path) -> ActiveRuntime:
             _require(runtime, "total_token_budget", where="runtime")
         ),
         max_num_seqs=int(_require(runtime, "sequence_budget", where="runtime")),
+        shutdown_timeout_seconds=shutdown_timeout_seconds,
         kv_block_size=int(_require(runtime, "kv_block_size", where="runtime")),
         usable_kv_blocks=int(_require(runtime, "usable_kv_blocks", where="runtime")),
         raw_results=raw_results,
@@ -408,6 +422,28 @@ def require_frozen_for_execution(runtime: ActiveRuntime) -> None:
     if not runtime.model_path.is_dir():
         raise ActiveConfigError(f"model snapshot is not a directory: {runtime.model_path}")
 
+    required_env = dict(runtime.required_env)
+    cpath = required_env.get("CPATH")
+    if not cpath:
+        raise ActiveConfigError("environment.required_env.CPATH is required")
+    for raw_include in cpath.split(os.pathsep):
+        include = Path(raw_include)
+        if not include.is_absolute():
+            raise ActiveConfigError(f"CPATH entry must be absolute: {include}")
+        resolved_include = include.resolve()
+        try:
+            resolved_include.relative_to(user_root)
+        except ValueError:
+            raise ActiveConfigError(
+                f"CPATH entry escapes owned user root: {resolved_include}"
+            ) from None
+        if not include.is_dir() or include.lstat().st_uid != os.getuid():
+            raise ActiveConfigError(
+                f"CPATH entry must be an owned directory: {include}"
+            )
+        if not (include / "Python.h").is_file():
+            raise ActiveConfigError(f"CPATH entry has no Python.h: {include}")
+
 
 def build_stock_server_command(runtime: ActiveRuntime, *, port: int) -> list[str]:
     if not 1 <= port <= 65535:
@@ -447,7 +483,50 @@ def build_stock_server_command(runtime: ActiveRuntime, *, port: int) -> list[str
         "--no-async-scheduling",
         "--stream-interval",
         "1",
+        "--shutdown-timeout",
+        str(runtime.shutdown_timeout_seconds),
     ]
+
+
+def build_dpp_server_command(runtime: ActiveRuntime, *, port: int) -> list[str]:
+    """Build the locked modular-DPP command after validating all inputs."""
+    with runtime.config_path.open("r", encoding="utf-8") as stream:
+        config = yaml.safe_load(stream)
+    engine = config.get("runtime") if isinstance(config, dict) else None
+    scheduler_classes = (
+        engine.get("scheduler_class") if isinstance(engine, dict) else None
+    )
+    if not isinstance(scheduler_classes, dict) or scheduler_classes.get(
+        "modular_dpp"
+    ) != MODULAR_DPP_SCHEDULER_CLASS:
+        raise ActiveConfigError("active config modular DPP Scheduler class mismatch")
+
+    site_packages = Path(site.getsitepackages()[0])
+    engine_imports = (
+        (site_packages / "dpp_scheduler", runtime.workspace / "dpp_scheduler"),
+        (
+            site_packages / "benchmarks" / "qwen3_runtime.py",
+            runtime.workspace / "benchmarks" / "qwen3_runtime.py",
+        ),
+    )
+    for link, expected in engine_imports:
+        if not link.exists() or link.resolve() != expected.resolve():
+            raise ActiveConfigError(
+                f"EngineCore import path is not linked: {link} -> {expected}"
+            )
+
+    # Fail before server startup if any integration input is absent, mutable,
+    # or inconsistent with the sole active configuration.
+    load_frozen_candidate_settings(runtime)
+    load_frozen_predictor(runtime)
+    load_frozen_safe_set_settings(runtime)
+    load_fallback_settings(runtime)
+    load_obligation_settings(runtime)
+    load_dpp_settings(runtime)
+
+    command = build_stock_server_command(runtime, port=port)
+    command.extend(["--scheduler-cls", MODULAR_DPP_SCHEDULER_CLASS])
+    return command
 
 
 def build_stock_profile_server_command(

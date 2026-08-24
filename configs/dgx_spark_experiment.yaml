@@ -40,14 +40,27 @@ environment:
   vllm_commit_status: verified_for_g0
   dependency_snapshot: configs/dgx_spark_environment.freeze.txt
   required_env:
+    CPATH: /home/dongj/LLM/.uv-python/cpython-3.12.3-linux-aarch64-gnu/include/python3.12
     CUDA_VISIBLE_DEVICES: "0"
     PYTHONHASHSEED: "0"
     VLLM_USE_V1: "1"
+  python_headers:
+    status: observed_verified_user_space_artifact
+    python_version: 3.12.3
+    path: /home/dongj/LLM/.uv-python/cpython-3.12.3-linux-aarch64-gnu/include/python3.12
+    source: astral-sh/python-build-standalone selected by pinned uv 0.11.28
+    acquisition_command: >-
+      /home/dongj/.local/bin/uv python install 3.12.3
+      --install-dir /home/dongj/LLM/.uv-python --no-bin
+    initial_observed_tree_size_bytes: 83135352
+    include_file_count: 214
+    include_tree_sha256: d822ddffe62de3eafa3dd7415a0042f2a5790a779551281df64fdc1aa30c966d
+    python_h_sha256: 729ef157f6026e6e1b3104593f87dddc597c3b83b60c7c2965878c62a56c6f7d
   captured_runtime_facts:
     - configs/qwen3_14b_g0_stock_capture.json
     - results/raw/qwen3_14b_dgx_spark/g0_stock_capture_084
   pending_runtime_capture:
-    - python_header_requirement_and_reproducible_source
+    - python_header_reinstallation_from_pinned_uv_catalog
 
 model:
   requested_name: Qwen3-14B
@@ -74,6 +87,7 @@ model:
 
 runtime:
   engine: vllm_v1
+  shutdown_timeout_seconds: 10
   continuous_batching: true
   enable_chunked_prefill: true
   enable_prefix_caching: false
@@ -348,13 +362,36 @@ experiments:
     - 0.2
     - 0.25
     - 0.3
-  development_request_count: 200
+  development_request_count: 300
   formal_request_count: null
   seeds:
     - 1001
   confidence_interval_method: null
   performance_instrumentation: false
   profile_and_performance_namespaces_separate: true
+  development_comparison:
+    status: approved_for_nonformal_engineering_comparison
+    formal_benchmark_eligible: false
+    campaign_id: scheduler_comparison_dev_n300_seed1001_v1
+    tmux_session: scheduler-comparison-dev-n300-s1001-v1
+    policies: [stock, dpp]
+    offered_loads_requests_per_second: [0.2, 0.25, 0.3]
+    trace_seed: 1001
+    request_count_per_run: 300
+    smoke_request_count: 1
+    smoke_qps: 0.2
+    run_order:
+      - {qps: 0.2, policies: [stock, dpp]}
+      - {qps: 0.25, policies: [dpp, stock]}
+      - {qps: 0.3, policies: [stock, dpp]}
+    trace_location: append_only_campaign_staging
+    trace_review_status: development_only_not_promoted_to_frozen_trace_namespace
+    smoke_gate_required_before_main_runs: true
+    performance_instrumentation: false
+    request_timeout_seconds: 3600
+    run_timeout_seconds: 5400
+    campaign_timeout_seconds: 43200
+    max_attempts_per_invocation: 2
 
 validity:
   selected_plan_must_equal_executed_plan: true

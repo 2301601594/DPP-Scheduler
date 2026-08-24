@@ -56,8 +56,6 @@ def resolve_trace_pairs(
         raise ValueError("QPS/seed pairs must be unique")
     if any(not math.isfinite(qps) or qps <= 0 for qps, _ in pairs):
         raise ValueError("all qps values must be finite and positive")
-    if len({seed for _, seed in pairs}) != len(pairs):
-        raise ValueError("trace seeds must be unique")
     return pairs
 
 

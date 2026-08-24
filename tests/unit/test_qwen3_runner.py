@@ -8,7 +8,9 @@ from pathlib import Path
 
 from benchmarks.qwen3_runtime import (
     ACTIVE_CONFIG_RELATIVE,
+    MODULAR_DPP_SCHEDULER_CLASS,
     REPOSITORY_ROOT,
+    build_dpp_server_command,
     build_stock_server_command,
     load_active_runtime,
 )
@@ -18,6 +20,7 @@ from benchmarks.run_stock_natural_eos import (
     _token_count,
     build_request_payload,
     load_trace,
+    verify_trace_manifest,
 )
 from dpp_scheduler import contracts
 
@@ -34,11 +37,46 @@ class Qwen3RuntimeTests(unittest.TestCase):
         self.assertIn("--max-num-batched-tokens 2048", joined)
         self.assertIn("--max-num-seqs 64", joined)
         self.assertIn("--no-enable-prefix-caching", command)
+        self.assertEqual(self.runtime.shutdown_timeout_seconds, 10)
+        self.assertIn("--shutdown-timeout 10", joined)
         self.assertNotIn("--scheduler-cls", command)
         self.assertNotIn("max_tokens", joined)
         self.assertEqual(self.runtime.pool_size, 3000)
         self.assertEqual(self.runtime.pool_seed, 1001)
         self.assertEqual(self.runtime.request_pool.name, "request_pool.jsonl")
+        required_env = dict(self.runtime.required_env)
+        self.assertEqual(
+            required_env["CPATH"],
+            "/home/dongj/LLM/.uv-python/"
+            "cpython-3.12.3-linux-aarch64-gnu/include/python3.12",
+        )
+
+    def test_dpp_server_command_changes_only_scheduler_class(self) -> None:
+        stock = build_stock_server_command(self.runtime, port=8010)
+        dpp = build_dpp_server_command(self.runtime, port=8010)
+        self.assertEqual(dpp[: len(stock)], stock)
+        self.assertEqual(
+            dpp[len(stock) :], ["--scheduler-cls", MODULAR_DPP_SCHEDULER_CLASS]
+        )
+
+    def test_engine_core_setup_links_scheduler_and_config_loader(self) -> None:
+        source = (REPOSITORY_ROOT / "scripts/setup_g2_scheduler.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"${REPO_ROOT}/dpp_scheduler"', source)
+        self.assertIn('"${REPO_ROOT}/benchmarks/qwen3_runtime.py"', source)
+        self.assertNotIn('PYTHONPATH=', source)
+
+    def test_dgx_environment_verifies_pinned_python_headers(self) -> None:
+        source = (REPOSITORY_ROOT / "scripts/setup_dgx_vllm_env.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("verify_python_headers", source)
+        self.assertIn(
+            "d822ddffe62de3eafa3dd7415a0042f2a5790a779551281df64fdc1aa30c966d",
+            source,
+        )
+        self.assertIn('python install "${PYTHON_HEADER_VERSION}"', source)
 
     def test_request_guard_is_api_only_and_seed_is_honored(self) -> None:
         row = {
@@ -99,6 +137,12 @@ class Qwen3RuntimeTests(unittest.TestCase):
             _token_count({"text": "", "finish_reason": "stop"}), (0, True)
         )
         self.assertEqual(_token_count({"token_ids": [7], "text": "x"}), (1, True))
+
+    def test_frozen_trace_provenance_survives_scheduler_config_changes(self) -> None:
+        trace = self.runtime.active_traces / "qps_0.2_seed_1001_cap2048.jsonl"
+        manifest = self.runtime.active_traces / "manifest_cap2048_lowqps.json"
+        payload = verify_trace_manifest(trace, manifest, self.runtime)
+        self.assertNotEqual(payload["config_sha256"], self.runtime.config_sha256)
 
     def test_generation_seed_is_valid_signed_int64(self) -> None:
         seed = generation_seed(1001, 999)

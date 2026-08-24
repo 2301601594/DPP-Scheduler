@@ -51,6 +51,7 @@ PREDICTOR_EVAL_RUN_ID_ENV = "DPP_PREDICTOR_EVAL_RUN_ID"
 PREDICTOR_ARTIFACT_PATH_ENV = "DPP_PREDICTOR_ARTIFACT_PATH"
 PREDICTOR_EVAL_RECIPE_SEED_ENV = "DPP_PREDICTOR_EVAL_RECIPE_SEED"
 PREDICTOR_EVAL_RECIPE_MODE_ENV = "DPP_PREDICTOR_EVAL_RECIPE_MODE"
+DPP_DIAGNOSTIC_ITERATION_LOG_ENV = "DPP_DIAGNOSTIC_ITERATION_LOG"
 
 VLLM_OFFICIAL_ITERATION_TIMING = "vllm_official_iteration_details"
 VLLM_ALIGNED_ITERATION_TIMING = "vllm_aligned_monotonic"
@@ -772,11 +773,15 @@ def get_modular_scheduler_class() -> type:
         load_dpp_settings,
         load_fallback_settings,
         load_frozen_candidate_settings,
+        load_frozen_predictor,
         load_frozen_safe_set_settings,
         load_obligation_settings,
     )
 
-    logger = init_logger("dpp_scheduler.vllm_scheduler")
+    # vLLM installs handlers on the ``vllm`` logger with propagation disabled.
+    # Keep diagnostic messages below that namespace so INFO records reach the
+    # configured EngineCore handler instead of disappearing at the root logger.
+    logger = init_logger("vllm.dpp_scheduler")
 
     class ModularDPPScheduler(Scheduler):
         """Exact-plan development scheduler, disabled until inputs freeze."""
@@ -789,6 +794,7 @@ def get_modular_scheduler_class() -> type:
             fallback_settings = load_fallback_settings(runtime)
             obligation_settings = load_obligation_settings(runtime)
             dpp_settings = load_dpp_settings(runtime)
+            predictor = load_frozen_predictor(runtime)
             super().__init__(*args, **kwargs)
             self._dpp_obligation_ledger = ObligationLedger(
                 ttft_slo_seconds=obligation_settings.ttft_slo_seconds,
@@ -806,13 +812,17 @@ def get_modular_scheduler_class() -> type:
             self._dpp_fallback = DeterministicFallback(fallback_settings)
             self._dpp_selector = DPPSelector(dpp_settings)
             self._dpp_state_store = InMemoryStateStore(settings=dpp_settings)
-            artifact = (
-                Path(__file__).resolve().parents[1]
-                / "predictors"
-                / "qwen3_14b"
-                / "ridge_three_scenario_online_v1"
+            self._dpp_predictor = RidgeDurationPredictor.from_artifact(
+                predictor.artifact_root
             )
-            self._dpp_predictor = RidgeDurationPredictor.from_artifact(artifact)
+            diagnostic_logging = os.environ.get(
+                DPP_DIAGNOSTIC_ITERATION_LOG_ENV, "0"
+            )
+            if diagnostic_logging not in {"0", "1"}:
+                raise RuntimeError(
+                    f"{DPP_DIAGNOSTIC_ITERATION_LOG_ENV} must be 0 or 1"
+                )
+            self._dpp_diagnostic_iteration_log = diagnostic_logging == "1"
             self._dpp_predictor_pending: dict[str, Any] | None = None
             self._dpp_obligation_updates: list[LedgerUpdate] = []
             self._dpp_control_pending_updates: list[LedgerUpdate] = []
@@ -921,7 +931,7 @@ def get_modular_scheduler_class() -> type:
                 )
             selected_score = None
             selected_terms = None
-            if (
+            if self._dpp_diagnostic_iteration_log and (
                 decision.reason == "DPP_MAX_SCORE"
                 and decision.selected_plan is not None
             ):
@@ -940,25 +950,26 @@ def get_modular_scheduler_class() -> type:
                     score_audit.tbt_term,
                     score_audit.utility_term,
                 )
-            logger.info(
-                "ModularDPPScheduler frame=%s plans=%d safe=%d rejected=%d "
-                "selected=%s reason=%s control=(%s,%.6f,%.6f) "
-                "score=%s terms=%s fallback_rejected=%s",
-                snapshot.frame_id,
-                len(plans),
-                len(safe_result.safe_candidates),
-                len(safe_result.rejected),
-                decision.selected_plan.plan_id
-                if decision.selected_plan is not None
-                else "NONE",
-                decision.reason,
-                control.prefill_backlog,
-                control.ttft_debt,
-                control.tbt_debt,
-                selected_score,
-                selected_terms,
-                fallback_result.rejection_reasons if fallback_result else (),
-            )
+            if self._dpp_diagnostic_iteration_log:
+                logger.info(
+                    "ModularDPPScheduler frame=%s plans=%d safe=%d rejected=%d "
+                    "selected=%s reason=%s control=(%s,%.6f,%.6f) "
+                    "score=%s terms=%s fallback_rejected=%s",
+                    snapshot.frame_id,
+                    len(plans),
+                    len(safe_result.safe_candidates),
+                    len(safe_result.rejected),
+                    decision.selected_plan.plan_id
+                    if decision.selected_plan is not None
+                    else "NONE",
+                    decision.reason,
+                    control.prefill_backlog,
+                    control.ttft_debt,
+                    control.tbt_debt,
+                    selected_score,
+                    selected_terms,
+                    fallback_result.rejection_reasons if fallback_result else (),
+                )
             if decision.selected_plan is None:
                 idle_plan = BatchPlan(
                     plan_id=f"idle-frame-{snapshot.frame_id}",
@@ -1056,16 +1067,17 @@ def get_modular_scheduler_class() -> type:
                 actual_prefill_tokens=actual_prefill_tokens,
                 ledger_updates=tuple(self._dpp_control_pending_updates),
             )
-            logger.info(
-                "ModularDPPScheduler feedback frame=%s actual_prefill=%s "
-                "ledger_events=%s next_control=(%s,%.6f,%.6f)",
-                pending["snapshot"].frame_id,
-                actual_prefill_tokens,
-                len(self._dpp_control_pending_updates),
-                next_control.prefill_backlog,
-                next_control.ttft_debt,
-                next_control.tbt_debt,
-            )
+            if self._dpp_diagnostic_iteration_log:
+                logger.info(
+                    "ModularDPPScheduler feedback frame=%s actual_prefill=%s "
+                    "ledger_events=%s next_control=(%s,%.6f,%.6f)",
+                    pending["snapshot"].frame_id,
+                    actual_prefill_tokens,
+                    len(self._dpp_control_pending_updates),
+                    next_control.prefill_backlog,
+                    next_control.ttft_debt,
+                    next_control.tbt_debt,
+                )
             self._dpp_control_pending_updates = []
             if pending["skip_predictor_update"]:
                 self._dpp_predictor_pending = None

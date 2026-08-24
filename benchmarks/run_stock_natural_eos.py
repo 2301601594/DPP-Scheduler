@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one config-locked Stock natural-output calibration trace.
+"""Run one config-locked Stock or modular-DPP natural-output trace.
 
 The finite ``max_tokens`` sent to the API is a client termination guard only.
 It is recorded with each request but is never exposed through Scheduler
@@ -31,6 +31,7 @@ import aiohttp
 from benchmarks.qwen3_runtime import (
     ActiveConfigError,
     ActiveRuntime,
+    build_dpp_server_command,
     build_stock_server_command,
     load_active_runtime,
     require_frozen_for_execution,
@@ -49,6 +50,8 @@ TRACE_FORBIDDEN_FIELDS = frozenset(
     }
 )
 RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
+SCHEDULER_POLICIES = ("stock", "dpp")
+DPP_DIAGNOSTIC_ITERATION_LOG_ENV = "DPP_DIAGNOSTIC_ITERATION_LOG"
 
 
 def _atomic_json(path: Path, payload: Any) -> None:
@@ -165,11 +168,15 @@ def verify_trace_manifest(
     with manifest_path.open("r", encoding="utf-8") as stream:
         manifest = json.load(stream)
     required = {
-        "config_sha256": runtime.config_sha256,
         "model_revision": runtime.model_revision,
         "tokenizer_revision": runtime.tokenizer_revision,
         "client_safety_ceiling_tokens": runtime.client_safety_ceiling_tokens,
         "client_safety_ceiling_role": "termination_guard_only_never_scheduler_input",
+        "predetermined_output_length": False,
+        "temperature": runtime.temperature,
+        "top_p": runtime.top_p,
+        "ignore_eos": runtime.ignore_eos,
+        "seed_source": runtime.seed_source,
     }
     for key, expected in required.items():
         if manifest.get(key) != expected:
@@ -177,6 +184,14 @@ def verify_trace_manifest(
                 f"trace manifest {key} mismatch: expected {expected!r}, "
                 f"got {manifest.get(key)!r}"
             )
+    # This is immutable provenance for the configuration that generated the
+    # trace. Scheduler-only config additions must not invalidate unchanged
+    # prompts, arrivals, seeds, or generation settings.
+    provenance_hash = manifest.get("config_sha256")
+    if not isinstance(provenance_hash, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", provenance_hash
+    ):
+        raise ValueError("trace manifest config_sha256 provenance is invalid")
     matches = [
         item
         for item in manifest.get("files", [])
@@ -456,6 +471,12 @@ def _resolved_preview(
     output_dir: Path,
     command: list[str],
     rows: list[dict[str, Any]],
+    *,
+    scheduler_policy: str,
+    source_request_count: int,
+    diagnostic_iteration_log: bool,
+    campaign_id: str | None,
+    comparison_scope: str,
 ) -> dict[str, Any]:
     return {
         "config": str(runtime.config_path),
@@ -466,12 +487,23 @@ def _resolved_preview(
         "trace_manifest": str(trace_manifest_path),
         "trace_manifest_sha256": sha256_file(trace_manifest_path),
         "request_count": len(rows),
+        "source_request_count": source_request_count,
+        "diagnostic_prefix": len(rows) != source_request_count,
         "planned_arrival_span_s": float(rows[-1]["arrival_time_s"]),
+        "scheduler_policy": scheduler_policy,
+        "campaign_id": campaign_id,
+        "comparison_scope": comparison_scope,
+        "dpp_diagnostic_iteration_log": diagnostic_iteration_log,
         "client_safety_ceiling_tokens": runtime.client_safety_ceiling_tokens,
         "scheduler_receives_safety_ceiling": False,
         "output_dir": str(output_dir),
         "server_command": command,
         "required_env": dict(runtime.required_env),
+        "runner_env_overrides": {
+            DPP_DIAGNOSTIC_ITERATION_LOG_ENV: (
+                "1" if diagnostic_iteration_log else "0"
+            ),
+        },
     }
 
 
@@ -481,6 +513,28 @@ def main() -> int:
     parser.add_argument("--trace", required=True)
     parser.add_argument("--trace-manifest", required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument(
+        "--campaign-id",
+        help="place the append-only run under <raw>/<campaign-id>/runs/",
+    )
+    parser.add_argument(
+        "--development-trace-dir",
+        help=(
+            "development-only trace directory relative to the active raw-results "
+            "root; runs using it are never formal-comparison eligible"
+        ),
+    )
+    parser.add_argument("--policy", choices=SCHEDULER_POLICIES, default="stock")
+    parser.add_argument(
+        "--request-limit",
+        type=int,
+        help="run only the unchanged trace prefix as a diagnostic smoke",
+    )
+    parser.add_argument(
+        "--dpp-diagnostic-iteration-log",
+        action="store_true",
+        help="enable per-iteration DPP INFO logs for a diagnostic run only",
+    )
     parser.add_argument("--port", type=int, default=8010)
     parser.add_argument("--startup-timeout", type=float, default=600)
     parser.add_argument("--request-timeout", type=float, default=1800)
@@ -488,18 +542,66 @@ def main() -> int:
     args = parser.parse_args()
 
     runtime = load_active_runtime(args.config)
-    trace_path = resolve_under(runtime.active_traces, args.trace, label="trace")
+    if args.campaign_id is not None and not RUN_ID_PATTERN.fullmatch(args.campaign_id):
+        raise ActiveConfigError(f"invalid campaign_id: {args.campaign_id!r}")
+    if args.development_trace_dir is None:
+        trace_root = runtime.active_traces
+        comparison_scope = "active_frozen_trace"
+    else:
+        trace_root = resolve_under(
+            runtime.raw_results,
+            args.development_trace_dir,
+            label="development trace directory",
+        )
+        comparison_scope = "development_nonformal"
+    trace_path = resolve_under(trace_root, args.trace, label="trace")
     manifest_path = resolve_under(
-        runtime.active_traces, args.trace_manifest, label="trace manifest"
+        trace_root, args.trace_manifest, label="trace manifest"
     )
     if not RUN_ID_PATTERN.fullmatch(args.run_id):
         raise ActiveConfigError(f"invalid run_id: {args.run_id!r}")
-    output_dir = resolve_under(runtime.raw_results, args.run_id, label="output directory")
+    if args.campaign_id is None:
+        output_dir = resolve_under(
+            runtime.raw_results, args.run_id, label="output directory"
+        )
+    else:
+        campaign_root = resolve_under(
+            runtime.raw_results, args.campaign_id, label="campaign directory"
+        )
+        output_dir = resolve_under(
+            campaign_root,
+            Path("runs") / args.run_id,
+            label="campaign run output directory",
+        )
     rows = load_trace(trace_path, runtime)
+    source_request_count = len(rows)
     verify_trace_manifest(trace_path, manifest_path, runtime)
-    command = build_stock_server_command(runtime, port=args.port)
+    if args.request_limit is not None:
+        if not 1 <= args.request_limit <= source_request_count:
+            raise ActiveConfigError(
+                f"request limit must be in [1, {source_request_count}]"
+            )
+        rows = rows[: args.request_limit]
+    if args.dpp_diagnostic_iteration_log and args.policy != "dpp":
+        raise ActiveConfigError(
+            "DPP diagnostic iteration logging requires --policy dpp"
+        )
+    command_builder = (
+        build_dpp_server_command if args.policy == "dpp" else build_stock_server_command
+    )
+    command = command_builder(runtime, port=args.port)
     preview = _resolved_preview(
-        runtime, trace_path, manifest_path, output_dir, command, rows
+        runtime,
+        trace_path,
+        manifest_path,
+        output_dir,
+        command,
+        rows,
+        scheduler_policy=args.policy,
+        source_request_count=source_request_count,
+        diagnostic_iteration_log=args.dpp_diagnostic_iteration_log,
+        campaign_id=args.campaign_id,
+        comparison_scope=comparison_scope,
     )
     if args.dry_run:
         print(json.dumps(preview, ensure_ascii=False, indent=2, sort_keys=True))
@@ -514,10 +616,18 @@ def main() -> int:
     environment = os.environ.copy()
     environment.update(dict(runtime.required_env))
     environment["PATH"] = f"{runtime.python.parent}:{environment.get('PATH', '')}"
+    environment[DPP_DIAGNOSTIC_ITERATION_LOG_ENV] = (
+        "1" if args.dpp_diagnostic_iteration_log else "0"
+    )
     manifest: dict[str, Any] = {
-        "schema_version": 1,
-        "kind": "qwen3_14b_stock_natural_output_calibration",
+        "schema_version": 2,
+        "kind": "qwen3_14b_scheduler_natural_output",
         "run_id": args.run_id,
+        "scheduler_policy": args.policy,
+        "comparison_eligible": args.request_limit is None,
+        "formal_comparison_eligible": (
+            args.request_limit is None and args.development_trace_dir is None
+        ),
         "status": "running",
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
         "resolved": preview,
@@ -565,7 +675,7 @@ def main() -> int:
         if process is not None and process.poll() is None:
             process.terminate()
             try:
-                process.wait(timeout=20)
+                process.wait(timeout=runtime.shutdown_timeout_seconds + 20)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=10)
