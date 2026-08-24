@@ -456,7 +456,7 @@ FallbackPlan 是独立于正常 DPP 候选集合的兜底路径，不参与 DPP 
 - 当前没有 Decode 请求：执行最小物理可行 Prefill chunk；
 - Fallback 仍必须满足 token、sequence、KV Cache 和 Predictor 支持域等硬约束；
 - Fallback 的执行时间仍由 Predictor 预测并记录；
-- 如果 Fallback 仍然不可执行，则进入 Preemption 或 Idle。
+- 如果 Fallback 仍然不可执行，非空 workload 进入 liveness escape 或 Preemption；只有空 workload 才进入 Idle。
 
 Fallback 的作用是保证系统在极端负载或全部候选都存在 SLO 风险时仍有明确行为，而不是参与正常性能优化。
 
@@ -505,36 +505,13 @@ def filter(snapshot, plans, predictions):
             (plan, pred, n_vio, e_vio)
         )
 
-    # 4. 优先保留零违约计划
-    zero_plans = [
-        x for x in evaluated
-        if x.n_vio == 0
-    ]
+    # 4. 风险只作为候选元数据保留，不在 Safe-Set 内按零违约或 Top-K 删除
+    candidates = evaluated
 
-    if zero_plans:
-        return SafeSetResult(
-            safe_candidates=zero_plans,
-            rejected=rejected,
-        )
-
-    # 5. 所有计划都存在违约风险
-    evaluated.sort(
-        key=lambda x: (
-            x.n_vio,
-            x.e_vio,
-            x.stable_plan_key,
-        )
+    return SafeSetResult(
+        safe_candidates=candidates,
+        rejected=rejected,
     )
-
-    candidates = evaluated[:TOP_K]
-
-    if candidates:
-        return SafeSetResult(
-            safe_candidates=candidates,
-            rejected=rejected,
-        )
-
-    return SafeSetResult(safe_candidates=[], rejected=rejected)
 ```
 
 
@@ -546,20 +523,17 @@ def filter(snapshot, plans, predictions):
     → 删除
 
 资源可行
-    → 计算保守 SLO 违约风险
-
-存在零违约计划
-    → 零违约计划进入 DPP
-
-不存在零违约计划
-    → 按 N_vio、E_vio 排序
-    → Top-K 进入 DPP
+    → 计算保守 SLO 违约风险并附加到候选元数据
+    → 所有物理/Predictor 可行候选进入 DPP（Legacy Top-K inactive）
 
 没有正常可执行候选
     → FallbackPlan
 
-Fallback 仍不可执行
-    → Preemption 或 Idle
+Fallback 仍不可执行且 workload 非空
+    → liveness escape 或 Preemption
+
+Fallback 仍不可执行且 workload 为空
+    → Idle
 ```
 
 
@@ -633,7 +607,7 @@ $$
 - `Q^P` 和 `mu^P` 在评分时分别除以 `C_tok=2048`，`Z^F/Z^D`、
   `S/M` 和即时效用分别除以 `C_seq=64`，使四个分子项无量纲；
 - `U_hat = S_hat^F + S_hat^D`，表示本轮预计按时完成的 obligation 数，
-  并非 terminal request-level Goodput；容量归一化后取 `V=1.0`；
+  并非 terminal request-level Goodput；当前 integration 令 `weight_v=0.0` 暂时关闭该项，公式保留以便后续单独重做；
 - 分数单位为 `1/second`。所有输入和中间项必须是 IEEE-754 binary64
   可表示的有限值，非负量下界为零；`expected_duration <= 0`、NaN、Inf、
   hash/plan 不匹配均 fail-closed，不做截断或乐观外推。

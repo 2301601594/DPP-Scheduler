@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, fields, is_dataclass
 from typing import Any, TypeVar
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 T = TypeVar("T")
 
@@ -94,6 +94,8 @@ class PrefillRequest:
     is_running: bool = False
     # Partial-prefill ordering uses the original index as a stable tie key.
     ordinal: int = 0
+    # A missed request remains live for completion but loses Goodput eligibility.
+    goodput_eligible: bool = True
 
     @property
     def remaining_tokens(self) -> int:
@@ -116,6 +118,7 @@ class DecodeRequest:
     recovery_first_miss_time: float | None = None
     mandatory: bool = False
     ordinal: int = 0
+    goodput_eligible: bool = True
 
 
 @dataclass(frozen=True)

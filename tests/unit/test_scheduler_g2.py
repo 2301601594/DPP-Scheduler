@@ -70,6 +70,11 @@ def make_settings(
     )
 
 
+def mark_ineligible(request):
+    object.__setattr__(request, "goodput_eligible", False)
+    return request
+
+
 class ContractTests(unittest.TestCase):
     def test_snapshot_hash_is_deterministic(self) -> None:
         first = make_snapshot()
@@ -238,6 +243,69 @@ class CandidateGeneratorTests(unittest.TestCase):
             if "boundary" in itemset and "outside" not in itemset
         )
         self.assertNotIn("no-deadline", critical)
+
+    def test_ineligible_prefill_does_not_retain_hard_ttft_priority(self) -> None:
+        eligible = PrefillRequest(
+            "eligible", 0.0, 32, 0, ttft_deadline=100.1,
+            hard_ttft_protected=True, ordinal=0,
+        )
+        ineligible = mark_ineligible(
+            PrefillRequest(
+                "ineligible", 1.0, 32, 0, ttft_deadline=100.0,
+                hard_ttft_protected=True, ordinal=1,
+            )
+        )
+        ordered = _rank_prefill(
+            make_snapshot(prefill=(ineligible, eligible))
+        )
+        self.assertEqual(
+            tuple(request.request_id for request in ordered),
+            ("eligible", "ineligible"),
+        )
+
+    def test_ineligible_decode_is_excluded_from_critical_but_not_all(self) -> None:
+        ineligible = mark_ineligible(
+            DecodeRequest(
+                "ineligible", 0.0, 10, tbt_deadline=100.1, ordinal=0,
+            )
+        )
+        eligible = DecodeRequest(
+            "eligible", 1.0, 10, tbt_deadline=100.2, ordinal=1,
+        )
+        plans = CandidateGenerator(make_settings()).generate(
+            make_snapshot(decode=(ineligible, eligible))
+        )
+        critical = {
+            plan.decode_items
+            for plan in plans
+            if plan.template_id.startswith("CRITICAL:")
+        }
+        self.assertIn(("eligible",), critical)
+        self.assertNotIn(("eligible", "ineligible"), critical)
+        self.assertIn(
+            ("eligible", "ineligible"),
+            {plan.decode_items for plan in plans},
+        )
+
+    def test_mandatory_ineligible_decode_remains_liveness_protected(self) -> None:
+        request = mark_ineligible(
+            DecodeRequest(
+                "recovery", 0.0, 10, tbt_deadline=100.1,
+                recovery_due=True, recovery_first_miss_time=1.0,
+                mandatory=True, ordinal=0,
+            )
+        )
+        plans = CandidateGenerator(make_settings()).generate(
+            make_snapshot(decode=(request,), recovery=("recovery",))
+        )
+        self.assertIn(
+            ("recovery",),
+            {
+                plan.decode_items
+                for plan in plans
+                if plan.template_id.startswith("MANDATORY:")
+            },
+        )
 
     def test_only_oldest_due_recovery_is_mandatory(self) -> None:
         decode = (

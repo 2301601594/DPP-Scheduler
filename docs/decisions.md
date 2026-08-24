@@ -13,9 +13,9 @@
 - Candidate Generator, offline Duration Predictor, Safe-Set, DPP Selector,
   Adapter, and Observer communicate through immutable public contracts tied to
   one `snapshot_hash`.
-- Safe-Set hard-filters physical feasibility and Predictor support. SLO risk is
-  ranked: zero-new-violation plans are preferred, otherwise risk-ranked Top-K
-  still reaches DPP.
+- Safe-Set hard-filters physical feasibility and Predictor support. SLO risk
+  remains auditable candidate metadata; every physically/Predictor-feasible
+  candidate reaches DPP without zero-risk or Top-K pruning.
 - KV safety uses a finite Rolling horizon and reserve blocks. It never reserves
   or predicts a request's complete output length.
 - Fallback is independent of DPP scoring: EDF Decode-only when Decode exists,
@@ -24,6 +24,31 @@
 - DPP maintains only Prefill backlog, TTFT debt, and TBT debt. Observer updates
   them from actual events; every obligation is settled once, and actual
   request-level Goodput is counted only after natural EOS.
+
+## 2026-08-24: preserve feasible actions during integration repair
+
+- The Safe-Set now retains every candidate that passes token, sequence,
+  current/Rolling KV, and Predictor-support checks. Predicted violation count,
+  lateness, and deadline margin remain attached to each SafeCandidate; the
+  former zero-risk and all-risk Top-K admission pruning is disabled so the
+  Selector owns the SLO-risk trade-off. The legacy top_k_when_all_risky
+  config field remains only for schema compatibility.
+- The obligation-level ttft_success + tbt_success service utility remains
+  available for audit, but its integration contribution is disabled with
+  weight_v=0.0. This avoids treating repeated TBT obligations as request-level
+  Goodput while leaving the score structure unchanged.
+  configs/dpp_selector_integration_freeze.json and its active-config hash
+  are updated together.
+- candidate_generator.recovery_age_threshold_seconds=0.25 is
+  provisional_for_scheduler_integration, sourced from the existing
+  slo.tbt_seconds=0.25. It is the smallest conservative existing
+  same-scale interval selected for one full TBT-SLO period after the first
+  miss; it is not a measured formal freeze.
+- The top-level scheduler_diagnostics block is also provisional. It records
+  the existing Observer bound of 1024 records, an eight-iteration
+  zero-progress watchdog derived from safe_set.rolling_kv_horizon_iterations,
+  fail-fast disabled by default, and performance diagnostics disabled unless
+  DPP_DIAGNOSTIC_ITERATION_LOG=1 is set.
 
 ## 2026-08-23: defer Predictor feature and model selection to offline training
 

@@ -42,7 +42,7 @@ integration-only G4/DPP values if they are to support formal benchmark claims.
 | G1 | Stock natural-EOS baseline and event telemetry | verified TTFT/TBT event semantics, frozen SLO/Goodput definitions, resource/load calibration |
 | G2 | Contracts, Snapshot, exact-plan Adapter, Candidate Generator | immutable same-hash structures; at most 12 deterministic plans; selected plan equals actual execution |
 | G3 | Same-configuration profiling and offline model selection | held-out expected error, conservative P95 coverage/underprediction, support/OOD report, CPU overhead |
-| G4 | Safe-Set, Rolling KV, and Fallback | physical feasibility, zero-violation/all-risk behavior, deterministic fallback/preemption/idle audit |
+| G4 | Safe-Set, Rolling KV, and Fallback | physical/Predictor feasibility with risk metadata retained for every candidate, deterministic fallback/liveness-preemption/empty-idle audit |
 | G5 | DPP and SLO ledger freeze | complete equation, units, numeric ranges, obligation boundaries, one owner for fallback, deterministic tie-break |
 | G6 | Integrated modular Scheduler | remote unit/integration tests, exact execution, one-time settlement, actual-only state updates |
 | G7 | Stock-versus-DPP evaluation | identical frozen model/requests/arrival/runtime settings, append-only raw data, reproducible tables and uncertainty |
@@ -132,25 +132,28 @@ result is retained; the Predictor is accepted for modular integration.
 ### G4: Safety
 
 Apply token, sequence, current KV, Rolling-KV, and Predictor-support hard
-filters. Use conservative duration for SLO-risk estimation. Prefer zero-new-
-violation plans; otherwise send risk-ranked Top-K to DPP. Keep the independent
-Fallback and Preemption/Idle paths deterministic and audited.
+filters. Use conservative duration for SLO-risk metadata. Every
+physical/Predictor-feasible candidate reaches DPP; the legacy Top-K field is
+inactive. Keep the independent Fallback and liveness/preemption/empty-Idle
+paths deterministic and audited.
 
 For end-to-end Scheduler integration only, the active config provisionally
-uses `H=8` Decode iterations, `R0=64` KV blocks, and user-selected `Top-K=3`.
-These are design-derived scaffolding values: 16-token KV blocks and at most one
-Decode token per request make eight iterations half a block period, while 64
-reserve blocks provide one extra block per maximum active sequence and consume
-about 0.21% of the observed 30,149-block capacity. They are not a measured G4
+uses `H=8` Decode iterations and `R0=64` KV blocks. The legacy `Top-K=3` field
+is retained only for schema compatibility and is inactive. These are
+design-derived scaffolding values: 16-token KV blocks and at most one Decode
+token per request make eight iterations half a block period, while 64 reserve
+blocks provide one extra block per maximum active sequence and consume about
+0.21% of the observed 30,149-block capacity. They are not a measured G4
 freeze, do not make G4 complete, and are ineligible for formal DPP results.
 Fallback integration provisionally uses a 6-token minimum Prefill chunk, equal
 to the frozen Prefill-only Predictor support-domain lower bound for total
 scheduled Prefill tokens. A completion chunk may be smaller, but it must still
-pass Predictor support; otherwise the explicit Idle path is used.
+pass Predictor support; otherwise a non-empty workload uses the liveness
+escape or Preemption path, while Idle is reserved for an empty workload.
 
-The integration implementation now wires the resource filters, risk ranking,
-Controller-owned Fallback, and explicit Preemption-required/Idle result into
-the live modular Scheduler. The relevant remote unit tests pass, but the
+The integration implementation now wires the resource filters, risk metadata,
+Controller-owned Fallback, and explicit liveness/Preemption-required/empty-Idle
+result into the live modular Scheduler. The relevant remote unit tests pass, but the
 provisional parameters above still keep G4 ineligible for formal claims.
 
 ### G5–G6: Control and integration
@@ -168,8 +171,9 @@ The normalized DPP Selector and actual-feedback `Q^P/Z^F/Z^D` updates are now
 implemented and wired into the live modular Scheduler. For integration,
 `epsilon^F=epsilon^D=0.05` is frozen from the retained Stock miss ratios,
 token terms are normalized by `C_tok=2048`, obligation terms by `C_seq=64`,
-and `V=1.0`. The freeze is versioned and runtime hash-checked but explicitly
-ineligible for a formal benchmark parameter-optimality claim. Remote model-free
+and `weight_v=0.0` disables the obligation-level utility during this integration
+repair. The freeze is versioned and runtime hash-checked but explicitly ineligible
+for a formal benchmark parameter-optimality claim. Remote model-free
 tests establish the deterministic score, ties, one-time feedback, and live
 factory wiring; a real model integration run remains required before G6 can be
 claimed complete.

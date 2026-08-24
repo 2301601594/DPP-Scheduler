@@ -25,12 +25,10 @@ from dpp_scheduler.predictor import DurationPredictor
 from dpp_scheduler.safe_set import (
     PREDICTOR_OUT_OF_SUPPORT,
     ROLLING_KV_EXCEEDED,
-    SLO_RISK_OUTSIDE_TOP_K,
-    SLO_RISK_WHEN_ZERO_AVAILABLE,
     ResourceAndRiskSafeSet,
     rolling_kv_reserve_blocks,
 )
-from dpp_scheduler.settings import SafeSetSettings
+from dpp_scheduler.settings import SafeSetSettings, SchedulerDiagnosticsSettings
 from dpp_scheduler.vllm_adapter import CallbackVllmAdapter, get_modular_scheduler_class
 
 
@@ -161,11 +159,11 @@ class SafeSetTests(unittest.TestCase):
             tuple(make_prediction(snapshot, plan) for plan in plans),
         )
 
-    def test_zero_violation_plans_exclude_risky_plans(self) -> None:
+    def test_all_feasible_candidates_retain_risk_metadata(self) -> None:
         snapshot = make_snapshot(decode=(DecodeRequest("d", 0.0, 16),))
         safe_plan = make_plan(snapshot, "safe", decode_items=("d",))
         risky_plan = make_plan(snapshot, "risky")
-        base = (
+        predictions = (
             replace(
                 make_prediction(snapshot, safe_plan),
                 predicted_violation_count=0,
@@ -178,16 +176,19 @@ class SafeSetTests(unittest.TestCase):
             ),
         )
         result = ResourceAndRiskSafeSet(settings()).filter(
-            snapshot, (safe_plan, risky_plan), base
+            snapshot, (safe_plan, risky_plan), predictions
         )
         self.assertEqual(
-            tuple(item.plan.plan_id for item in result.safe_candidates), ("safe",)
+            tuple(item.plan.plan_id for item in result.safe_candidates),
+            ("safe", "risky"),
         )
-        self.assertIn(
-            ("risky", (SLO_RISK_WHEN_ZERO_AVAILABLE,)), result.rejected
+        self.assertEqual(result.rejected, ())
+        self.assertEqual(result.safe_candidates[1].predicted_violation_count, 1)
+        self.assertAlmostEqual(
+            result.safe_candidates[1].predicted_total_lateness_seconds, 0.1
         )
 
-    def test_all_risk_uses_count_lateness_plan_id_and_top_k(self) -> None:
+    def test_all_risk_candidates_ignore_legacy_top_k(self) -> None:
         snapshot = make_snapshot(decode=(DecodeRequest("d", 0.0, 16),))
         plans = tuple(make_plan(snapshot, name) for name in ("c", "a", "b"))
         risks = ((1, 0.2), (1, 0.1), (2, 0.0))
@@ -203,9 +204,14 @@ class SafeSetTests(unittest.TestCase):
             snapshot, plans, predictions
         )
         self.assertEqual(
-            tuple(item.plan.plan_id for item in result.safe_candidates), ("a", "c")
+            tuple(item.plan.plan_id for item in result.safe_candidates),
+            ("c", "a", "b"),
         )
-        self.assertIn(("b", (SLO_RISK_OUTSIDE_TOP_K,)), result.rejected)
+        self.assertEqual(result.rejected, ())
+        self.assertEqual(
+            [item.predicted_violation_count for item in result.safe_candidates],
+            [1, 1, 2],
+        )
 
     def test_rolling_kv_boundary_and_reserve_rejection(self) -> None:
         snapshot = make_snapshot(
@@ -304,6 +310,22 @@ class SafeSetTests(unittest.TestCase):
         )
         self.assertEqual(result.safe_candidates, ())
         self.assertIn(PREDICTOR_OUT_OF_SUPPORT, result.rejected[0][1])
+
+    def test_scheduler_diagnostics_settings_are_bounded_and_provisional(self) -> None:
+        diagnostics = SchedulerDiagnosticsSettings.from_mapping(
+            {
+                "parameter_status": "provisional_for_scheduler_integration",
+                "bounded_records": 1024,
+                "zero_progress_watchdog_iterations": 8,
+                "fail_fast_development": False,
+                "performance_logging_default": False,
+                "performance_logging_enable_env": "DPP_DIAGNOSTIC_ITERATION_LOG",
+            }
+        )
+        self.assertEqual(diagnostics.bounded_records, 1024)
+        self.assertEqual(diagnostics.zero_progress_watchdog_iterations, 8)
+        self.assertFalse(diagnostics.fail_fast_development)
+        self.assertFalse(diagnostics.performance_logging_default)
 
     def test_settings_reject_unfrozen_nulls(self) -> None:
         with self.assertRaisesRegex(ValueError, "not frozen"):

@@ -371,6 +371,7 @@ class VllmAdapter(ExactPlanAdapter):
         *,
         frame_start: int = 1,
         obligation_ledger: ObligationLedger | None = None,
+        critical_horizon_seconds: float | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._scheduler = scheduler
@@ -378,7 +379,29 @@ class VllmAdapter(ExactPlanAdapter):
         self._last_snapshot: StateSnapshot | None = None
         self._poisoned = False
         self._obligation_ledger = obligation_ledger
+        self._critical_horizon_seconds = critical_horizon_seconds
         self._clock = clock
+        self._prepared_snapshot_timestamp: float | None = None
+
+    def expire_obligations_before_snapshot(self) -> tuple[Any, ...]:
+        """Settle misses and pin the same timestamp for the next snapshot."""
+        now = self._clock()
+        self._prepared_snapshot_timestamp = now
+        ledger = self._obligation_ledger
+        if ledger is None:
+            return ()
+        return tuple(ledger.expire_deadlines(now))
+
+    def _hard_ttft_protected(self, ledger_view: Any, now: float) -> bool:
+        if ledger_view is None or not ledger_view.goodput_eligible:
+            return False
+        deadline = ledger_view.ttft_deadline
+        horizon = self._critical_horizon_seconds
+        return (
+            deadline is not None
+            and horizon is not None
+            and deadline - now <= horizon
+        )
 
     def make_snapshot(self) -> StateSnapshot:
         scheduler = self._require_scheduler()
@@ -391,7 +414,10 @@ class VllmAdapter(ExactPlanAdapter):
         sequence_budget = scheduler.max_num_running_reqs
         frame_id = self._frame
         self._frame += 1
-        now = self._clock()
+        now = self._prepared_snapshot_timestamp
+        if now is None:
+            now = self._clock()
+        self._prepared_snapshot_timestamp = None
 
         ledger_views = {}
         if self._obligation_ledger is not None:
@@ -418,8 +444,14 @@ class VllmAdapter(ExactPlanAdapter):
                         ttft_deadline=(
                             ledger_view.ttft_deadline if ledger_view else None
                         ),
+                        hard_ttft_protected=self._hard_ttft_protected(
+                            ledger_view, now
+                        ),
                         is_running=True,
                         ordinal=ordinal,
+                        goodput_eligible=(
+                            ledger_view.goodput_eligible if ledger_view else True
+                        ),
                     )
                 )
             else:
@@ -444,6 +476,9 @@ class VllmAdapter(ExactPlanAdapter):
                             ledger_view.recovery_due if ledger_view else False
                         ),
                         ordinal=ordinal,
+                        goodput_eligible=(
+                            ledger_view.goodput_eligible if ledger_view else True
+                        ),
                     )
                 )
             ordinal += 1
@@ -472,8 +507,14 @@ class VllmAdapter(ExactPlanAdapter):
                     ttft_deadline=(
                         ledger_view.ttft_deadline if ledger_view else None
                     ),
+                    hard_ttft_protected=self._hard_ttft_protected(
+                        ledger_view, now
+                    ),
                     is_running=False,
                     ordinal=ordinal,
+                    goodput_eligible=(
+                        ledger_view.goodput_eligible if ledger_view else True
+                    ),
                 )
             )
             ordinal += 1
@@ -758,7 +799,15 @@ def get_modular_scheduler_class() -> type:
     from dpp_scheduler.candidate_generator import CandidateGenerator
     from dpp_scheduler.consequence_estimator import ConsequenceEstimator
     from dpp_scheduler.dpp_selector import DPPSelector
-    from dpp_scheduler.fallback import DeterministicFallback, resolve_fallback
+    from dpp_scheduler.fallback import (
+        DeterministicFallback,
+        LIVENESS_ESCAPE_DECODE,
+        LIVENESS_ESCAPE_PREFILL,
+        PREEMPTION_REQUIRED_NATIVE_PROGRESS,
+        build_liveness_escape,
+        resolve_fallback,
+    )
+    from dpp_scheduler.observer import ProgressWatchdog
     from dpp_scheduler.predictor import RidgeDurationPredictor
     from dpp_scheduler.safe_set import ResourceAndRiskSafeSet
     from dpp_scheduler.state_store import (
@@ -776,6 +825,7 @@ def get_modular_scheduler_class() -> type:
         load_frozen_predictor,
         load_frozen_safe_set_settings,
         load_obligation_settings,
+        load_scheduler_diagnostics_settings,
     )
 
     # vLLM installs handlers on the ``vllm`` logger with propagation disabled.
@@ -794,6 +844,7 @@ def get_modular_scheduler_class() -> type:
             fallback_settings = load_fallback_settings(runtime)
             obligation_settings = load_obligation_settings(runtime)
             dpp_settings = load_dpp_settings(runtime)
+            diagnostics_settings = load_scheduler_diagnostics_settings(runtime)
             predictor = load_frozen_predictor(runtime)
             super().__init__(*args, **kwargs)
             self._dpp_obligation_ledger = ObligationLedger(
@@ -804,7 +855,9 @@ def get_modular_scheduler_class() -> type:
                 ),
             )
             self._dpp_adapter = VllmAdapter(
-                self, obligation_ledger=self._dpp_obligation_ledger
+                self,
+                obligation_ledger=self._dpp_obligation_ledger,
+                critical_horizon_seconds=candidate.settings.critical_horizon_seconds,
             )
             self._dpp_generator = CandidateGenerator(candidate.settings)
             self._dpp_consequence_estimator = ConsequenceEstimator()
@@ -815,14 +868,28 @@ def get_modular_scheduler_class() -> type:
             self._dpp_predictor = RidgeDurationPredictor.from_artifact(
                 predictor.artifact_root
             )
+            if (
+                diagnostics_settings.performance_logging_enable_env
+                != DPP_DIAGNOSTIC_ITERATION_LOG_ENV
+            ):
+                raise RuntimeError("diagnostic logging environment key mismatch")
             diagnostic_logging = os.environ.get(
-                DPP_DIAGNOSTIC_ITERATION_LOG_ENV, "0"
+                DPP_DIAGNOSTIC_ITERATION_LOG_ENV,
+                "1" if diagnostics_settings.performance_logging_default else "0",
             )
             if diagnostic_logging not in {"0", "1"}:
                 raise RuntimeError(
                     f"{DPP_DIAGNOSTIC_ITERATION_LOG_ENV} must be 0 or 1"
                 )
             self._dpp_diagnostic_iteration_log = diagnostic_logging == "1"
+            self._dpp_diagnostics_settings = diagnostics_settings
+            self._dpp_progress_watchdog = ProgressWatchdog(
+                max_records=diagnostics_settings.bounded_records,
+                zero_progress_limit=(
+                    diagnostics_settings.zero_progress_watchdog_iterations
+                ),
+                fail_fast=diagnostics_settings.fail_fast_development,
+            )
             self._dpp_predictor_pending: dict[str, Any] | None = None
             self._dpp_obligation_updates: list[LedgerUpdate] = []
             self._dpp_control_pending_updates: list[LedgerUpdate] = []
@@ -848,9 +915,10 @@ def get_modular_scheduler_class() -> type:
 
         def _dpp_record_obligation_update(self, update: LedgerUpdate) -> None:
             self._dpp_obligation_updates.append(update)
-            del self._dpp_obligation_updates[:-1024]
-            if self._dpp_predictor_pending is not None:
-                self._dpp_control_pending_updates.append(update)
+            del self._dpp_obligation_updates[
+                : -self._dpp_diagnostics_settings.bounded_records
+            ]
+            self._dpp_control_pending_updates.append(update)
 
         def finish_requests(self, request_ids: Any, finished_status: Any) -> Any:
             finished = super().finish_requests(request_ids, finished_status)
@@ -893,10 +961,102 @@ def get_modular_scheduler_class() -> type:
                 raise RuntimeError("duplicate modular Predictor iteration timing")
             pending["actual_duration_seconds"] = duration_seconds
 
+        @staticmethod
+        def _dpp_zero_plan(
+            snapshot: StateSnapshot, reason: str
+        ) -> BatchPlan:
+            return BatchPlan(
+                plan_id=f"zero-frame-{snapshot.frame_id}",
+                snapshot_hash=snapshot.snapshot_hash,
+                template_id=f"ZERO:{reason}",
+                prefill_items=(),
+                decode_items=(),
+                total_prefill_tokens=0,
+                total_decode_tokens=0,
+                total_sequences=project_sequence_count(snapshot, ()),
+                projected_kv_blocks=project_kv_blocks(snapshot, (), ()),
+                mandatory_request_ids=(),
+            )
+
+        def _dpp_bind_pending(
+            self,
+            *,
+            snapshot: StateSnapshot,
+            plan: BatchPlan,
+            scheduler_output: Any,
+            base_duration_seconds: float | None,
+            skip_predictor_update: bool,
+        ) -> None:
+            self._dpp_predictor_pending = {
+                "snapshot": snapshot,
+                "plan": plan,
+                "base_duration_seconds": base_duration_seconds,
+                "scheduler_output": scheduler_output,
+                "actual_duration_seconds": None,
+                "skip_predictor_update": skip_predictor_update,
+            }
+
+        def _dpp_record_schedule_diagnostic(
+            self,
+            *,
+            snapshot: StateSnapshot,
+            control: Any,
+            plans: tuple[BatchPlan, ...],
+            safe_result: Any,
+            decision: Decision,
+            fallback_result: Any,
+            plan: BatchPlan,
+            scheduler_output: Any,
+            predictor_in_support: bool,
+            scheduler_cpu_seconds: float,
+        ) -> None:
+            record = self._dpp_progress_watchdog.record_iteration(
+                workload_nonempty=bool(
+                    snapshot.active_decode_requests
+                    or snapshot.waiting_prefill_requests
+                ),
+                scheduled_tokens=int(scheduler_output.total_num_scheduled_tokens),
+                prefill_tokens=plan.total_prefill_tokens,
+                decode_tokens=plan.total_decode_tokens,
+                diagnostic={
+                    "frame_id": snapshot.frame_id,
+                    "candidate_count": len(plans),
+                    "safe_candidate_count": len(safe_result.safe_candidates),
+                    "selected_plan": plan.plan_id,
+                    "decision_reason": decision.reason,
+                    "prefill_backlog": control.prefill_backlog,
+                    "ttft_debt": control.ttft_debt,
+                    "tbt_debt": control.tbt_debt,
+                    "predictor_in_support": predictor_in_support,
+                    "safe_set_rejections": safe_result.rejected,
+                    "fallback_reason": (
+                        fallback_result.reason if fallback_result else None
+                    ),
+                    "scheduler_cpu_seconds": scheduler_cpu_seconds,
+                },
+            )
+            if record["watchdog_triggered"]:
+                logger.error("ModularDPPScheduler zero-progress dump=%s", record)
+            elif self._dpp_diagnostic_iteration_log:
+                logger.info("ModularDPPScheduler diagnostic=%s", record)
+
         def schedule(self, throttle_prefills: bool = False) -> Any:
             del throttle_prefills
+            scheduler_cpu_started = time.perf_counter()
+            expiry_updates = (
+                self._dpp_adapter.expire_obligations_before_snapshot()
+            )
+            for update in expiry_updates:
+                self._dpp_record_obligation_update(update)
             snapshot = self._dpp_adapter.make_snapshot()
             control = self._dpp_state_store.bind_snapshot(snapshot)
+            if self._dpp_control_pending_updates:
+                control = self._dpp_state_store.update_from_actual(
+                    snapshot_hash=snapshot.snapshot_hash,
+                    actual_prefill_tokens=0,
+                    ledger_updates=tuple(self._dpp_control_pending_updates),
+                )
+                self._dpp_control_pending_updates = []
             plans = self._dpp_generator.generate(snapshot)
             predictions = self._dpp_predictor.predict(snapshot, plans)
             if len(predictions) != len(plans):
@@ -918,101 +1078,98 @@ def get_modular_scheduler_class() -> type:
                     self._dpp_predictor,
                     self._dpp_safe_set,
                 )
-                fallback_plan = (
-                    fallback_result.plan
-                    if not fallback_result.rejection_reasons
-                    else None
-                )
+                if fallback_result.rejection_reasons:
+                    fallback_result = build_liveness_escape(
+                        snapshot, fallback_result
+                    )
                 decision = Decision(
                     frame_id=snapshot.frame_id,
                     snapshot_hash=snapshot.snapshot_hash,
-                    selected_plan=fallback_plan,
+                    selected_plan=fallback_result.plan,
                     reason=fallback_result.reason,
                 )
-            selected_score = None
-            selected_terms = None
-            if self._dpp_diagnostic_iteration_log and (
-                decision.reason == "DPP_MAX_SCORE"
-                and decision.selected_plan is not None
-            ):
-                selected_candidate = next(
-                    candidate
-                    for candidate in safe_result.safe_candidates
-                    if candidate.plan.plan_id == decision.selected_plan.plan_id
-                )
-                score_audit = self._dpp_selector.score_candidate(
-                    snapshot, control, selected_candidate
-                )
-                selected_score = score_audit.score
-                selected_terms = (
-                    score_audit.prefill_term,
-                    score_audit.ttft_term,
-                    score_audit.tbt_term,
-                    score_audit.utility_term,
-                )
-            if self._dpp_diagnostic_iteration_log:
-                logger.info(
-                    "ModularDPPScheduler frame=%s plans=%d safe=%d rejected=%d "
-                    "selected=%s reason=%s control=(%s,%.6f,%.6f) "
-                    "score=%s terms=%s fallback_rejected=%s",
-                    snapshot.frame_id,
-                    len(plans),
-                    len(safe_result.safe_candidates),
-                    len(safe_result.rejected),
-                    decision.selected_plan.plan_id
-                    if decision.selected_plan is not None
-                    else "NONE",
-                    decision.reason,
-                    control.prefill_backlog,
-                    control.ttft_debt,
-                    control.tbt_debt,
-                    selected_score,
-                    selected_terms,
-                    fallback_result.rejection_reasons if fallback_result else (),
-                )
             if decision.selected_plan is None:
-                idle_plan = BatchPlan(
-                    plan_id=f"idle-frame-{snapshot.frame_id}",
-                    snapshot_hash=snapshot.snapshot_hash,
-                    template_id=f"IDLE:{decision.reason}",
-                    prefill_items=(),
-                    decode_items=(),
-                    total_prefill_tokens=0,
-                    total_decode_tokens=0,
-                    total_sequences=project_sequence_count(snapshot, ()),
-                    projected_kv_blocks=project_kv_blocks(snapshot, (), ()),
-                    mandatory_request_ids=(),
+                workload_nonempty = bool(
+                    snapshot.active_decode_requests
+                    or snapshot.waiting_prefill_requests
                 )
-                scheduler_output = self._dpp_adapter.build_scheduler_output(idle_plan)
-                self._dpp_predictor_pending = {
-                    "snapshot": snapshot,
-                    "plan": idle_plan,
-                    "base_duration_seconds": None,
-                    "scheduler_output": scheduler_output,
-                    "actual_duration_seconds": None,
-                    "skip_predictor_update": True,
-                }
-                self._dpp_control_pending_updates = []
+                if workload_nonempty:
+                    scheduler_output = super().schedule(False)
+                    plan = build_shadow_plan(
+                        snapshot=snapshot, scheduler_output=scheduler_output
+                    ) or self._dpp_zero_plan(snapshot, decision.reason)
+                    decision = Decision(
+                        frame_id=snapshot.frame_id,
+                        snapshot_hash=snapshot.snapshot_hash,
+                        selected_plan=None,
+                        reason=PREEMPTION_REQUIRED_NATIVE_PROGRESS,
+                    )
+                else:
+                    plan = self._dpp_zero_plan(snapshot, decision.reason)
+                    scheduler_output = self._dpp_adapter.build_scheduler_output(plan)
+                self._dpp_bind_pending(
+                    snapshot=snapshot,
+                    plan=plan,
+                    scheduler_output=scheduler_output,
+                    base_duration_seconds=None,
+                    skip_predictor_update=True,
+                )
+                self._dpp_record_schedule_diagnostic(
+                    snapshot=snapshot,
+                    control=control,
+                    plans=plans,
+                    safe_result=safe_result,
+                    decision=decision,
+                    fallback_result=fallback_result,
+                    plan=plan,
+                    scheduler_output=scheduler_output,
+                    predictor_in_support=False,
+                    scheduler_cpu_seconds=(
+                        time.perf_counter() - scheduler_cpu_started
+                    ),
+                )
                 return scheduler_output
-            audit = self._dpp_predictor.predict_with_audit(
-                snapshot, decision.selected_plan
-            )
-            if not audit.prediction.in_support:
-                raise RuntimeError(
-                    "Safe-Set selected an out-of-support plan"
-                )
-            scheduler_output = self._dpp_adapter.build_scheduler_output(
-                decision.selected_plan
-            )
-            self._dpp_predictor_pending = {
-                "snapshot": snapshot,
-                "plan": decision.selected_plan,
-                "base_duration_seconds": audit.base_duration_seconds,
-                "scheduler_output": scheduler_output,
-                "actual_duration_seconds": None,
-                "skip_predictor_update": False,
+
+            liveness_escape = decision.reason in {
+                LIVENESS_ESCAPE_DECODE,
+                LIVENESS_ESCAPE_PREFILL,
             }
-            self._dpp_control_pending_updates = []
+            if liveness_escape:
+                scheduler_output = self._dpp_adapter.build_scheduler_output(
+                    decision.selected_plan
+                )
+                base_duration = None
+                predictor_in_support = False
+            else:
+                audit = self._dpp_predictor.predict_with_audit(
+                    snapshot, decision.selected_plan
+                )
+                if not audit.prediction.in_support:
+                    raise RuntimeError("Safe-Set selected an out-of-support plan")
+                scheduler_output = self._dpp_adapter.build_scheduler_output(
+                    decision.selected_plan
+                )
+                base_duration = audit.base_duration_seconds
+                predictor_in_support = True
+            self._dpp_bind_pending(
+                snapshot=snapshot,
+                plan=decision.selected_plan,
+                scheduler_output=scheduler_output,
+                base_duration_seconds=base_duration,
+                skip_predictor_update=liveness_escape,
+            )
+            self._dpp_record_schedule_diagnostic(
+                snapshot=snapshot,
+                control=control,
+                plans=plans,
+                safe_result=safe_result,
+                decision=decision,
+                fallback_result=fallback_result,
+                plan=decision.selected_plan,
+                scheduler_output=scheduler_output,
+                predictor_in_support=predictor_in_support,
+                scheduler_cpu_seconds=time.perf_counter() - scheduler_cpu_started,
+            )
             return scheduler_output
 
         def update_from_output(

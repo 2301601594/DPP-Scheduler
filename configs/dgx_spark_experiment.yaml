@@ -175,7 +175,11 @@ candidate_generator:
     - CRITICAL
     - ALL
   critical_horizon_seconds: 0.22
-  recovery_age_threshold_seconds: null
+  recovery_age_threshold_seconds: 0.25
+  recovery_age_threshold_status: provisional_for_scheduler_integration
+  recovery_age_threshold_source: >-
+    slo.tbt_seconds=0.25; selected as the smallest conservative existing
+    same-scale value for one full TBT-SLO interval after the first miss.
   critical_horizon_source: >-
     results/processed/qwen3_14b_dgx_spark/candidate_parameter_freeze_v1/horizon_report.json
   parameters_frozen: true
@@ -269,8 +273,9 @@ safe_set:
     Design-derived integration values, not a measured G4 freeze. With a
     16-token KV block, at most one Decode token per request per iteration,
     max_num_seqs=64, and 30149 usable blocks, H=8 covers half a block period;
-    R0=64 reserves one additional block per maximum active sequence; Top-K=3
-    is user-selected for end-to-end Scheduler integration.
+    R0=64 reserves one additional block per maximum active sequence. The
+    legacy Top-K=3 field is retained for schema compatibility but inactive:
+    SLO risk is metadata and every hard-feasible candidate reaches DPP.
   hard_filters:
     - total_token_budget
     - sequence_budget
@@ -294,26 +299,27 @@ fallback:
   with_decode: edf_decode_only_no_prefill
   without_decode: minimum_physically_feasible_prefill
   minimum_prefill_chunk_tokens: 6
-  final_path: preemption_or_idle
+  final_path: native_preemption_or_empty_workload_idle
   must_pass_hard_filters: true
 
 dpp:
   parameter_status: frozen_for_scheduler_integration
   formal_benchmark_eligible: false
   freeze_manifest_path: configs/dpp_selector_integration_freeze.json
-  freeze_manifest_sha256: 15762501656f7fb9bbeaba84ab224924621cb236d0366c845b5d188fd8648aec
+  freeze_manifest_sha256: d8baf6f6824792c7e59a5b73ec4f0b67a9e0883957654b90f8df7d741a5c1f84
   freeze_basis: >-
     epsilon=0.05 is the conservative round-up of retained Stock miss ratios at
-    0.20 and 0.25 req/s; V=1 balances capacity-normalized Prefill and
-    obligation service terms. These integration values are not a tuned formal
-    benchmark optimum.
+    0.20 and 0.25 req/s; weight_v=0.0 disables the obligation-level utility
+    during this bug-fix integration while retaining the normalized backlog and
+    debt terms. These integration values are not a tuned formal benchmark
+    optimum.
   control_state:
     - prefill_backlog
     - ttft_debt
     - tbt_debt
   epsilon_ttft: 0.05
   epsilon_tbt: 0.05
-  weight_v: 1.0
+  weight_v: 0.0
   denominator: expected_duration
   service_utility: ttft_success_plus_tbt_success
   normalization:
@@ -401,6 +407,19 @@ validity:
   offered_rate_relative_error_max: null
   warmup_and_drain_rules: null
   scheduler_cpu_overhead_target: null
+
+scheduler_diagnostics:
+  parameter_status: provisional_for_scheduler_integration
+  bounded_records: 1024
+  zero_progress_watchdog_iterations: 8
+  fail_fast_development: false
+  performance_logging_default: false
+  performance_logging_enable_env: DPP_DIAGNOSTIC_ITERATION_LOG
+  source: >-
+    bounded_records matches dpp_scheduler.observer.InMemoryObserver.max_records;
+    watchdog iterations match the current rolling_kv_horizon_iterations=8.
+    Performance diagnostics remain disabled by default and are enabled only by
+    the existing DPP_DIAGNOSTIC_ITERATION_LOG environment switch.
 
 input_isolation:
   active_result_namespace: results/raw/qwen3_14b_dgx_spark

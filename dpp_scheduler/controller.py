@@ -16,6 +16,7 @@ from dpp_scheduler.observer import InMemoryObserver
 from dpp_scheduler.fallback import (
     DeterministicFallback,
     NullFallback,
+    build_liveness_escape,
     resolve_fallback,
 )
 from dpp_scheduler.predictor import DurationPredictor, NullDurationPredictor
@@ -55,9 +56,25 @@ class Controller:
         self.observer = observer or InMemoryObserver()
         self.state_store = state_store or InMemoryStateStore()
 
+    def _expire_before_snapshot(self) -> tuple[object, ...]:
+        hook = getattr(
+            self.adapter, "expire_obligations_before_snapshot", None
+        )
+        if hook is None:
+            return ()
+        updates = hook()
+        return tuple(updates) if updates is not None else ()
+
     def schedule_once(self) -> Decision:
+        expiry_updates = self._expire_before_snapshot()
         snapshot = self.adapter.make_snapshot()
         control = self.state_store.bind_snapshot(snapshot)
+        if expiry_updates:
+            control = self.state_store.update_from_actual(
+                snapshot_hash=snapshot.snapshot_hash,
+                actual_prefill_tokens=0,
+                ledger_updates=expiry_updates,
+            )
         plans = self.generator.generate(snapshot)
         predictions = self.predictor.predict(snapshot, plans)
         predictions = self.consequence_estimator.attach(
@@ -70,11 +87,11 @@ class Controller:
             fallback_result = resolve_fallback(
                 snapshot, self.fallback, self.predictor, self.safe_set
             )
-            fallback_plan = (
-                fallback_result.plan
-                if not fallback_result.rejection_reasons
-                else None
-            )
+            if fallback_result.rejection_reasons:
+                fallback_result = build_liveness_escape(
+                    snapshot, fallback_result
+                )
+            fallback_plan = fallback_result.plan
             decision = Decision(
                 frame_id=snapshot.frame_id,
                 snapshot_hash=snapshot.snapshot_hash,
@@ -83,6 +100,17 @@ class Controller:
             )
         else:
             decision = self.selector.select(snapshot, control, safe_candidates)
+            if decision.selected_plan is None:
+                fallback_result = resolve_fallback(
+                    snapshot, self.fallback, self.predictor, self.safe_set
+                )
+                escape = build_liveness_escape(snapshot, fallback_result)
+                decision = Decision(
+                    frame_id=snapshot.frame_id,
+                    snapshot_hash=snapshot.snapshot_hash,
+                    selected_plan=escape.plan,
+                    reason=escape.reason,
+                )
         validate_snapshot_hash(decision.snapshot_hash, snapshot.snapshot_hash)
 
         observation: ExecutionObservation | None = None

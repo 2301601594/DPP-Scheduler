@@ -24,18 +24,30 @@ class ObligationLedgerTests(unittest.TestCase):
             terminal_reason=None,
         )
         self.assertEqual((first.ttft_success, first.ttft_miss), (1, 0))
+
+        expired = ledger.expire_deadlines(11.8)
+        self.assertEqual(len(expired), 1)
+        self.assertEqual(expired[0].event_id, "expiry:r:TBT:1")
+        self.assertEqual((expired[0].tbt_success, expired[0].tbt_miss), (0, 1))
+        self.assertEqual(ledger.expire_deadlines(11.8), ())
+        self.assertEqual(ledger.active_obligations({"r"}), ((), ()))
+
         view = ledger.request_view("r", 11.8)
         self.assertTrue(view.recovery)
         self.assertTrue(view.recovery_due)
+        self.assertFalse(view.goodput_eligible)
+        self.assertIsNone(view.tbt_deadline)
 
-        second = ledger.observe_output(
+        late = ledger.observe_output(
             event_id="e2",
             request_id="r",
             returned_at=11.8,
             token_count=1,
             terminal_reason=None,
         )
-        self.assertEqual((second.tbt_success, second.tbt_miss), (0, 1))
+        self.assertEqual((late.tbt_success, late.tbt_miss), (0, 0))
+        self.assertFalse(ledger.request_view("r", 11.8).goodput_eligible)
+        self.assertTrue(ledger.request_view("r", 11.8).recovery)
 
         terminal = ledger.observe_output(
             event_id="e3",
@@ -44,7 +56,7 @@ class ObligationLedgerTests(unittest.TestCase):
             token_count=1,
             terminal_reason="stop",
         )
-        self.assertEqual((terminal.tbt_success, terminal.tbt_miss), (1, 0))
+        self.assertEqual((terminal.tbt_success, terminal.tbt_miss), (0, 0))
         self.assertFalse(ledger.has_request("r"))
         self.assertEqual(ledger.terminal_counts, {"stop": 1})
         with self.assertRaises(DuplicateLedgerEvent):
@@ -55,6 +67,76 @@ class ObligationLedgerTests(unittest.TestCase):
                 token_count=1,
                 terminal_reason="stop",
             )
+
+    def test_ttft_deadline_expiry_is_once_and_late_first_token_is_not_success(self) -> None:
+        ledger = ObligationLedger(2.0, 0.25, 0.2)
+        ledger.register_request("r", 10.0)
+
+        expired = ledger.expire_deadlines(12.0)
+        self.assertEqual(len(expired), 1)
+        self.assertEqual(expired[0].event_id, "expiry:r:TTFT:0")
+        self.assertEqual((expired[0].ttft_success, expired[0].ttft_miss), (0, 1))
+        self.assertEqual(ledger.expire_deadlines(12.0), ())
+        self.assertEqual(ledger.active_obligations({"r"}), ((), ()))
+
+        view = ledger.request_view("r", 12.0)
+        self.assertFalse(view.goodput_eligible)
+        self.assertIsNone(view.ttft_deadline)
+        self.assertFalse(view.recovery)
+
+        late = ledger.observe_output(
+            event_id="late-first",
+            request_id="r",
+            returned_at=12.1,
+            token_count=1,
+            terminal_reason=None,
+        )
+        self.assertEqual(
+            (late.ttft_success, late.ttft_miss, late.tbt_success, late.tbt_miss),
+            (0, 0, 0, 0),
+        )
+        self.assertFalse(ledger.request_view("r", 12.1).goodput_eligible)
+        self.assertEqual(ledger.active_obligations({"r"}), ((), ()))
+
+    def test_tbt_deadline_expiry_is_once_and_recovery_survives_late_token(self) -> None:
+        ledger = ObligationLedger(2.0, 0.25, 0.2)
+        ledger.register_request("r", 10.0)
+        first = ledger.observe_output(
+            event_id="first",
+            request_id="r",
+            returned_at=10.0,
+            token_count=1,
+            terminal_reason=None,
+        )
+        self.assertEqual((first.ttft_success, first.ttft_miss), (1, 0))
+
+        expired = ledger.expire_deadlines(10.25)
+        self.assertEqual(len(expired), 1)
+        self.assertEqual(expired[0].event_id, "expiry:r:TBT:1")
+        self.assertEqual((expired[0].tbt_success, expired[0].tbt_miss), (0, 1))
+        self.assertEqual(ledger.expire_deadlines(10.25), ())
+        self.assertEqual(ledger.active_obligations({"r"}), ((), ()))
+
+        view = ledger.request_view("r", 10.45)
+        self.assertTrue(view.recovery)
+        self.assertTrue(view.recovery_due)
+        self.assertEqual(view.recovery_first_miss_time, 10.25)
+        self.assertFalse(view.goodput_eligible)
+        self.assertIsNone(view.tbt_deadline)
+
+        late = ledger.observe_output(
+            event_id="late-tbt",
+            request_id="r",
+            returned_at=10.5,
+            token_count=1,
+            terminal_reason=None,
+        )
+        self.assertEqual((late.tbt_success, late.tbt_miss), (0, 0))
+        late_view = ledger.request_view("r", 10.5)
+        self.assertTrue(late_view.recovery)
+        self.assertEqual(late_view.recovery_first_miss_time, 10.25)
+        self.assertFalse(late_view.goodput_eligible)
+        self.assertEqual(ledger.active_obligations({"r"}), ((), ()))
 
     def test_live_snapshot_contains_deadlines_and_recovery(self) -> None:
         class Request:
@@ -111,16 +193,26 @@ class ObligationLedgerTests(unittest.TestCase):
             token_count=1,
             terminal_reason=None,
         )
+        expired = ledger.expire_deadlines(101.8)
+        self.assertEqual(len(expired), 1)
+        self.assertEqual((expired[0].tbt_success, expired[0].tbt_miss), (0, 1))
+
         snapshot = VllmAdapter(
-            Scheduler(), obligation_ledger=ledger, clock=lambda: 101.5
+            Scheduler(),
+            obligation_ledger=ledger,
+            critical_horizon_seconds=0.22,
+            clock=lambda: 101.8,
         ).make_snapshot()
 
         self.assertEqual(len(snapshot.active_ttft_obligations), 1)
-        self.assertEqual(len(snapshot.active_tbt_obligations), 1)
+        self.assertEqual(len(snapshot.active_tbt_obligations), 0)
         self.assertEqual(snapshot.recovery_requests, ("d",))
         self.assertEqual(snapshot.waiting_prefill_requests[0].ttft_deadline, 102.0)
-        self.assertEqual(snapshot.active_decode_requests[0].tbt_deadline, 101.25)
+        self.assertIsNone(snapshot.active_decode_requests[0].tbt_deadline)
         self.assertTrue(snapshot.active_decode_requests[0].mandatory)
+        self.assertTrue(
+            snapshot.waiting_prefill_requests[0].hard_ttft_protected
+        )
 
     def test_live_factory_consumes_engine_output_events(self) -> None:
         source = inspect.getsource(get_modular_scheduler_class)

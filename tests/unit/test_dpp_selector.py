@@ -127,6 +127,25 @@ class DPPSelectorTests(unittest.TestCase):
         self.assertAlmostEqual(score.utility_term, 1 / 64)
         self.assertAlmostEqual(score.score, 1.003125)
 
+    def test_integration_weight_zero_disables_obligation_utility(self) -> None:
+        state = snapshot()
+        control = ControlState(state.snapshot_hash, 2048, 64.0, 64.0)
+        item = candidate(
+            state,
+            "utility",
+            prefill_tokens=1024,
+            ttft_success=1,
+            tbt_success=1,
+        )
+        score = DPPSelector(replace(settings(), weight_v=0.0)).score_candidate(
+            state, control, item
+        )
+        self.assertEqual(score.utility_term, 0.0)
+        self.assertAlmostEqual(
+            score.numerator,
+            score.prefill_term + score.ttft_term + score.tbt_term,
+        )
+
     def test_tie_breaks_by_misses_margin_then_plan_id(self) -> None:
         state = snapshot()
         control = ControlState(state.snapshot_hash, 0, 0.0, 0.0)
@@ -179,7 +198,7 @@ class DPPSelectorTests(unittest.TestCase):
         runtime = load_active_runtime(REPOSITORY_ROOT / ACTIVE_CONFIG_RELATIVE)
         frozen = load_dpp_settings(runtime)
         self.assertEqual((frozen.epsilon_ttft, frozen.epsilon_tbt), (0.05, 0.05))
-        self.assertEqual(frozen.weight_v, 1.0)
+        self.assertEqual(frozen.weight_v, 0.0)
         source = inspect.getsource(get_modular_scheduler_class)
         self.assertIn("DPPSelector(dpp_settings)", source)
         self.assertIn("_dpp_state_store.update_from_actual", source)

@@ -102,7 +102,11 @@ class SchedulerSettings:
 
 @dataclass(frozen=True)
 class SafeSetSettings:
-    """Frozen physical-guard and all-risk ranking parameters for G4."""
+    """Frozen physical-guard parameters for G4.
+
+    top_k_when_all_risky remains in the compatibility schema, but SLO risk
+    is metadata only and is not used to prune physically feasible candidates.
+    """
 
     rolling_kv_horizon_iterations: int
     reserve_blocks_r0: int
@@ -155,6 +159,75 @@ class SafeSetSettings:
 
 
 @dataclass(frozen=True)
+class SchedulerDiagnosticsSettings:
+    """Validated bounded diagnostic/watchdog integration settings."""
+
+    parameter_status: str
+    bounded_records: int
+    zero_progress_watchdog_iterations: int
+    fail_fast_development: bool
+    performance_logging_default: bool
+    performance_logging_enable_env: str
+
+    def __post_init__(self) -> None:
+        if self.parameter_status != "provisional_for_scheduler_integration":
+            raise ValueError(
+                "scheduler diagnostics must remain provisional for integration"
+            )
+        for label, value in (
+            ("bounded_records", self.bounded_records),
+            (
+                "zero_progress_watchdog_iterations",
+                self.zero_progress_watchdog_iterations,
+            ),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{label} must be a positive integer")
+        for label, value in (
+            ("fail_fast_development", self.fail_fast_development),
+            ("performance_logging_default", self.performance_logging_default),
+        ):
+            if not isinstance(value, bool):
+                raise ValueError(f"{label} must be boolean")
+        if (
+            not isinstance(self.performance_logging_enable_env, str)
+            or not self.performance_logging_enable_env
+        ):
+            raise ValueError("performance_logging_enable_env must be non-empty")
+
+    @classmethod
+    def from_mapping(
+        cls, value: Mapping[str, Any]
+    ) -> SchedulerDiagnosticsSettings:
+        if not isinstance(value, Mapping):
+            raise ValueError("scheduler_diagnostics settings must be a mapping")
+        required = (
+            "parameter_status",
+            "bounded_records",
+            "zero_progress_watchdog_iterations",
+            "fail_fast_development",
+            "performance_logging_default",
+            "performance_logging_enable_env",
+        )
+        missing = [key for key in required if value.get(key) is None]
+        if missing:
+            raise ValueError(
+                "Scheduler diagnostics parameters are unresolved: "
+                + ", ".join(missing)
+            )
+        return cls(
+            parameter_status=value["parameter_status"],
+            bounded_records=value["bounded_records"],
+            zero_progress_watchdog_iterations=value[
+                "zero_progress_watchdog_iterations"
+            ],
+            fail_fast_development=value["fail_fast_development"],
+            performance_logging_default=value["performance_logging_default"],
+            performance_logging_enable_env=value["performance_logging_enable_env"],
+        )
+
+
+@dataclass(frozen=True)
 class FallbackSettings:
     """Deterministic Controller-owned Fallback construction settings."""
 
@@ -180,6 +253,11 @@ class FallbackSettings:
             raise ValueError("Fallback Decode policy mismatch")
         if value.get("without_decode") != "minimum_physically_feasible_prefill":
             raise ValueError("Fallback Prefill policy mismatch")
+        if (
+            value.get("final_path")
+            != "native_preemption_or_empty_workload_idle"
+        ):
+            raise ValueError("Fallback final liveness path mismatch")
         return cls(minimum_prefill_chunk_tokens=minimum)
 
 

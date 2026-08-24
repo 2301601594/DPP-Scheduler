@@ -22,6 +22,7 @@ from dpp_scheduler.settings import (
     FallbackSettings,
     ObligationSettings,
     SafeSetSettings,
+    SchedulerDiagnosticsSettings,
     SchedulerSettings,
 )
 
@@ -75,6 +76,23 @@ def load_fallback_settings(runtime: ActiveRuntime) -> FallbackSettings:
         raise ActiveConfigError("active config fallback section is missing")
     try:
         return FallbackSettings.from_mapping(fallback)
+    except ValueError as error:
+        raise ActiveConfigError(str(error)) from error
+
+
+def load_scheduler_diagnostics_settings(
+    runtime: ActiveRuntime,
+) -> SchedulerDiagnosticsSettings:
+    """Load bounded diagnostic and zero-progress watchdog settings."""
+    with runtime.config_path.open("r", encoding="utf-8") as stream:
+        config = yaml.safe_load(stream)
+    diagnostics = (
+        config.get("scheduler_diagnostics") if isinstance(config, dict) else None
+    )
+    if not isinstance(diagnostics, dict):
+        raise ActiveConfigError("active config scheduler_diagnostics is missing")
+    try:
+        return SchedulerDiagnosticsSettings.from_mapping(diagnostics)
     except ValueError as error:
         raise ActiveConfigError(str(error)) from error
 

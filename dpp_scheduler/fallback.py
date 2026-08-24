@@ -17,6 +17,8 @@ from dpp_scheduler.contracts import (
 from dpp_scheduler.predictor import DurationPredictor
 from dpp_scheduler.safe_set import (
     CURRENT_KV_EXCEEDED,
+    PREDICTION_INVALID,
+    PREDICTOR_OUT_OF_SUPPORT,
     ROLLING_KV_EXCEEDED,
     SEQUENCE_BUDGET_EXCEEDED,
     SafeSet,
@@ -35,6 +37,11 @@ PREEMPTION_REQUIRED_MANDATORY_DECODE = "PREEMPTION_REQUIRED_MANDATORY_DECODE"
 PREEMPTION_REQUIRED_AFTER_FALLBACK_REJECTION = (
     "PREEMPTION_REQUIRED_AFTER_FALLBACK_REJECTION"
 )
+
+
+LIVENESS_ESCAPE_DECODE = "LIVENESS_ESCAPE_DECODE"
+LIVENESS_ESCAPE_PREFILL = "LIVENESS_ESCAPE_PREFILL"
+PREEMPTION_REQUIRED_NATIVE_PROGRESS = "PREEMPTION_REQUIRED_NATIVE_PROGRESS"
 
 
 class NullFallback:
@@ -162,6 +169,56 @@ class DeterministicFallback:
             prediction=None,
             reason=FALLBACK_MINIMUM_PREFILL,
         )
+
+
+def build_liveness_escape(
+    snapshot: StateSnapshot,
+    resolved: FallbackResult,
+) -> FallbackResult:
+    """Admit only a physically safe fallback rejected by the Predictor.
+
+    Normal fallback resolution has already applied every hard check. The
+    liveness escape may bypass Predictor support/validity only; resource and
+    Rolling-KV failures remain explicit native-preemption requests.
+    """
+    if resolved.snapshot_hash != snapshot.snapshot_hash:
+        raise ValueError("Fallback snapshot_hash mismatch")
+    workload_nonempty = bool(
+        snapshot.active_decode_requests or snapshot.waiting_prefill_requests
+    )
+    if resolved.plan is None:
+        if not workload_nonempty:
+            return resolved
+        return FallbackResult(
+            snapshot_hash=snapshot.snapshot_hash,
+            plan=None,
+            prediction=None,
+            reason=PREEMPTION_REQUIRED_NATIVE_PROGRESS,
+            rejection_reasons=resolved.rejection_reasons or (resolved.reason,),
+        )
+    predictor_only = {PREDICTOR_OUT_OF_SUPPORT, PREDICTION_INVALID}
+    if not resolved.rejection_reasons or not set(
+        resolved.rejection_reasons
+    ).issubset(predictor_only):
+        return FallbackResult(
+            snapshot_hash=snapshot.snapshot_hash,
+            plan=None,
+            prediction=resolved.prediction,
+            reason=PREEMPTION_REQUIRED_NATIVE_PROGRESS,
+            rejection_reasons=resolved.rejection_reasons,
+        )
+    reason = (
+        LIVENESS_ESCAPE_DECODE
+        if resolved.plan.total_decode_tokens > 0
+        else LIVENESS_ESCAPE_PREFILL
+    )
+    return FallbackResult(
+        snapshot_hash=snapshot.snapshot_hash,
+        plan=resolved.plan,
+        prediction=resolved.prediction,
+        reason=reason,
+        rejection_reasons=resolved.rejection_reasons,
+    )
 
 
 def resolve_fallback(

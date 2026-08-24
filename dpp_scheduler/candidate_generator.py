@@ -48,7 +48,14 @@ def _rank_decode(snapshot: StateSnapshot) -> tuple[DecodeRequest, ...]:
     def category(item: DecodeRequest) -> int:
         if item.request_id == oldest_due:
             return 0
-        if item.request_id not in recovery_set and item.tbt_deadline is not None:
+        # Ineligible requests still receive service, but should not retain
+        # hard SLO EDF/critical priority after their first miss. Recovery-due
+        # and explicit mandatory work remain protected for liveness.
+        if (
+            item.request_id not in recovery_set
+            and item.tbt_deadline is not None
+            and item.goodput_eligible
+        ):
             return 1
         if item.request_id not in recovery_set:
             return 2
@@ -84,7 +91,7 @@ def _rank_prefill(snapshot: StateSnapshot) -> tuple[PrefillRequest, ...]:
     prefill = list(snapshot.waiting_prefill_requests)
 
     def category(item: PrefillRequest) -> int:
-        if item.hard_ttft_protected:
+        if item.hard_ttft_protected and item.goodput_eligible:
             return 0
         if item.is_partial:
             return 1
@@ -145,6 +152,8 @@ def _bind_decode(
         if horizon is not None:
             for item in ordered:
                 if item.request_id in recovery_set or item.tbt_deadline is None:
+                    continue
+                if not item.goodput_eligible:
                     continue
                 if item.tbt_deadline - snapshot.timestamp <= horizon:
                     selected.add(item.request_id)

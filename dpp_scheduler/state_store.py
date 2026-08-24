@@ -189,6 +189,7 @@ class LedgerRequestView:
     recovery: bool
     recovery_due: bool
     recovery_first_miss_time: float | None
+    goodput_eligible: bool
 
 
 @dataclass
@@ -200,6 +201,7 @@ class _RequestLedger:
     tbt_sequence: int = 0
     first_token_returned: bool = False
     recovery_first_miss_time: float | None = None
+    goodput_eligible: bool = True
 
 
 @dataclass
@@ -268,6 +270,30 @@ class ObligationLedger:
         self._settled_obligation_ids.add(obligation.obligation_id)
         return (1, 0) if returned_at <= obligation.deadline else (0, 1)
 
+    @staticmethod
+    def _record_miss(request: _RequestLedger, obligation: Obligation) -> None:
+        """Make request-level Goodput loss and Recovery state monotonic."""
+        request.goodput_eligible = False
+        if (
+            obligation.kind == "TBT"
+            and request.recovery_first_miss_time is None
+        ):
+            request.recovery_first_miss_time = obligation.deadline
+
+    def _settle_request_obligation(
+        self,
+        request: _RequestLedger,
+        obligation: Obligation,
+        returned_at: float,
+    ) -> tuple[int, int]:
+        was_eligible = request.goodput_eligible
+        success, miss = self._settle(obligation, returned_at)
+        if not was_eligible:
+            return (0, 0)
+        if miss:
+            self._record_miss(request, obligation)
+        return (success, miss)
+
     def observe_output(
         self,
         *,
@@ -297,17 +323,26 @@ class ObligationLedger:
 
         if token_count == 1:
             if request.ttft is not None:
-                ttft_success, ttft_miss = self._settle(request.ttft, returned_at)
+                ttft_success, ttft_miss = self._settle_request_obligation(
+                    request, request.ttft, returned_at
+                )
                 request.ttft = None
                 request.first_token_returned = True
             elif request.tbt is not None:
-                tbt_success, tbt_miss = self._settle(request.tbt, returned_at)
+                tbt_success, tbt_miss = self._settle_request_obligation(
+                    request, request.tbt, returned_at
+                )
                 request.tbt = None
+            elif request.first_token_returned or (
+                f"{request_id}:TTFT:0" in self._settled_obligation_ids
+            ):
+                # The token is late for an already-expired obligation. It
+                # advances execution but contributes no repeated outcome.
+                request.first_token_returned = True
             else:
                 raise ValueError(
                     f"request has no active token obligation: {request_id}"
                 )
-            request.recovery_first_miss_time = None
 
         if terminal_reason is None:
             if token_count != 1:
@@ -349,15 +384,56 @@ class ObligationLedger:
             terminal_reason=terminal_reason,
         )
 
+    def expire_deadlines(self, now: float) -> tuple[LedgerUpdate, ...]:
+        """Settle every active deadline at or before now exactly once.
+        Expired obligations on an already-ineligible request are retired
+        silently so they cannot keep adding debt or SLO risk.
+        """
+        if (
+            isinstance(now, bool)
+            or not isinstance(now, (int, float))
+            or not math.isfinite(now)
+        ):
+            raise ValueError("expiry timestamp must be finite")
+        updates: list[LedgerUpdate] = []
+        for request_id in sorted(self._requests):
+            request = self._requests[request_id]
+            for obligation in (request.ttft, request.tbt):
+                if obligation is None or obligation.deadline > now:
+                    continue
+                if obligation.obligation_id in self._settled_obligation_ids:
+                    raise DuplicateLedgerEvent(
+                        f"obligation already settled: {obligation.obligation_id}"
+                    )
+                self._settled_obligation_ids.add(obligation.obligation_id)
+                if obligation.kind == "TTFT":
+                    request.ttft = None
+                elif obligation.kind == "TBT":
+                    request.tbt = None
+                else:
+                    raise ValueError(f"unknown obligation kind: {obligation.kind}")
+                was_eligible = request.goodput_eligible
+                self._record_miss(request, obligation)
+                if was_eligible:
+                    updates.append(
+                        LedgerUpdate(
+                            event_id=f"expiry:{obligation.obligation_id}",
+                            request_id=request_id,
+                            ttft_miss=int(obligation.kind == "TTFT"),
+                            tbt_miss=int(obligation.kind == "TBT"),
+                        )
+                    )
+        return tuple(updates)
     def request_view(self, request_id: str, now: float) -> LedgerRequestView:
         request = self._requests.get(request_id)
         if request is None:
             raise ValueError(f"unknown ledger request: {request_id}")
-        if not math.isfinite(now):
+        if (
+            isinstance(now, bool)
+            or not isinstance(now, (int, float))
+            or not math.isfinite(now)
+        ):
             raise ValueError("snapshot timestamp must be finite")
-        if request.tbt is not None and now >= request.tbt.deadline:
-            if request.recovery_first_miss_time is None:
-                request.recovery_first_miss_time = request.tbt.deadline
         first_miss = request.recovery_first_miss_time
         threshold = self.recovery_age_threshold_seconds
         recovery_due = bool(
@@ -365,13 +441,24 @@ class ObligationLedger:
             and threshold is not None
             and now >= first_miss + threshold
         )
+        eligible = request.goodput_eligible
         return LedgerRequestView(
-            ttft_deadline=(request.ttft.deadline if request.ttft else None),
-            tbt_deadline=(request.tbt.deadline if request.tbt else None),
+            ttft_deadline=(
+                request.ttft.deadline
+                if eligible and request.ttft is not None
+                else None
+            ),
+            tbt_deadline=(
+                request.tbt.deadline
+                if eligible and request.tbt is not None
+                else None
+            ),
             recovery=first_miss is not None,
             recovery_due=recovery_due,
             recovery_first_miss_time=first_miss,
+            goodput_eligible=eligible,
         )
+
 
     def active_obligations(
         self, request_ids: set[str]
@@ -382,6 +469,8 @@ class ObligationLedger:
             request = self._requests.get(request_id)
             if request is None:
                 raise ValueError(f"live request is absent from ledger: {request_id}")
+            if not request.goodput_eligible:
+                continue
             if request.ttft is not None:
                 ttft.append(request.ttft)
             if request.tbt is not None:

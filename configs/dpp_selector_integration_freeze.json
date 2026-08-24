@@ -5,7 +5,7 @@
   "parameters": {
     "epsilon_tbt": 0.05,
     "epsilon_ttft": 0.05,
-    "weight_v": 1.0
+    "weight_v": 0.0
   },
   "score_contract": {
     "denominator": "expected_duration_seconds",
@@ -41,7 +41,7 @@
       "results/raw/qwen3_14b_dgx_spark/stock_matrix_qps0.25_cap2048/per_request.jsonl",
       "results/raw/qwen3_14b_dgx_spark/stock_matrix_qps0.3_cap2048/per_request.jsonl"
     ],
-    "weight_rule": "normalize token terms by C_tok and obligation terms by C_seq, then use unit weight"
+    "weight_rule": "weight_v=0.0 disables obligation-level utility during the integration bug fix; retain C_tok/C_seq normalization for the remaining terms"
   },
   "status": "frozen_for_scheduler_integration",
   "schema_version": 1

@@ -241,7 +241,7 @@ class PassThroughSafeSet(SafeSet):
 
 
 class ResourceAndRiskSafeSet(SafeSet):
-    """G4 Safe-Set: hard physical filters followed by SLO-risk ranking."""
+    """G4 Safe-Set: hard physical/Predictor filters with risk metadata."""
 
     def __init__(self, settings: SafeSetSettings) -> None:
         self.settings = settings
@@ -281,31 +281,10 @@ class ResourceAndRiskSafeSet(SafeSet):
                 continue
             feasible.append(_safe_candidate(snapshot, plan, prediction))
 
-        zero = [item for item in feasible if item.predicted_violation_count == 0]
-        if zero:
-            admitted = tuple(zero)
-            admitted_ids = {item.plan.plan_id for item in admitted}
-            rejected.extend(
-                (item.plan.plan_id, (SLO_RISK_WHEN_ZERO_AVAILABLE,))
-                for item in feasible
-                if item.plan.plan_id not in admitted_ids
-            )
-        else:
-            ranked = sorted(
-                feasible,
-                key=lambda item: (
-                    item.predicted_violation_count,
-                    item.predicted_total_lateness_seconds,
-                    item.plan.plan_id,
-                ),
-            )
-            admitted = tuple(ranked[: self.settings.top_k_when_all_risky])
-            admitted_ids = {item.plan.plan_id for item in admitted}
-            rejected.extend(
-                (item.plan.plan_id, (SLO_RISK_OUTSIDE_TOP_K,))
-                for item in ranked
-                if item.plan.plan_id not in admitted_ids
-            )
+        # Risk remains auditable metadata on SafeCandidate.  It must not
+        # shrink the DPP action space: every physically/Predictor-feasible
+        # plan reaches the Selector, even when its predicted risk is nonzero.
+        admitted = tuple(feasible)
 
         return SafeSetResult(
             snapshot_hash=snapshot.snapshot_hash,

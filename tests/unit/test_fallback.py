@@ -9,6 +9,7 @@ from benchmarks.qwen3_runtime import (
     load_active_runtime,
     load_fallback_settings,
     load_frozen_candidate_settings,
+    load_scheduler_diagnostics_settings,
 )
 from dpp_scheduler.candidate_generator import CandidateGenerator
 from dpp_scheduler.consequence_estimator import ConsequenceEstimator
@@ -25,9 +26,12 @@ from dpp_scheduler.fallback import (
     FALLBACK_DECODE_ONLY,
     FALLBACK_MINIMUM_PREFILL,
     IDLE_FALLBACK_REJECTED,
+    LIVENESS_ESCAPE_PREFILL,
     PREEMPTION_REQUIRED_AFTER_FALLBACK_REJECTION,
     PREEMPTION_REQUIRED_MANDATORY_DECODE,
+    PREEMPTION_REQUIRED_NATIVE_PROGRESS,
     DeterministicFallback,
+    build_liveness_escape,
     resolve_fallback,
 )
 from dpp_scheduler.predictor import DurationPredictor
@@ -155,6 +159,31 @@ class FallbackConstructionTests(unittest.TestCase):
         )
         self.assertEqual(idle.reason, IDLE_FALLBACK_REJECTED)
 
+    def test_liveness_escape_bypasses_only_predictor_rejection(self) -> None:
+        resource_state = snapshot(
+            decode=(DecodeRequest("d", 0.0, 16),),
+            free_kv_blocks=0,
+            total_kv_blocks=10,
+        )
+        resource_rejected = resolve_fallback(
+            resource_state, self.fallback, StaticPredictor(), safe_set()
+        )
+        resource_escape = build_liveness_escape(
+            resource_state, resource_rejected
+        )
+        self.assertIsNone(resource_escape.plan)
+        self.assertEqual(
+            resource_escape.reason, PREEMPTION_REQUIRED_NATIVE_PROGRESS
+        )
+
+        ood_state = snapshot(prefill=(PrefillRequest("p", 0.0, 32, 0),))
+        ood_rejected = resolve_fallback(
+            ood_state, self.fallback, StaticPredictor(in_support=False), safe_set()
+        )
+        predictor_escape = build_liveness_escape(ood_state, ood_rejected)
+        self.assertIsNotNone(predictor_escape.plan)
+        self.assertEqual(predictor_escape.reason, LIVENESS_ESCAPE_PREFILL)
+
 
 class FallbackIntegrationTests(unittest.TestCase):
     def test_controller_executes_fallback_without_calling_selector(self) -> None:
@@ -194,6 +223,41 @@ class FallbackIntegrationTests(unittest.TestCase):
         self.assertEqual(decision.reason, FALLBACK_MINIMUM_PREFILL)
         self.assertEqual(len(executed), 1)
         self.assertEqual(executed[0].plan_id, "fallback-prefill-minimum")
+
+    def test_controller_executes_predictor_ood_liveness_escape(self) -> None:
+        state = snapshot(prefill=(PrefillRequest("p", 0.0, 32, 0),))
+        executed: list[BatchPlan] = []
+
+        def execute(plan: BatchPlan) -> ExecutionObservation:
+            executed.append(plan)
+            return ExecutionObservation(
+                frame_id=state.frame_id,
+                snapshot_hash=state.snapshot_hash,
+                executed_plan_id=plan.plan_id,
+                executed_prefill_items=plan.prefill_items,
+                executed_decode_items=plan.decode_items,
+                started_at=state.timestamp,
+                finished_at=state.timestamp + 0.1,
+            )
+
+        class EmptyGenerator(CandidateGenerator):
+            def generate(self, state):
+                return ()
+
+        controller = Controller(
+            CallbackVllmAdapter(lambda: state, execute),
+            generator=EmptyGenerator(),
+            predictor=StaticPredictor(in_support=False),
+            consequence_estimator=ConsequenceEstimator(),
+            safe_set=safe_set(),
+            fallback=DeterministicFallback(FallbackSettings(6)),
+        )
+
+        decision = controller.schedule_once()
+
+        self.assertEqual(decision.reason, LIVENESS_ESCAPE_PREFILL)
+        self.assertEqual(len(executed), 1)
+        self.assertEqual(executed[0].total_prefill_tokens, 6)
 
     def test_active_config_loads_integration_freeze_and_fallback(self) -> None:
         runtime = load_active_runtime(REPOSITORY_ROOT / ACTIVE_CONFIG_RELATIVE)
