@@ -163,49 +163,26 @@ contracts:
     engine_core_output_created_by_locked_scheduler_update_from_output
 
 candidate_generator:
-  prefill_breakpoints:
-    zero: 0
-    finish: highest_priority_bindable_request_completion
-    knee_tokens: 768
-    bindable_max: native_token_budget_and_visible_backlog
-    knee_status: frozen
-    knee_source: configs/candidate_generator_integration_freeze.json
-  decode_profiles:
-    - MANDATORY
-    - CRITICAL
-    - ALL
-  critical_horizon_seconds: 0.22
+  algorithm: all_decode_prefill_budget_v2
+  prefill_budget_fractions: [0.0, 0.25, 0.5, 0.75, 1.0]
+  prefill_fraction_rounding: floor
+  include_finish_boundary: true
+  maximum_seed_candidates: 6
+  minimum_prefill_chunk_tokens: 6
+  all_active_decode_required: true
   recovery_age_threshold_seconds: 0.25
   recovery_age_threshold_status: provisional_for_scheduler_integration
   recovery_age_threshold_source: >-
     slo.tbt_seconds=0.25; selected as the smallest conservative existing
     same-scale value for one full TBT-SLO interval after the first miss.
-  critical_horizon_source: >-
-    results/processed/qwen3_14b_dgx_spark/candidate_parameter_freeze_v1/horizon_report.json
   parameters_frozen: true
-  freeze_kind: user_directed_integration
   formal_benchmark_eligible: false
-  freeze_manifest_path: configs/candidate_generator_integration_freeze.json
-  freeze_manifest_sha256: f1a07bc5e5b36936474eceb8221dc7a8970ceea0a6e9e42e0c09f02fe5c6444d
-  runtime_signature_sha256: 826d7ab93de1cd5353647e711c70ac11891affbf26aada65ab2bea7cdf63c251
-  maximum_seed_candidates: 12
-  minimum_prefill_chunk_tokens: 6
   canonical_deduplication: true
-  decode_order:
-    - oldest_due_recovery
-    - non_violated_tbt_edf
-    - remaining_recovery_first_miss
+  decode_order: [arrival_time, ordinal, request_id]
   prefill_order:
-    - hard_protected_ttft_edf
-    - partial_prefill
+    - partial_or_running_prefill
     - fcfs
-  stable_tie_keys:
-    oldest_due_recovery: [recovery_first_miss_time, arrival_time, ordinal, request_id]
-    decode_edf: [tbt_deadline, arrival_time, ordinal, request_id]
-    decode_fcfs: [arrival_time, ordinal, request_id]
-    remaining_recovery: [recovery_first_miss_time, arrival_time, ordinal, request_id]
-    protected_prefill_edf: [ttft_deadline, arrival_time, ordinal, request_id]
-    partial_and_fcfs_prefill: [arrival_time, ordinal, request_id]
+  stable_prefill_tie_key: [arrival_time, ordinal, request_id]
   kv_projection_side_effect_free: true
 
 predictor:
@@ -220,6 +197,8 @@ predictor:
       - iteration_index
       - plan_id
       - snapshot_hash
+      - snapshot_prefill_count
+      - snapshot_decode_count
       - actual_duration_seconds
     per_selected_request:
       - request_id
@@ -265,6 +244,19 @@ predictor:
   predictor_version: qwen3-14b-ridge-three-scenario-online-v1
   validation_status: >-
     accepted_for_modular_integration_after_timing_aligned_n200_shadow_validation
+  extrapolation:
+    allow_extrapolation: true
+    strategy: clipped_monotonic_ridge
+    lower_bound_policy: clip_without_optimistic_downward_extrapolation
+    centered_residual_p95: true
+    ood_uncertainty_coefficient: 0.05
+    parameter_status: provisional_pending_held_out_ood_calibration
+    provisional_basis: >-
+      Engineering-only nonzero placeholder in seconds per standardized OOD
+      distance. It is not benchmark-eligible and must be replaced by an
+      independently held-out OOD calibration artifact.
+    calibration_source: null
+    live_v2_eligible: false
 
 safe_set:
   parameter_status: provisional_for_scheduler_integration
@@ -281,16 +273,13 @@ safe_set:
     - sequence_budget
     - current_projected_kv
     - rolling_kv
-    - predictor_support
+    - prediction_numerical_validity
   rolling_kv_horizon_iterations: 8
   reserve_blocks_r0: 64
   full_output_length_reservation: forbidden
   slo_risk_is_hard_filter: false
-  all_risk_order:
-    - predicted_violation_count
-    - predicted_total_lateness
-    - stable_plan_key
   top_k_when_all_risky: 3
+  top_k_when_all_risky_status: legacy_inactive
 
 fallback:
   parameter_status: provisional_for_scheduler_integration
@@ -303,42 +292,45 @@ fallback:
   must_pass_hard_filters: true
 
 dpp:
-  parameter_status: frozen_for_scheduler_integration
+  algorithm: request_service_deficit_v2
+  parameter_status: provisional_pending_profiling
   formal_benchmark_eligible: false
-  freeze_manifest_path: configs/dpp_selector_integration_freeze.json
-  freeze_manifest_sha256: d8baf6f6824792c7e59a5b73ec4f0b67a9e0883957654b90f8df7d741a5c1f84
-  freeze_basis: >-
-    epsilon=0.05 is the conservative round-up of retained Stock miss ratios at
-    0.20 and 0.25 req/s; weight_v=0.0 disables the obligation-level utility
-    during this bug-fix integration while retaining the normalized backlog and
-    debt terms. These integration values are not a tuned formal benchmark
-    optimum.
-  control_state:
-    - prefill_backlog
-    - ttft_debt
-    - tbt_debt
-  epsilon_ttft: 0.05
-  epsilon_tbt: 0.05
-  weight_v: 0.0
-  denominator: expected_duration
-  service_utility: ttft_success_plus_tbt_success
-  normalization:
-    prefill_backlog_tokens: 2048
-    prefill_service_tokens: 2048
-    ttft_debt_obligations: 64
-    tbt_debt_obligations: 64
-    obligation_outcomes: 64
-    service_utility_obligations: 64
+  reference_concurrency:
+    statistic: p50_positive_frames
+    prefill: 1
+    decode: 32
+    parameter_status: provisional_pending_stock_profiling
+    artifact: null
+    provisional_basis: >-
+      Engineering-only defaults for code and unit tests. They are not measured,
+      are not benchmark-eligible, and live v2 rejects this status.
+  control_state: [ttft_service_debts_by_request, tbt_service_debts_by_request]
+  use_variable_frame_rate: true
+  effective_duration:
+    interpolation: expected_duration
+    constrained_extrapolation: conservative_duration
+  score: negative_fixed_reference_lyapunov_drift_per_effective_second
+  score_tie_tolerance:
+    relative: 1.0e-9
+    absolute: 1.0e-12
   score_numeric_ranges:
     nonnegative_minimum: 0.0
     finite_absolute_maximum: 1.7976931348623157e+308
-  zero_duration_behavior: reject_candidate
   tie_break:
-    - fewer_predicted_misses
-    - larger_conservative_deadline_margin
+    - smaller_effective_duration
+    - smaller_prefill_budget
     - smaller_plan_id
   updates_from_actual_observation_only: true
-  obligation_settlement_exactly_once: true
+  per_request_actual_prefill_feedback_required: true
+  per_request_actual_decode_feedback_required: true
+  first_token_initializes_tbt_debt_without_tbt_service: true
+  ttft_prefill_debt_removed_at_prompt_completion: true
+  legacy_compatibility_inactive:
+    epsilon_ttft: 0.05
+    epsilon_tbt: 0.05
+    weight_v: 0.0
+    token_normalization: 2048
+    obligation_normalization: 64
 
 profiling:
   required_identity:

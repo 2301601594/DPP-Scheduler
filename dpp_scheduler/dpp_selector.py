@@ -1,4 +1,4 @@
-"""Deterministic normalized DPP scoring and selection."""
+"""Request-level service-deficit DPP v2 scoring and selection."""
 
 from __future__ import annotations
 
@@ -18,37 +18,50 @@ from dpp_scheduler.settings import DPPSettings
 
 @dataclass(frozen=True)
 class DPPScore:
-    """Auditable terms for one SafeCandidate's normalized score."""
-
     plan_id: str
-    prefill_term: float
-    ttft_term: float
-    tbt_term: float
-    utility_term: float
-    numerator: float
-    expected_duration: float
+    prefill_drift: float
+    decode_drift: float
+    total_drift: float
+    effective_duration: float
     score: float
-    predicted_misses: int
-    conservative_deadline_margin_seconds: float | None
+    prefill_budget: int
+    current_prefill_count: int
+    current_decode_count: int
+    prefill_reference_concurrency: int
+    decode_reference_concurrency: int
 
 
-def _require_nonnegative(
-    label: str, value: int | float | None, maximum: float
-) -> float:
+def _finite_positive(label: str, value: float | None, maximum: float) -> float:
     if (
         value is None
         or isinstance(value, bool)
         or not isinstance(value, (int, float))
         or not math.isfinite(value)
-        or value < 0
+        or value <= 0
         or value > maximum
     ):
-        raise ValueError(f"{label} must be finite and in [0, {maximum}]")
+        raise ValueError(f"{label} must be finite and in (0, {maximum}]")
     return float(value)
 
 
+def effective_duration(candidate: SafeCandidate, maximum: float) -> float:
+    prediction = candidate.prediction
+    if prediction.in_support and prediction.prediction_mode == "INTERPOLATION":
+        return _finite_positive(
+            "expected_duration", prediction.expected_duration, maximum
+        )
+    if (
+        not prediction.in_support
+        and prediction.prediction_mode == "CONSTRAINED_EXTRAPOLATION"
+    ):
+        return _finite_positive(
+            "conservative_duration", prediction.conservative_duration, maximum
+        )
+    raise ValueError("prediction support flag/mode mismatch")
+
+
 class DPPSelector:
-    """Select the maximum authoritative DPP score with frozen tie-breaks."""
+    """Maximize negative fixed-reference Lyapunov drift per wall-clock second."""
 
     def __init__(self, settings: DPPSettings) -> None:
         self.settings = settings
@@ -59,7 +72,6 @@ class DPPSelector:
         control: ControlState,
         candidate: SafeCandidate,
     ) -> DPPScore:
-        maximum = self.settings.maximum_numeric
         validate_snapshot_hash(control.snapshot_hash, snapshot.snapshot_hash)
         validate_snapshot_hash(candidate.snapshot_hash, snapshot.snapshot_hash)
         candidate.plan.validate_snapshot(snapshot)
@@ -68,90 +80,80 @@ class DPPSelector:
         if prediction.plan_id != candidate.plan.plan_id:
             raise ValueError("SafeCandidate prediction/plan mismatch")
 
-        expected = _require_nonnegative(
-            "expected_duration", prediction.expected_duration, maximum
-        )
-        if expected == 0.0:
-            raise ValueError("expected_duration must be positive")
-        prefill_backlog = _require_nonnegative(
-            "prefill_backlog", control.prefill_backlog, maximum
-        )
-        ttft_debt = _require_nonnegative("ttft_debt", control.ttft_debt, maximum)
-        tbt_debt = _require_nonnegative("tbt_debt", control.tbt_debt, maximum)
-        prefill_service = _require_nonnegative(
-            "total_prefill_tokens", candidate.plan.total_prefill_tokens, maximum
-        )
-        ttft_success = _require_nonnegative(
-            "ttft_success", prediction.ttft_success, maximum
-        )
-        ttft_miss = _require_nonnegative("ttft_miss", prediction.ttft_miss, maximum)
-        tbt_success = _require_nonnegative(
-            "tbt_success", prediction.tbt_success, maximum
-        )
-        tbt_miss = _require_nonnegative("tbt_miss", prediction.tbt_miss, maximum)
-        utility = _require_nonnegative(
-            "service_utility", prediction.service_utility, maximum
-        )
+        tau = effective_duration(candidate, self.settings.maximum_numeric)
+        ttft = control.ttft_debt_map()
+        tbt = control.tbt_debt_map()
+        prefill_by_id = {
+            request.request_id: request
+            for request in snapshot.waiting_prefill_requests
+        }
+        decode_by_id = {
+            request.request_id: request for request in snapshot.active_decode_requests
+        }
+        if set(ttft) != set(prefill_by_id):
+            raise ValueError("TTFT service-debt keys must equal live Prefill requests")
+        if not set(tbt).issubset(decode_by_id):
+            raise ValueError("TBT service-debt key is not an active Decode request")
+        prefill_service = dict(candidate.plan.prefill_items)
+        decode_service = set(candidate.plan.decode_items)
 
-        if ttft_success + ttft_miss > len(snapshot.active_ttft_obligations):
-            raise ValueError("TTFT consequences exceed active obligations")
-        if tbt_success + tbt_miss > len(snapshot.active_tbt_obligations):
-            raise ValueError("TBT consequences exceed active obligations")
-        if utility != ttft_success + tbt_success:
-            raise ValueError("service_utility must equal TTFT plus TBT successes")
+        prefill_changes: list[float] = []
+        for request_id in sorted(ttft):
+            request = prefill_by_id[request_id]
+            if request.ttft_slo_seconds <= 0 or request.token_count <= 0:
+                raise ValueError("Prefill SLO/prompt length must be positive")
+            current = float(ttft[request_id])
+            if not math.isfinite(current) or current < 0:
+                raise ValueError("TTFT service debt must be finite and non-negative")
+            service = prefill_service.get(request_id, 0) / request.token_count
+            predicted = max(
+                0.0,
+                current + tau / request.ttft_slo_seconds - service,
+            )
+            prefill_changes.append(predicted * predicted - current * current)
 
-        misses = int(ttft_miss + tbt_miss)
-        if misses != ttft_miss + tbt_miss:
-            raise ValueError("predicted misses must be integral")
-        margin = candidate.conservative_deadline_margin_seconds
-        if margin is not None and (
-            isinstance(margin, bool)
-            or not isinstance(margin, (int, float))
-            or not math.isfinite(margin)
-            or abs(margin) > maximum
+        decode_changes: list[float] = []
+        for request_id in sorted(tbt):
+            request = decode_by_id[request_id]
+            if request.tbt_slo_seconds <= 0:
+                raise ValueError("Decode TBT SLO must be positive")
+            current = float(tbt[request_id])
+            if not math.isfinite(current) or current < 0:
+                raise ValueError("TBT service debt must be finite and non-negative")
+            service = 1.0 if request_id in decode_service else 0.0
+            predicted = max(
+                0.0,
+                current + tau / request.tbt_slo_seconds - service,
+            )
+            decode_changes.append(predicted * predicted - current * current)
+
+        prefill_drift = math.fsum(prefill_changes) / (
+            2.0 * self.settings.prefill_reference_concurrency
+        )
+        decode_drift = math.fsum(decode_changes) / (
+            2.0 * self.settings.decode_reference_concurrency
+        )
+        total_drift = prefill_drift + decode_drift
+        score = -total_drift / tau
+        if not all(
+            math.isfinite(value)
+            for value in (prefill_drift, decode_drift, total_drift, score)
         ):
-            raise ValueError("conservative deadline margin must be finite")
-
-        token_scale = float(self.settings.token_normalization)
-        obligation_scale = float(self.settings.obligation_normalization)
-        prefill_term = (
-            prefill_backlog / token_scale
-        ) * (prefill_service / token_scale)
-        ttft_term = (ttft_debt / obligation_scale) * (
-            self.settings.epsilon_ttft * (ttft_success / obligation_scale)
-            - (1.0 - self.settings.epsilon_ttft)
-            * (ttft_miss / obligation_scale)
-        )
-        tbt_term = (tbt_debt / obligation_scale) * (
-            self.settings.epsilon_tbt * (tbt_success / obligation_scale)
-            - (1.0 - self.settings.epsilon_tbt)
-            * (tbt_miss / obligation_scale)
-        )
-        utility_term = self.settings.weight_v * (utility / obligation_scale)
-        numerator = math.fsum((prefill_term, ttft_term, tbt_term, utility_term))
-        score = numerator / expected
-        for label, value in (
-            ("prefill_term", prefill_term),
-            ("ttft_term", ttft_term),
-            ("tbt_term", tbt_term),
-            ("utility_term", utility_term),
-            ("numerator", numerator),
-            ("score", score),
-        ):
-            if not math.isfinite(value) or abs(value) > maximum:
-                raise ValueError(f"{label} is outside the frozen numeric range")
-
+            raise ValueError("DPP v2 score is non-finite")
         return DPPScore(
             plan_id=candidate.plan.plan_id,
-            prefill_term=prefill_term,
-            ttft_term=ttft_term,
-            tbt_term=tbt_term,
-            utility_term=utility_term,
-            numerator=numerator,
-            expected_duration=expected,
+            prefill_drift=prefill_drift,
+            decode_drift=decode_drift,
+            total_drift=total_drift,
+            effective_duration=tau,
             score=score,
-            predicted_misses=misses,
-            conservative_deadline_margin_seconds=margin,
+            prefill_budget=candidate.plan.total_prefill_tokens,
+            current_prefill_count=len(prefill_by_id),
+            current_decode_count=len(decode_by_id),
+            prefill_reference_concurrency=(
+                self.settings.prefill_reference_concurrency
+            ),
+            decode_reference_concurrency=self.settings.decode_reference_concurrency,
         )
 
     def _score_candidates(
@@ -166,8 +168,8 @@ class DPPSelector:
             for candidate in safe_candidates
         )
 
-    @staticmethod
     def _decision_from_scored(
+        self,
         snapshot: StateSnapshot,
         scored: tuple[tuple[SafeCandidate, DPPScore], ...],
     ) -> Decision:
@@ -178,24 +180,32 @@ class DPPSelector:
                 selected_plan=None,
                 reason="NO_SAFE_DECISION",
             )
-        selected, _ = min(
-            scored,
-            key=lambda item: (
-                -item[1].score,
-                item[1].predicted_misses,
-                -(
-                    item[1].conservative_deadline_margin_seconds
-                    if item[1].conservative_deadline_margin_seconds is not None
-                    else math.inf
-                ),
-                item[0].plan.plan_id,
-            ),
-        )
+        selected_candidate, selected_score = scored[0]
+        for candidate, score in scored[1:]:
+            tied = math.isclose(
+                score.score,
+                selected_score.score,
+                rel_tol=self.settings.score_rel_tol,
+                abs_tol=self.settings.score_abs_tol,
+            )
+            if score.score > selected_score.score and not tied:
+                selected_candidate, selected_score = candidate, score
+                continue
+            if tied and (
+                score.effective_duration,
+                score.prefill_budget,
+                score.plan_id,
+            ) < (
+                selected_score.effective_duration,
+                selected_score.prefill_budget,
+                selected_score.plan_id,
+            ):
+                selected_candidate, selected_score = candidate, score
         return Decision(
             frame_id=snapshot.frame_id,
             snapshot_hash=snapshot.snapshot_hash,
-            selected_plan=selected.plan,
-            reason="DPP_MAX_SCORE",
+            selected_plan=selected_candidate.plan,
+            reason="DPP_V2_MAX_DRIFT_RATE",
         )
 
     def select(
@@ -204,8 +214,9 @@ class DPPSelector:
         control: ControlState,
         safe_candidates: tuple[SafeCandidate, ...],
     ) -> Decision:
-        scored = self._score_candidates(snapshot, control, safe_candidates)
-        return self._decision_from_scored(snapshot, scored)
+        return self._decision_from_scored(
+            snapshot, self._score_candidates(snapshot, control, safe_candidates)
+        )
 
     def select_with_audit(
         self,
@@ -213,16 +224,14 @@ class DPPSelector:
         control: ControlState,
         safe_candidates: tuple[SafeCandidate, ...],
     ) -> tuple[Decision, tuple[DPPScore, ...]]:
-        """Select once and expose the already-computed scores for diagnostics."""
         scored = self._score_candidates(snapshot, control, safe_candidates)
-        return (
-            self._decision_from_scored(snapshot, scored),
-            tuple(score for _, score in scored),
+        return self._decision_from_scored(snapshot, scored), tuple(
+            score for _, score in scored
         )
 
 
 class TemporarySelector:
-    """Compatibility selector retained for isolated G2 tests."""
+    """Compatibility selector for isolated Adapter tests."""
 
     def select(
         self,
@@ -238,46 +247,14 @@ class TemporarySelector:
                 selected_plan=None,
                 reason="NO_SAFE_DECISION",
             )
-
-        plans: list[BatchPlan] = []
-        for candidate in safe_candidates:
-            if isinstance(candidate, SafeCandidate):
-                validate_snapshot_hash(
-                    candidate.snapshot_hash, snapshot.snapshot_hash
-                )
-                validate_snapshot_hash(
-                    candidate.prediction.snapshot_hash, snapshot.snapshot_hash
-                )
-                if candidate.prediction.plan_id != candidate.plan.plan_id:
-                    raise ValueError("SafeCandidate prediction/plan mismatch")
-                plan = candidate.plan
-            else:
-                plan = candidate
-            validate_snapshot_hash(plan.snapshot_hash, snapshot.snapshot_hash)
-            plans.append(plan)
-
-        non_idle = tuple(
-            plan
-            for plan in plans
-            if plan.total_prefill_tokens + plan.total_decode_tokens > 0
+        plans = tuple(
+            item.plan if isinstance(item, SafeCandidate) else item
+            for item in safe_candidates
         )
-        pool = non_idle or tuple(plans)
-        selected = min(
-            pool,
-            key=lambda plan: (
-                plan.plan_id,
-                plan.template_id,
-                plan.prefill_items,
-                plan.decode_items,
-            ),
-        )
+        selected = min(plans, key=lambda plan: plan.plan_id)
         return Decision(
             frame_id=snapshot.frame_id,
             snapshot_hash=snapshot.snapshot_hash,
             selected_plan=selected,
-            reason=(
-                "TEMPORARY_SMALLEST_NON_IDLE_PLAN_ID"
-                if non_idle
-                else "TEMPORARY_SMALLEST_PLAN_ID"
-            ),
+            reason="TEMPORARY_SMALLEST_PLAN_ID",
         )

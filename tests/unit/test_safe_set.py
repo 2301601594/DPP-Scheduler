@@ -301,15 +301,19 @@ class SafeSetTests(unittest.TestCase):
                 wrong, (plan,), (make_prediction(snapshot, plan),)
             )
 
-    def test_out_of_support_is_audited(self) -> None:
+    def test_out_of_support_is_not_a_hard_rejection(self) -> None:
         snapshot = make_snapshot(decode=(DecodeRequest("d", 0.0, 16),))
         plan = make_plan(snapshot, "plan", decode_items=("d",))
-        prediction = make_prediction(snapshot, plan, in_support=False)
+        prediction = replace(
+            make_prediction(snapshot, plan, in_support=False),
+            prediction_mode="CONSTRAINED_EXTRAPOLATION",
+            ood_distance=1.0,
+        )
         result = ResourceAndRiskSafeSet(settings()).filter(
             snapshot, (plan,), (prediction,)
         )
-        self.assertEqual(result.safe_candidates, ())
-        self.assertIn(PREDICTOR_OUT_OF_SUPPORT, result.rejected[0][1])
+        self.assertEqual(len(result.safe_candidates), 1)
+        self.assertEqual(result.rejected, ())
 
     def test_scheduler_diagnostics_settings_are_bounded_and_provisional(self) -> None:
         diagnostics = SchedulerDiagnosticsSettings.from_mapping(
@@ -380,7 +384,7 @@ class SafeSetIntegrationSmokeTests(unittest.TestCase):
 
     def test_live_modular_scheduler_factory_wires_safe_set(self) -> None:
         source = inspect.getsource(get_modular_scheduler_class)
-        self.assertIn("_dpp_consequence_estimator.attach", source)
+        self.assertNotIn("_dpp_consequence_estimator.attach", source)
         self.assertIn("_dpp_safe_set.filter", source)
         self.assertIn("safe_result.safe_candidates", source)
 

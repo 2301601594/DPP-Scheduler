@@ -55,6 +55,7 @@ DPP_DIAGNOSTIC_ITERATION_LOG_ENV = "DPP_DIAGNOSTIC_ITERATION_LOG"
 
 VLLM_OFFICIAL_ITERATION_TIMING = "vllm_official_iteration_details"
 VLLM_ALIGNED_ITERATION_TIMING = "vllm_aligned_monotonic"
+STOCK_PROFILE_SCHEMA_VERSION = 2
 
 
 def _build_iteration_timing_bridge(original: Callable[..., Any]) -> Callable[..., Any]:
@@ -128,16 +129,23 @@ def capture_stock_profile_state(scheduler: Any) -> dict[str, Any]:
     """Capture only current, length-blind state before stock scheduling."""
     request_states = []
     current_context_tokens: dict[str, int] = {}
+    snapshot_prefill_count = 0
+    snapshot_decode_count = 0
     for request_id in sorted(scheduler.requests):
         request = scheduler.requests[request_id]
         context_tokens = int(request.num_computed_tokens)
+        prompt_tokens = int(request.num_prompt_tokens)
         current_context_tokens[request_id] = context_tokens
+        if context_tokens < prompt_tokens:
+            snapshot_prefill_count += 1
+        else:
+            snapshot_decode_count += 1
         request_states.append(
             {
                 "request_id": request_id,
                 "status": str(request.status),
                 "current_context_tokens": context_tokens,
-                "prompt_tokens": int(request.num_prompt_tokens),
+                "prompt_tokens": prompt_tokens,
             }
         )
 
@@ -154,6 +162,8 @@ def capture_stock_profile_state(scheduler: Any) -> dict[str, Any]:
     return {
         "snapshot_hash": _canonical_sha256(snapshot_payload),
         "current_context_tokens": current_context_tokens,
+        "snapshot_prefill_count": snapshot_prefill_count,
+        "snapshot_decode_count": snapshot_decode_count,
     }
 
 
@@ -197,11 +207,16 @@ def build_stock_profile_record(
 
     plan_hash = _canonical_sha256(selected_requests)
     return {
-        "schema_version": 1,
+        "schema_version": STOCK_PROFILE_SCHEMA_VERSION,
+        "profile_kind": "stock_natural_workload",
         "run_id": run_id,
         "iteration_index": iteration_index,
         "plan_id": f"stock-{plan_hash[:24]}",
         "snapshot_hash": captured_state["snapshot_hash"],
+        "snapshot_prefill_count": int(
+            captured_state["snapshot_prefill_count"]
+        ),
+        "snapshot_decode_count": int(captured_state["snapshot_decode_count"]),
         "selected_requests": selected_requests,
     }
 
@@ -452,6 +467,11 @@ class VllmAdapter(ExactPlanAdapter):
                         goodput_eligible=(
                             ledger_view.goodput_eligible if ledger_view else True
                         ),
+                        ttft_slo_seconds=(
+                            self._obligation_ledger.ttft_slo_seconds
+                            if self._obligation_ledger is not None
+                            else 2.0
+                        ),
                     )
                 )
             else:
@@ -478,6 +498,11 @@ class VllmAdapter(ExactPlanAdapter):
                         ordinal=ordinal,
                         goodput_eligible=(
                             ledger_view.goodput_eligible if ledger_view else True
+                        ),
+                        tbt_slo_seconds=(
+                            self._obligation_ledger.tbt_slo_seconds
+                            if self._obligation_ledger is not None
+                            else 0.25
                         ),
                     )
                 )
@@ -514,6 +539,11 @@ class VllmAdapter(ExactPlanAdapter):
                     ordinal=ordinal,
                     goodput_eligible=(
                         ledger_view.goodput_eligible if ledger_view else True
+                    ),
+                    ttft_slo_seconds=(
+                        self._obligation_ledger.ttft_slo_seconds
+                        if self._obligation_ledger is not None
+                        else 2.0
                     ),
                 )
             )
@@ -820,6 +850,7 @@ def get_modular_scheduler_class() -> type:
         REPOSITORY_ROOT,
         load_active_runtime,
         load_dpp_settings,
+        load_predictor_settings,
         load_fallback_settings,
         load_frozen_candidate_settings,
         load_frozen_predictor,
@@ -844,8 +875,17 @@ def get_modular_scheduler_class() -> type:
             fallback_settings = load_fallback_settings(runtime)
             obligation_settings = load_obligation_settings(runtime)
             dpp_settings = load_dpp_settings(runtime)
+            predictor_settings = load_predictor_settings(runtime)
             diagnostics_settings = load_scheduler_diagnostics_settings(runtime)
             predictor = load_frozen_predictor(runtime)
+            if not dpp_settings.live_v2_ready:
+                raise RuntimeError(
+                    "live v2 is disabled until Stock reference concurrency is frozen"
+                )
+            if not predictor_settings.live_v2_ready:
+                raise RuntimeError(
+                    "live v2 is disabled until held-out OOD calibration freezes kappa"
+                )
             super().__init__(*args, **kwargs)
             self._dpp_obligation_ledger = ObligationLedger(
                 ttft_slo_seconds=obligation_settings.ttft_slo_seconds,
@@ -857,7 +897,7 @@ def get_modular_scheduler_class() -> type:
             self._dpp_adapter = VllmAdapter(
                 self,
                 obligation_ledger=self._dpp_obligation_ledger,
-                critical_horizon_seconds=candidate.settings.critical_horizon_seconds,
+                critical_horizon_seconds=None,
             )
             self._dpp_generator = CandidateGenerator(candidate.settings)
             self._dpp_consequence_estimator = ConsequenceEstimator()
@@ -866,7 +906,10 @@ def get_modular_scheduler_class() -> type:
             self._dpp_selector = DPPSelector(dpp_settings)
             self._dpp_state_store = InMemoryStateStore(settings=dpp_settings)
             self._dpp_predictor = RidgeDurationPredictor.from_artifact(
-                predictor.artifact_root
+                predictor.artifact_root,
+                ood_uncertainty_coefficient=(
+                    predictor_settings.ood_uncertainty_coefficient
+                ),
             )
             if (
                 diagnostics_settings.performance_logging_enable_env
@@ -1021,13 +1064,8 @@ def get_modular_scheduler_class() -> type:
                     candidate_scores,
                     key=lambda score: (
                         -score.score,
-                        score.predicted_misses,
-                        0
-                        if score.conservative_deadline_margin_seconds is None
-                        else 1,
-                        0.0
-                        if score.conservative_deadline_margin_seconds is None
-                        else -score.conservative_deadline_margin_seconds,
+                        score.effective_duration,
+                        score.prefill_budget,
                         score.plan_id,
                     ),
                 )
@@ -1037,7 +1075,7 @@ def get_modular_scheduler_class() -> type:
                 }
                 selected_scored_plan_id = (
                     decision.selected_plan.plan_id
-                    if decision.reason == "DPP_MAX_SCORE"
+                    if decision.reason == "DPP_V2_MAX_DRIFT_RATE"
                     and decision.selected_plan is not None
                     else None
                 )
@@ -1061,31 +1099,25 @@ def get_modular_scheduler_class() -> type:
                             "projected_kv_blocks": (
                                 candidate.plan.projected_kv_blocks
                             ),
-                            "expected_duration_seconds": score.expected_duration,
+                            "expected_duration_seconds": (
+                                prediction.expected_duration
+                            ),
                             "conservative_duration_seconds": (
                                 prediction.conservative_duration
                             ),
+                            "effective_duration_seconds": score.effective_duration,
                             "in_support": prediction.in_support,
-                            "ttft_success": prediction.ttft_success,
-                            "ttft_miss": prediction.ttft_miss,
-                            "tbt_success": prediction.tbt_success,
-                            "tbt_miss": prediction.tbt_miss,
-                            "service_utility": prediction.service_utility,
-                            "prefill_term": score.prefill_term,
-                            "ttft_term": score.ttft_term,
-                            "tbt_term": score.tbt_term,
-                            "utility_term": score.utility_term,
-                            "numerator": score.numerator,
+                            "prediction_mode": prediction.prediction_mode,
+                            "ood_distance": prediction.ood_distance,
+                            "prefill_normalized_drift": score.prefill_drift,
+                            "decode_normalized_drift": score.decode_drift,
+                            "total_normalized_drift": score.total_drift,
                             "score": score.score,
-                            "predicted_misses": score.predicted_misses,
-                            "predicted_violation_count": (
-                                candidate.predicted_violation_count
+                            "prefill_reference_concurrency": (
+                                score.prefill_reference_concurrency
                             ),
-                            "predicted_total_lateness_seconds": (
-                                candidate.predicted_total_lateness_seconds
-                            ),
-                            "conservative_deadline_margin_seconds": (
-                                score.conservative_deadline_margin_seconds
+                            "decode_reference_concurrency": (
+                                score.decode_reference_concurrency
                             ),
                             "selection_rank": rank_by_plan_id[score.plan_id],
                             "selected": (
@@ -1093,10 +1125,8 @@ def get_modular_scheduler_class() -> type:
                             ),
                             "tie_break_key": {
                                 "score_desc": score.score,
-                                "predicted_misses_asc": score.predicted_misses,
-                                "deadline_margin_desc": (
-                                    score.conservative_deadline_margin_seconds
-                                ),
+                                "effective_duration_asc": score.effective_duration,
+                                "prefill_budget_asc": score.prefill_budget,
                                 "plan_id_asc": score.plan_id,
                             },
                         }
@@ -1116,16 +1146,49 @@ def get_modular_scheduler_class() -> type:
                     "safe_candidate_count": len(safe_result.safe_candidates),
                     "selected_plan": plan.plan_id,
                     "decision_reason": decision.reason,
-                    "prefill_backlog": control.prefill_backlog,
-                    "ttft_debt": control.ttft_debt,
-                    "tbt_debt": control.tbt_debt,
+                    "current_prefill_count": len(
+                        snapshot.waiting_prefill_requests
+                    ),
+                    "current_decode_count": len(snapshot.active_decode_requests),
+                    "prefill_reference_concurrency": (
+                        self._dpp_selector.settings.prefill_reference_concurrency
+                    ),
+                    "decode_reference_concurrency": (
+                        self._dpp_selector.settings.decode_reference_concurrency
+                    ),
+                    "sum_ttft_debt": sum(
+                        value for _, value in control.ttft_service_debts
+                    ),
+                    "max_ttft_debt": max(
+                        (value for _, value in control.ttft_service_debts),
+                        default=0.0,
+                    ),
+                    "sum_tbt_debt": sum(
+                        value for _, value in control.tbt_service_debts
+                    ),
+                    "max_tbt_debt": max(
+                        (value for _, value in control.tbt_service_debts),
+                        default=0.0,
+                    ),
+                    "number_of_extrapolated_candidates": sum(
+                        candidate.prediction.prediction_mode
+                        == "CONSTRAINED_EXTRAPOLATION"
+                        for candidate in safe_result.safe_candidates
+                    ),
+                    "max_ood_distance": max(
+                        (
+                            candidate.prediction.ood_distance
+                            for candidate in safe_result.safe_candidates
+                        ),
+                        default=0.0,
+                    ),
                     "predictor_in_support": predictor_in_support,
                     "safe_set_rejections": safe_result.rejected,
                     "rejected_candidates_scoring_status": "not_scored",
                     "candidate_scores": candidate_score_records,
                     "selection_tie_break_order": (
-                        "score_desc,predicted_misses_asc,"
-                        "deadline_margin_desc,plan_id_asc"
+                        "score_desc_with_isclose,effective_duration_asc,"
+                        "prefill_budget_asc,plan_id_asc"
                     ),
                     "fallback_reason": (
                         fallback_result.reason if fallback_result else None
@@ -1148,20 +1211,12 @@ def get_modular_scheduler_class() -> type:
                 self._dpp_record_obligation_update(update)
             snapshot = self._dpp_adapter.make_snapshot()
             control = self._dpp_state_store.bind_snapshot(snapshot)
-            if self._dpp_control_pending_updates:
-                control = self._dpp_state_store.update_from_actual(
-                    snapshot_hash=snapshot.snapshot_hash,
-                    actual_prefill_tokens=0,
-                    ledger_updates=tuple(self._dpp_control_pending_updates),
-                )
-                self._dpp_control_pending_updates = []
+            # Deadline/Goodput ledger events are diagnostic-only in v2.
+            self._dpp_control_pending_updates = []
             plans = self._dpp_generator.generate(snapshot)
             predictions = self._dpp_predictor.predict(snapshot, plans)
             if len(predictions) != len(plans):
                 raise RuntimeError("Predictor did not cover every BatchPlan")
-            predictions = self._dpp_consequence_estimator.attach(
-                snapshot, plans, predictions
-            )
             safe_result = self._dpp_safe_set.filter(snapshot, plans, predictions)
             if safe_result.snapshot_hash != snapshot.snapshot_hash:
                 raise RuntimeError("Safe-Set snapshot_hash mismatch")
@@ -1249,19 +1304,24 @@ def get_modular_scheduler_class() -> type:
                 audit = self._dpp_predictor.predict_with_audit(
                     snapshot, decision.selected_plan
                 )
-                if not audit.prediction.in_support:
-                    raise RuntimeError("Safe-Set selected an out-of-support plan")
+                if audit.prediction.prediction_mode not in {
+                    "INTERPOLATION",
+                    "CONSTRAINED_EXTRAPOLATION",
+                }:
+                    raise RuntimeError("Safe-Set selected an invalid prediction")
                 scheduler_output = self._dpp_adapter.build_scheduler_output(
                     decision.selected_plan
                 )
                 base_duration = audit.base_duration_seconds
-                predictor_in_support = True
+                predictor_in_support = audit.prediction.in_support
             self._dpp_bind_pending(
                 snapshot=snapshot,
                 plan=decision.selected_plan,
                 scheduler_output=scheduler_output,
                 base_duration_seconds=base_duration,
-                skip_predictor_update=liveness_escape,
+                skip_predictor_update=(
+                    liveness_escape or not predictor_in_support
+                ),
             )
             self._dpp_record_schedule_diagnostic(
                 snapshot=snapshot,
@@ -1318,36 +1378,57 @@ def get_modular_scheduler_class() -> type:
                 request.request_id
                 for request in pending["snapshot"].waiting_prefill_requests
             }
-            actual_prefill_tokens = sum(
-                int(tokens)
+            actual_prefill_items = tuple(
+                (request_id, int(tokens))
                 for request_id, tokens in scheduler_output.num_scheduled_tokens.items()
                 if request_id in prefill_ids
             )
-            if actual_prefill_tokens != pending["plan"].total_prefill_tokens:
-                raise RuntimeError("actual Prefill service does not match BatchPlan")
+            if actual_prefill_items != pending["plan"].prefill_items:
+                raise RuntimeError(
+                    "actual per-request Prefill service does not match BatchPlan"
+                )
+            feedback_updates = tuple(self._dpp_control_pending_updates)
+            actual_decode_items = tuple(
+                update.request_id
+                for update in feedback_updates
+                if update.tbt_service_tokens == 1
+            )
+            initialized_tbt = tuple(
+                update.request_id
+                for update in feedback_updates
+                if update.initializes_tbt_service
+            )
+            terminal_request_ids = tuple(
+                update.request_id
+                for update in feedback_updates
+                if update.terminal_reason is not None
+            )
+            actual_duration = pending["actual_duration_seconds"]
+            if actual_duration is None:
+                raise RuntimeError("modular Predictor iteration timing is missing")
             next_control = self._dpp_state_store.update_from_actual(
-                snapshot_hash=pending["snapshot"].snapshot_hash,
-                actual_prefill_tokens=actual_prefill_tokens,
-                ledger_updates=tuple(self._dpp_control_pending_updates),
+                previous_snapshot=pending["snapshot"],
+                actual_duration_seconds=actual_duration,
+                executed_prefill_items=actual_prefill_items,
+                executed_decode_items=actual_decode_items,
+                initialized_tbt_request_ids=initialized_tbt,
+                terminal_request_ids=terminal_request_ids,
             )
             if self._dpp_diagnostic_iteration_log:
                 logger.info(
                     "ModularDPPScheduler feedback frame=%s actual_prefill=%s "
                     "ledger_events=%s next_control=(%s,%.6f,%.6f)",
                     pending["snapshot"].frame_id,
-                    actual_prefill_tokens,
+                    sum(tokens for _, tokens in actual_prefill_items),
                     len(self._dpp_control_pending_updates),
-                    next_control.prefill_backlog,
-                    next_control.ttft_debt,
-                    next_control.tbt_debt,
+                    len(next_control.ttft_service_debts),
+                    len(next_control.tbt_service_debts),
+                    sum(value for _, value in next_control.tbt_service_debts),
                 )
             self._dpp_control_pending_updates = []
             if pending["skip_predictor_update"]:
                 self._dpp_predictor_pending = None
                 return result
-            actual_duration = pending["actual_duration_seconds"]
-            if actual_duration is None:
-                raise RuntimeError("modular Predictor iteration timing is missing")
             self._dpp_predictor_pending = None
             self._dpp_predictor.observe_actual(
                 pending["snapshot"],

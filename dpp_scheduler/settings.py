@@ -9,81 +9,42 @@ from typing import Any, Mapping
 
 @dataclass(frozen=True)
 class SchedulerSettings:
-    """Deterministic scheduler settings for the G2 implementation."""
+    """Deterministic one-dimensional Prefill-budget candidate settings."""
 
-    critical_horizon_seconds: float | None = None
-    prefill_knee_tokens: int | None = None
-    recovery_age_threshold: float = 30.0
-    maximum_seed_candidates: int = 12
+    prefill_budget_fractions: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0)
+    include_finish_boundary: bool = True
+    maximum_seed_candidates: int = 6
     stable_tie_key: str = "request_id"
     allow_partial_prefill: bool = True
     minimum_prefill_chunk_tokens: int = 1
-    frozen: bool = False
+    frozen: bool = True
 
     def __post_init__(self) -> None:
-        if (
-            self.critical_horizon_seconds is not None
-            and (
-                not math.isfinite(self.critical_horizon_seconds)
-                or self.critical_horizon_seconds < 0
-            )
-        ):
-            raise ValueError(
-                "critical_horizon_seconds must be finite and non-negative"
-            )
-        if self.prefill_knee_tokens is not None and self.prefill_knee_tokens <= 0:
-            raise ValueError("prefill_knee_tokens must be positive")
-        if self.maximum_seed_candidates != 12:
-            raise ValueError("maximum_seed_candidates is fixed at 12")
+        if self.prefill_budget_fractions != (0.0, 0.25, 0.5, 0.75, 1.0):
+            raise ValueError("Prefill budget fractions are fixed at 0/25/50/75/100%")
+        if not self.include_finish_boundary:
+            raise ValueError("FINISH boundary must be enabled")
+        if self.maximum_seed_candidates != 6:
+            raise ValueError("maximum_seed_candidates is fixed at 6")
         if self.minimum_prefill_chunk_tokens <= 0:
             raise ValueError("minimum_prefill_chunk_tokens must be positive")
 
-    @property
-    def template_names(self) -> tuple[str, ...]:
-        return ("MANDATORY", "CRITICAL", "ALL")
-
     @classmethod
     def provisional(cls) -> SchedulerSettings:
-        # Horizon and knee remain absent until same-configuration profiling
-        # defines and freezes their selection rules. Candidate generation still
-        # produces MANDATORY/ALL and ZERO/FINISH/BINDABLE_MAX actions.
-        return cls(frozen=False)
+        return cls()
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> SchedulerSettings:
         """Load the frozen decision values from the active config section."""
         if not isinstance(value, Mapping):
             raise ValueError("candidate_generator settings must be a mapping")
-        breakpoints = value.get("prefill_breakpoints")
-        if not isinstance(breakpoints, Mapping):
-            raise ValueError("candidate_generator.prefill_breakpoints must be a mapping")
+        fractions = value.get("prefill_budget_fractions")
+        if not isinstance(fractions, list):
+            raise ValueError("candidate_generator.prefill_budget_fractions must be a list")
         frozen = value.get("parameters_frozen")
         if not isinstance(frozen, bool):
             raise ValueError("candidate_generator.parameters_frozen must be boolean")
-        horizon = value.get("critical_horizon_seconds")
-        knee = breakpoints.get("knee_tokens")
-        knee_status = breakpoints.get(
-            "knee_status", "frozen" if frozen else "pending"
-        )
-        if frozen and (horizon is None or knee is None):
-            raise ValueError("frozen candidate parameters cannot be null")
-        if frozen and knee_status != "frozen":
-            raise ValueError("frozen Prefill knee must have knee_status=frozen")
-        if not frozen and horizon is not None:
-            raise ValueError("unfrozen critical horizon must remain null")
-        if not frozen and knee is None and knee_status != "pending":
-            raise ValueError("null Prefill knee must have knee_status=pending")
-        if not frozen and knee is not None and knee_status != "provisional":
-            raise ValueError(
-                "unfrozen Prefill knee requires knee_status=provisional"
-            )
-        if horizon is not None and (
-            isinstance(horizon, bool) or not isinstance(horizon, (int, float))
-        ):
-            raise ValueError("critical_horizon_seconds must be numeric")
-        if knee is not None and (isinstance(knee, bool) or not isinstance(knee, int)):
-            raise ValueError("prefill knee_tokens must be an integer")
-        maximum = value.get("maximum_seed_candidates", 12)
+        maximum = value.get("maximum_seed_candidates", 6)
         if isinstance(maximum, bool) or not isinstance(maximum, int):
             raise ValueError("maximum_seed_candidates must be an integer")
         minimum_prefill = value.get("minimum_prefill_chunk_tokens", 1)
@@ -92,8 +53,8 @@ class SchedulerSettings:
         ):
             raise ValueError("minimum_prefill_chunk_tokens must be an integer")
         return cls(
-            critical_horizon_seconds=(float(horizon) if horizon is not None else None),
-            prefill_knee_tokens=knee,
+            prefill_budget_fractions=tuple(float(item) for item in fractions),
+            include_finish_boundary=value.get("include_finish_boundary") is True,
             maximum_seed_candidates=maximum,
             minimum_prefill_chunk_tokens=minimum_prefill,
             frozen=frozen,
@@ -102,21 +63,16 @@ class SchedulerSettings:
 
 @dataclass(frozen=True)
 class SafeSetSettings:
-    """Frozen physical-guard parameters for G4.
-
-    top_k_when_all_risky remains in the compatibility schema, but SLO risk
-    is metadata only and is not used to prune physically feasible candidates.
-    """
+    """Hard physical-feasibility settings; SLO risk is never an admission input."""
 
     rolling_kv_horizon_iterations: int
     reserve_blocks_r0: int
-    top_k_when_all_risky: int
+    top_k_when_all_risky: int = 0  # legacy compatibility; inactive in v2
 
     def __post_init__(self) -> None:
         for label, value in (
             ("rolling_kv_horizon_iterations", self.rolling_kv_horizon_iterations),
             ("reserve_blocks_r0", self.reserve_blocks_r0),
-            ("top_k_when_all_risky", self.top_k_when_all_risky),
         ):
             if isinstance(value, bool) or not isinstance(value, int):
                 raise ValueError(f"{label} must be an integer")
@@ -124,8 +80,10 @@ class SafeSetSettings:
             raise ValueError("rolling_kv_horizon_iterations must be non-negative")
         if self.reserve_blocks_r0 < 0:
             raise ValueError("reserve_blocks_r0 must be non-negative")
-        if self.top_k_when_all_risky <= 0:
-            raise ValueError("top_k_when_all_risky must be positive")
+        if isinstance(self.top_k_when_all_risky, bool) or not isinstance(
+            self.top_k_when_all_risky, int
+        ):
+            raise ValueError("legacy top_k_when_all_risky must be an integer")
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> SafeSetSettings:
@@ -134,7 +92,6 @@ class SafeSetSettings:
         required = (
             "rolling_kv_horizon_iterations",
             "reserve_blocks_r0",
-            "top_k_when_all_risky",
         )
         missing = [key for key in required if value.get(key) is None]
         if missing:
@@ -145,16 +102,10 @@ class SafeSetSettings:
             raise ValueError("full output length reservation must be forbidden")
         if value.get("slo_risk_is_hard_filter") is not False:
             raise ValueError("SLO risk must not be configured as a hard filter")
-        if tuple(value.get("all_risk_order", ())) != (
-            "predicted_violation_count",
-            "predicted_total_lateness",
-            "stable_plan_key",
-        ):
-            raise ValueError("Safe-Set all-risk ordering contract mismatch")
         return cls(
             rolling_kv_horizon_iterations=value["rolling_kv_horizon_iterations"],
             reserve_blocks_r0=value["reserve_blocks_r0"],
-            top_k_when_all_risky=value["top_k_when_all_risky"],
+            top_k_when_all_risky=int(value.get("top_k_when_all_risky", 0)),
         )
 
 
@@ -294,46 +245,82 @@ class ObligationSettings:
 
 
 @dataclass(frozen=True)
-class DPPSettings:
-    """Frozen integration settings for the normalized DPP score."""
+class PredictorSettings:
+    """Constrained Ridge extrapolation settings and live-readiness status."""
 
-    epsilon_ttft: float
-    epsilon_tbt: float
-    weight_v: float
-    token_normalization: int
-    obligation_normalization: int
+    ood_uncertainty_coefficient: float
+    parameter_status: str = "provisional_pending_held_out_ood_calibration"
+
+    def __post_init__(self) -> None:
+        value = self.ood_uncertainty_coefficient
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            raise ValueError("ood_uncertainty_coefficient must be finite and non-negative")
+        if self.parameter_status not in {
+            "provisional_pending_held_out_ood_calibration",
+            "frozen_from_held_out_ood_calibration",
+        }:
+            raise ValueError("unknown OOD uncertainty parameter status")
+
+    @property
+    def live_v2_ready(self) -> bool:
+        return self.parameter_status == "frozen_from_held_out_ood_calibration"
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> PredictorSettings:
+        extrapolation = value.get("extrapolation")
+        if not isinstance(extrapolation, Mapping):
+            raise ValueError("predictor.extrapolation must be a mapping")
+        if extrapolation.get("strategy") != "clipped_monotonic_ridge":
+            raise ValueError("Predictor extrapolation strategy mismatch")
+        if extrapolation.get("allow_extrapolation") is not True:
+            raise ValueError("Predictor extrapolation must be enabled")
+        return cls(
+            ood_uncertainty_coefficient=extrapolation.get(
+                "ood_uncertainty_coefficient"
+            ),
+            parameter_status=str(extrapolation.get("parameter_status", "")),
+        )
+
+
+@dataclass(frozen=True)
+class DPPSettings:
+    """Request-level service-deficit v2 scoring settings."""
+
+    prefill_reference_concurrency: int
+    decode_reference_concurrency: int
     maximum_numeric: float
-    zero_duration_behavior: str = "reject_candidate"
+    reference_parameter_status: str = "provisional_pending_stock_profiling"
+    score_rel_tol: float = 1e-9
+    score_abs_tol: float = 1e-12
+    algorithm: str = "request_service_deficit_v2"
 
     def __post_init__(self) -> None:
         for label, value in (
-            ("epsilon_ttft", self.epsilon_ttft),
-            ("epsilon_tbt", self.epsilon_tbt),
-        ):
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(value)
-                or not 0.0 <= value <= 1.0
-            ):
-                raise ValueError(f"{label} must be finite and in [0, 1]")
-        if (
-            isinstance(self.weight_v, bool)
-            or not isinstance(self.weight_v, (int, float))
-            or not math.isfinite(self.weight_v)
-            or self.weight_v < 0
-        ):
-            raise ValueError("weight_v must be finite and non-negative")
-        for label, value in (
-            ("token_normalization", self.token_normalization),
-            ("obligation_normalization", self.obligation_normalization),
+            ("prefill_reference_concurrency", self.prefill_reference_concurrency),
+            ("decode_reference_concurrency", self.decode_reference_concurrency),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{label} must be a positive integer")
         if not math.isfinite(self.maximum_numeric) or self.maximum_numeric <= 0:
             raise ValueError("maximum_numeric must be finite and positive")
-        if self.zero_duration_behavior != "reject_candidate":
-            raise ValueError("zero_duration_behavior must be reject_candidate")
+        if self.algorithm != "request_service_deficit_v2":
+            raise ValueError("DPP algorithm must be request_service_deficit_v2")
+        if self.reference_parameter_status not in {
+            "provisional_pending_stock_profiling",
+            "frozen_from_stock_positive_frame_p50",
+        }:
+            raise ValueError("unknown reference concurrency parameter status")
+        if self.score_rel_tol != 1e-9 or self.score_abs_tol != 1e-12:
+            raise ValueError("DPP score tie tolerance is fixed")
+
+    @property
+    def live_v2_ready(self) -> bool:
+        return self.reference_parameter_status == "frozen_from_stock_positive_frame_p50"
 
     @classmethod
     def from_mapping(
@@ -343,59 +330,30 @@ class DPPSettings:
         token_budget: int,
         sequence_budget: int,
     ) -> DPPSettings:
+        del token_budget, sequence_budget
         if not isinstance(value, Mapping):
             raise ValueError("dpp settings must be a mapping")
-        if value.get("parameter_status") != "frozen_for_scheduler_integration":
-            raise ValueError("DPP parameters are not frozen for integration")
-        if value.get("denominator") != "expected_duration":
-            raise ValueError("DPP denominator must be expected_duration")
-        if value.get("service_utility") != "ttft_success_plus_tbt_success":
-            raise ValueError("DPP service utility definition mismatch")
-        if value.get("updates_from_actual_observation_only") is not True:
-            raise ValueError("DPP state must update from actual observations only")
-        if value.get("obligation_settlement_exactly_once") is not True:
-            raise ValueError("DPP obligations must settle exactly once")
+        reference = value.get("reference_concurrency")
+        ranges = value.get("score_numeric_ranges")
+        tolerance = value.get("score_tie_tolerance")
+        if not isinstance(reference, Mapping):
+            raise ValueError("dpp.reference_concurrency must be a mapping")
+        if not isinstance(ranges, Mapping) or not isinstance(tolerance, Mapping):
+            raise ValueError("DPP numeric range/tolerance must be mappings")
+        if reference.get("statistic") != "p50_positive_frames":
+            raise ValueError("reference concurrency statistic mismatch")
         if tuple(value.get("tie_break", ())) != (
-            "fewer_predicted_misses",
-            "larger_conservative_deadline_margin",
+            "smaller_effective_duration",
+            "smaller_prefill_budget",
             "smaller_plan_id",
         ):
-            raise ValueError("DPP tie-break contract mismatch")
-
-        normalization = value.get("normalization")
-        ranges = value.get("score_numeric_ranges")
-        if not isinstance(normalization, Mapping) or not isinstance(ranges, Mapping):
-            raise ValueError("DPP normalization/numeric ranges must be mappings")
-        token_scales = {
-            normalization.get("prefill_backlog_tokens"),
-            normalization.get("prefill_service_tokens"),
-        }
-        obligation_scales = {
-            normalization.get("ttft_debt_obligations"),
-            normalization.get("tbt_debt_obligations"),
-            normalization.get("obligation_outcomes"),
-            normalization.get("service_utility_obligations"),
-        }
-        if token_scales != {token_budget}:
-            raise ValueError("DPP token normalization must equal C_tok")
-        if obligation_scales != {sequence_budget}:
-            raise ValueError("DPP obligation normalization must equal C_seq")
-        if ranges.get("nonnegative_minimum") != 0.0:
-            raise ValueError("DPP nonnegative minimum must be 0.0")
-        maximum = ranges.get("finite_absolute_maximum")
-        if isinstance(maximum, bool) or not isinstance(maximum, (int, float)):
-            raise ValueError("DPP finite_absolute_maximum must be numeric")
-
-        required = ("epsilon_ttft", "epsilon_tbt", "weight_v")
-        missing = [key for key in required if value.get(key) is None]
-        if missing:
-            raise ValueError("DPP parameters are unresolved: " + ", ".join(missing))
+            raise ValueError("DPP v2 tie-break contract mismatch")
         return cls(
-            epsilon_ttft=value["epsilon_ttft"],
-            epsilon_tbt=value["epsilon_tbt"],
-            weight_v=value["weight_v"],
-            token_normalization=token_budget,
-            obligation_normalization=sequence_budget,
-            maximum_numeric=float(maximum),
-            zero_duration_behavior=value.get("zero_duration_behavior"),
+            prefill_reference_concurrency=reference.get("prefill"),
+            decode_reference_concurrency=reference.get("decode"),
+            maximum_numeric=float(ranges.get("finite_absolute_maximum")),
+            reference_parameter_status=str(reference.get("parameter_status", "")),
+            score_rel_tol=float(tolerance.get("relative")),
+            score_abs_tol=float(tolerance.get("absolute")),
+            algorithm=str(value.get("algorithm", "")),
         )

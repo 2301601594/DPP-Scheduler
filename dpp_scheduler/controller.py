@@ -69,17 +69,11 @@ class Controller:
         expiry_updates = self._expire_before_snapshot()
         snapshot = self.adapter.make_snapshot()
         control = self.state_store.bind_snapshot(snapshot)
-        if expiry_updates:
-            control = self.state_store.update_from_actual(
-                snapshot_hash=snapshot.snapshot_hash,
-                actual_prefill_tokens=0,
-                ledger_updates=expiry_updates,
-            )
+        # Obligation expiry remains metrics/Goodput state. It does not update
+        # request-level v2 service deficits.
+        del expiry_updates
         plans = self.generator.generate(snapshot)
         predictions = self.predictor.predict(snapshot, plans)
-        predictions = self.consequence_estimator.attach(
-            snapshot, plans, predictions
-        )
         safe_result = self.safe_set.filter(snapshot, plans, predictions)
         validate_snapshot_hash(safe_result.snapshot_hash, snapshot.snapshot_hash)
         safe_candidates = safe_result.safe_candidates
@@ -127,11 +121,15 @@ class Controller:
                     "Controller: executed plan does not match selected BatchPlan"
                 )
             if observation.error is None:
+                if observation.finished_at is None:
+                    raise RuntimeError("Controller: actual iteration duration is missing")
                 self.state_store.update_from_actual(
-                    snapshot_hash=snapshot.snapshot_hash,
-                    actual_prefill_tokens=sum(
-                        tokens for _, tokens in observation.executed_prefill_items
+                    previous_snapshot=snapshot,
+                    actual_duration_seconds=(
+                        observation.finished_at - observation.started_at
                     ),
+                    executed_prefill_items=observation.executed_prefill_items,
+                    executed_decode_items=observation.executed_decode_items,
                 )
 
         self.observer.record(snapshot, decision, observation)

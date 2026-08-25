@@ -164,7 +164,7 @@ class OnlinePredictorTests(unittest.TestCase):
             self.assertAlmostEqual(next_audit.prediction.expected_duration, 0.11)
             self.assertEqual(predictor.calibration_sample_count("mixed"), 0)
 
-    def test_duplicate_feedback_and_ood_fail_closed(self) -> None:
+    def test_duplicate_feedback_and_ood_is_constrained_but_not_calibrated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             predictor = RidgeDurationPredictor.from_artifact(
                 _artifact(Path(directory) / "artifact", support_max=100.0)
@@ -182,7 +182,23 @@ class OnlinePredictorTests(unittest.TestCase):
                 ood_snapshot, _plan(ood_snapshot, "decode_only")
             )
             self.assertFalse(ood.prediction.in_support)
-            self.assertIsNone(ood.prediction.expected_duration)
+            self.assertEqual(
+                ood.prediction.prediction_mode, "CONSTRAINED_EXTRAPOLATION"
+            )
+            self.assertIsNotNone(ood.prediction.expected_duration)
+            self.assertGreater(
+                ood.prediction.conservative_duration,
+                ood.prediction.expected_duration,
+            )
+            far_snapshot = _snapshot(3, decode_context=500)
+            far = predictor.predict_with_audit(
+                far_snapshot, _plan(far_snapshot, "decode_only")
+            )
+            self.assertGreaterEqual(
+                far.prediction.expected_duration,
+                ood.prediction.expected_duration,
+            )
+            self.assertGreater(far.prediction.ood_distance, ood.prediction.ood_distance)
             with self.assertRaisesRegex(ValueError, "out-of-support"):
                 predictor.observe_actual(
                     ood_snapshot, _plan(ood_snapshot, "decode_only"), 0.2

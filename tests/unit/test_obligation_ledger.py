@@ -24,6 +24,8 @@ class ObligationLedgerTests(unittest.TestCase):
             terminal_reason=None,
         )
         self.assertEqual((first.ttft_success, first.ttft_miss), (1, 0))
+        self.assertTrue(first.initializes_tbt_service)
+        self.assertEqual(first.tbt_service_tokens, 0)
 
         expired = ledger.expire_deadlines(11.8)
         self.assertEqual(len(expired), 1)
@@ -46,6 +48,8 @@ class ObligationLedgerTests(unittest.TestCase):
             terminal_reason=None,
         )
         self.assertEqual((late.tbt_success, late.tbt_miss), (0, 0))
+        self.assertFalse(late.initializes_tbt_service)
+        self.assertEqual(late.tbt_service_tokens, 1)
         self.assertFalse(ledger.request_view("r", 11.8).goodput_eligible)
         self.assertTrue(ledger.request_view("r", 11.8).recovery)
 
@@ -213,6 +217,8 @@ class ObligationLedgerTests(unittest.TestCase):
         self.assertTrue(
             snapshot.waiting_prefill_requests[0].hard_ttft_protected
         )
+        self.assertEqual(snapshot.waiting_prefill_requests[0].ttft_slo_seconds, 2.0)
+        self.assertEqual(snapshot.active_decode_requests[0].tbt_slo_seconds, 0.25)
 
     def test_live_factory_consumes_engine_output_events(self) -> None:
         source = inspect.getsource(get_modular_scheduler_class)

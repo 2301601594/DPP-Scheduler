@@ -16,17 +16,11 @@ from dpp_scheduler.settings import DPPSettings
 
 @dataclass
 class InMemoryStateStore:
-    """Control state updated only from actual queue and ledger observations."""
+    """Request-level debts updated only from actual duration and service."""
 
-    current: ControlState = ControlState(
-        snapshot_hash="unbound",
-        prefill_backlog=0,
-        ttft_debt=0.0,
-        tbt_debt=0.0,
-    )
+    current: ControlState = ControlState(snapshot_hash="unbound")
     settings: DPPSettings | None = None
-    _applied_event_ids: set[str] = field(default_factory=set, init=False)
-    _pending_prefill_arrivals: int = field(default=0, init=False)
+    _applied_snapshot_hashes: set[str] = field(default_factory=set, init=False)
 
     def get(self) -> ControlState:
         return self.current
@@ -41,58 +35,66 @@ class InMemoryStateStore:
             or prompt_tokens <= 0
         ):
             raise ValueError("prompt_tokens must be a positive integer")
-        self._pending_prefill_arrivals += prompt_tokens
+        # Arrival debt is initialized from the authoritative Snapshot timestamp,
+        # request arrival time, prompt progress, and request-level SLO.
 
     def bind_snapshot(self, snapshot: StateSnapshot) -> ControlState:
-        """Bind debts to a round and reconcile QP from actual visible state."""
-        observed_backlog = sum(
-            request.remaining_tokens
-            for request in snapshot.waiting_prefill_requests
-        )
-        expected_backlog = (
-            self.current.prefill_backlog + self._pending_prefill_arrivals
-        )
-        # Normal rounds follow Q-mu+A exactly. An actual Snapshot remains the
-        # authority after cancellation/preemption changes visible Prefill work.
-        bound_backlog = (
-            expected_backlog
-            if expected_backlog == observed_backlog
-            else observed_backlog
-        )
-        self._pending_prefill_arrivals = 0
+        """Initialize new Prefill debt and remove completed phase state."""
+        prior_ttft = self.current.ttft_debt_map()
+        prior_tbt = self.current.tbt_debt_map()
+        ttft: dict[str, float] = {}
+        for request in snapshot.waiting_prefill_requests:
+            if request.ttft_slo_seconds <= 0 or request.token_count <= 0:
+                raise ValueError("Prefill request SLO/prompt length must be positive")
+            if request.request_id in prior_ttft:
+                ttft[request.request_id] = prior_ttft[request.request_id]
+            else:
+                ttft[request.request_id] = max(
+                    0.0,
+                    (snapshot.timestamp - request.arrival_time)
+                    / request.ttft_slo_seconds
+                    - request.prefilled_tokens / request.token_count,
+                )
+        active_decode = {
+            request.request_id for request in snapshot.active_decode_requests
+        }
+        tbt = {
+            request_id: debt
+            for request_id, debt in prior_tbt.items()
+            if request_id in active_decode
+        }
         self.current = ControlState(
             snapshot_hash=snapshot.snapshot_hash,
-            prefill_backlog=bound_backlog,
-            ttft_debt=self.current.ttft_debt,
-            tbt_debt=self.current.tbt_debt,
+            ttft_service_debts=tuple(sorted(ttft.items())),
+            tbt_service_debts=tuple(sorted(tbt.items())),
         )
         return self.current
 
     def update_from_actual(
         self,
         *,
-        snapshot_hash: str,
-        actual_prefill_tokens: int,
-        ledger_updates: tuple[LedgerUpdate, ...] = (),
+        previous_snapshot: StateSnapshot,
+        actual_duration_seconds: float,
+        executed_prefill_items: tuple[tuple[str, int], ...],
+        executed_decode_items: tuple[str, ...],
+        initialized_tbt_request_ids: tuple[str, ...] = (),
+        terminal_request_ids: tuple[str, ...] = (),
     ) -> ControlState:
-        if self.settings is None and ledger_updates:
-            raise RuntimeError("DPP settings are required for debt updates")
-        event_ids = [update.event_id for update in ledger_updates]
-        if len(event_ids) != len(set(event_ids)):
-            raise DuplicateLedgerEvent("duplicate event in control-state update")
-        duplicates = self._applied_event_ids.intersection(event_ids)
-        if duplicates:
-            raise DuplicateLedgerEvent(
-                f"control-state event already applied: {min(duplicates)}"
-            )
-        self.current = advance_control_state(
+        if previous_snapshot.snapshot_hash in self._applied_snapshot_hashes:
+            raise DuplicateLedgerEvent("actual iteration feedback already applied")
+        self.current = advance_service_debts(
             self.current,
-            snapshot_hash=snapshot_hash,
-            actual_prefill_tokens=actual_prefill_tokens,
-            ledger_updates=ledger_updates,
-            settings=self.settings,
+            previous_snapshot=previous_snapshot,
+            actual_duration_seconds=actual_duration_seconds,
+            executed_prefill_items=executed_prefill_items,
+            executed_decode_items=executed_decode_items,
+            initialized_tbt_request_ids=initialized_tbt_request_ids,
+            terminal_request_ids=terminal_request_ids,
+            maximum_numeric=(
+                self.settings.maximum_numeric if self.settings else float("inf")
+            ),
         )
-        self._applied_event_ids.update(event_ids)
+        self._applied_snapshot_hashes.add(previous_snapshot.snapshot_hash)
         return self.current
 
 
@@ -112,71 +114,87 @@ class LedgerUpdate:
     tbt_miss: int = 0
     cancelled_obligations: int = 0
     terminal_reason: str | None = None
+    initializes_tbt_service: bool = False
+    tbt_service_tokens: int = 0
 
 
-def advance_control_state(
+def advance_service_debts(
     state: ControlState,
     *,
-    snapshot_hash: str,
-    actual_prefill_tokens: int,
-    ledger_updates: tuple[LedgerUpdate, ...],
-    settings: DPPSettings | None,
+    previous_snapshot: StateSnapshot,
+    actual_duration_seconds: float,
+    executed_prefill_items: tuple[tuple[str, int], ...],
+    executed_decode_items: tuple[str, ...],
+    initialized_tbt_request_ids: tuple[str, ...] = (),
+    terminal_request_ids: tuple[str, ...] = (),
+    maximum_numeric: float = float("inf"),
 ) -> ControlState:
-    """Apply the frozen actual-feedback equations as a replayable pure step."""
-    validate_snapshot_hash(state.snapshot_hash, snapshot_hash)
-    if (
-        isinstance(actual_prefill_tokens, bool)
-        or not isinstance(actual_prefill_tokens, int)
-        or actual_prefill_tokens < 0
-    ):
-        raise ValueError("actual_prefill_tokens must be a non-negative integer")
+    """Replay one actual iteration using per-request normalized service."""
+    validate_snapshot_hash(state.snapshot_hash, previous_snapshot.snapshot_hash)
+    if not math.isfinite(actual_duration_seconds) or actual_duration_seconds <= 0:
+        raise ValueError("actual duration must be finite and positive")
+    if len(dict(executed_prefill_items)) != len(executed_prefill_items):
+        raise ValueError("actual Prefill feedback contains duplicate request IDs")
+    if len(set(executed_decode_items)) != len(executed_decode_items):
+        raise ValueError("actual Decode feedback contains duplicate request IDs")
 
-    totals = {
-        "ttft_success": 0,
-        "ttft_miss": 0,
-        "tbt_success": 0,
-        "tbt_miss": 0,
+    prefill = {
+        request.request_id: request
+        for request in previous_snapshot.waiting_prefill_requests
     }
-    for update in ledger_updates:
-        if not update.event_id:
-            raise ValueError("LedgerUpdate event_id must be non-empty")
-        for key in totals:
-            value = getattr(update, key)
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ValueError(f"LedgerUpdate {key} must be non-negative integer")
-            totals[key] += value
+    decode = {
+        request.request_id: request
+        for request in previous_snapshot.active_decode_requests
+    }
+    actual_prefill = dict(executed_prefill_items)
+    if not set(actual_prefill).issubset(prefill):
+        raise ValueError("actual Prefill feedback references an unknown request")
+    if not set(executed_decode_items).issubset(decode):
+        raise ValueError("actual Decode feedback references an unknown request")
 
-    if ledger_updates and settings is None:
-        raise RuntimeError("DPP settings are required for debt updates")
-    epsilon_ttft = settings.epsilon_ttft if settings is not None else 0.0
-    epsilon_tbt = settings.epsilon_tbt if settings is not None else 0.0
-    next_ttft = max(
-        0.0,
-        state.ttft_debt
-        + (1.0 - epsilon_ttft) * totals["ttft_miss"]
-        - epsilon_ttft * totals["ttft_success"],
-    )
-    next_tbt = max(
-        0.0,
-        state.tbt_debt
-        + (1.0 - epsilon_tbt) * totals["tbt_miss"]
-        - epsilon_tbt * totals["tbt_success"],
-    )
-    next_prefill = max(0, state.prefill_backlog - actual_prefill_tokens)
-    maximum = settings.maximum_numeric if settings is not None else float("inf")
-    if (
-        not math.isfinite(next_ttft)
-        or not math.isfinite(next_tbt)
-        or next_ttft > maximum
-        or next_tbt > maximum
-        or next_prefill > maximum
+    ttft: dict[str, float] = {}
+    for request_id, current in state.ttft_service_debts:
+        request = prefill[request_id]
+        tokens = actual_prefill.get(request_id, 0)
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
+            raise ValueError("actual Prefill service must be non-negative integers")
+        if tokens > request.remaining_tokens:
+            raise ValueError("actual Prefill service exceeds remaining prompt")
+        if request.prefilled_tokens + tokens >= request.token_count:
+            continue
+        ttft[request_id] = max(
+            0.0,
+            current
+            + actual_duration_seconds / request.ttft_slo_seconds
+            - tokens / request.token_count,
+        )
+
+    actual_decode = set(executed_decode_items)
+    terminal = set(terminal_request_ids)
+    tbt: dict[str, float] = {}
+    for request_id, current in state.tbt_service_debts:
+        if request_id in terminal:
+            continue
+        request = decode[request_id]
+        tbt[request_id] = max(
+            0.0,
+            current
+            + actual_duration_seconds / request.tbt_slo_seconds
+            - (1.0 if request_id in actual_decode else 0.0),
+        )
+    for request_id in initialized_tbt_request_ids:
+        if request_id not in terminal:
+            tbt.setdefault(request_id, 0.0)
+
+    if any(
+        not math.isfinite(value) or value < 0 or value > maximum_numeric
+        for value in tuple(ttft.values()) + tuple(tbt.values())
     ):
-        raise ValueError("actual feedback produced out-of-range ControlState")
+        raise ValueError("actual feedback produced out-of-range service debt")
     return ControlState(
-        snapshot_hash=snapshot_hash,
-        prefill_backlog=next_prefill,
-        ttft_debt=next_ttft,
-        tbt_debt=next_tbt,
+        snapshot_hash=previous_snapshot.snapshot_hash,
+        ttft_service_debts=tuple(sorted(ttft.items())),
+        tbt_service_debts=tuple(sorted(tbt.items())),
     )
 
 
@@ -320,6 +338,7 @@ class ObligationLedger:
 
         self._seen_event_ids.add(event_id)
         ttft_success = ttft_miss = tbt_success = tbt_miss = cancelled = 0
+        was_first_token = not request.first_token_returned
 
         if token_count == 1:
             if request.ttft is not None:
@@ -382,6 +401,10 @@ class ObligationLedger:
             tbt_miss=tbt_miss,
             cancelled_obligations=cancelled,
             terminal_reason=terminal_reason,
+            initializes_tbt_service=bool(
+                token_count == 1 and was_first_token and terminal_reason is None
+            ),
+            tbt_service_tokens=int(token_count == 1 and not was_first_token),
         )
 
     def expire_deadlines(self, now: float) -> tuple[LedgerUpdate, ...]:

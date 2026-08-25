@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, fields, is_dataclass
 from typing import Any, TypeVar
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 T = TypeVar("T")
 
@@ -96,6 +96,7 @@ class PrefillRequest:
     ordinal: int = 0
     # A missed request remains live for completion but loses Goodput eligibility.
     goodput_eligible: bool = True
+    ttft_slo_seconds: float = 2.0
 
     @property
     def remaining_tokens(self) -> int:
@@ -119,6 +120,7 @@ class DecodeRequest:
     mandatory: bool = False
     ordinal: int = 0
     goodput_eligible: bool = True
+    tbt_slo_seconds: float = 0.25
 
 
 @dataclass(frozen=True)
@@ -236,6 +238,8 @@ class Prediction:
     expected_duration: float | None
     conservative_duration: float | None
     in_support: bool
+    ood_distance: float = 0.0
+    prediction_mode: str = "INTERPOLATION"
     predictor_version: str | None = None
     ttft_success: int | None = None
     ttft_miss: int | None = None
@@ -250,13 +254,18 @@ class Prediction:
 
 @dataclass(frozen=True)
 class ControlState:
-    """DPP control state, containing only the three declared control variables."""
+    """Immutable request-level service-deficit state bound to one Snapshot."""
 
     snapshot_hash: str
-    prefill_backlog: int
-    ttft_debt: float
-    tbt_debt: float
+    ttft_service_debts: tuple[tuple[str, float], ...] = ()
+    tbt_service_debts: tuple[tuple[str, float], ...] = ()
     schema_version: int = SCHEMA_VERSION
+
+    def ttft_debt_map(self) -> dict[str, float]:
+        return dict(self.ttft_service_debts)
+
+    def tbt_debt_map(self) -> dict[str, float]:
+        return dict(self.tbt_service_debts)
 
 
 @dataclass(frozen=True)

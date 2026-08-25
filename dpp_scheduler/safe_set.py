@@ -24,7 +24,7 @@ TOKEN_BUDGET_EXCEEDED = "TOKEN_BUDGET_EXCEEDED"
 SEQUENCE_BUDGET_EXCEEDED = "SEQUENCE_BUDGET_EXCEEDED"
 CURRENT_KV_EXCEEDED = "CURRENT_KV_EXCEEDED"
 ROLLING_KV_EXCEEDED = "ROLLING_KV_EXCEEDED"
-PREDICTOR_OUT_OF_SUPPORT = "PREDICTOR_OUT_OF_SUPPORT"
+PREDICTOR_OUT_OF_SUPPORT = "PREDICTOR_OUT_OF_SUPPORT"  # legacy inactive reason
 PREDICTION_INVALID = "PREDICTION_INVALID"
 CONSEQUENCE_MISSING = "CONSEQUENCE_MISSING"
 SLO_RISK_WHEN_ZERO_AVAILABLE = "SLO_RISK_WHEN_ZERO_VIOLATION_AVAILABLE"
@@ -96,14 +96,12 @@ def _safe_candidate(
 ) -> SafeCandidate:
     count = prediction.predicted_violation_count
     lateness = prediction.predicted_total_lateness_seconds
-    if count is None or lateness is None:
-        raise ValueError("prediction has no attached consequence")
     return SafeCandidate(
         snapshot_hash=snapshot.snapshot_hash,
         plan=plan,
         prediction=prediction,
-        predicted_violation_count=count,
-        predicted_total_lateness_seconds=lateness,
+        predicted_violation_count=count if count is not None else 0,
+        predicted_total_lateness_seconds=lateness if lateness is not None else 0.0,
         conservative_deadline_margin_seconds=(
             prediction.conservative_deadline_margin_seconds
         ),
@@ -158,8 +156,6 @@ def hard_rejection_reasons(
     )
     if computed_kv + settings.reserve_blocks_r0 + rolling > snapshot.total_kv_blocks:
         reasons.append(ROLLING_KV_EXCEEDED)
-    if not prediction.in_support:
-        reasons.append(PREDICTOR_OUT_OF_SUPPORT)
     expected = prediction.expected_duration
     conservative = prediction.conservative_duration
     if (
@@ -267,14 +263,6 @@ class ResourceAndRiskSafeSet(SafeSet):
         for plan in plan_tuple:
             prediction = by_plan[plan.plan_id]
             reasons = list(self.hard_rejection_reasons(snapshot, plan, prediction))
-            if (
-                prediction.predicted_violation_count is None
-                or prediction.predicted_total_lateness_seconds is None
-                or prediction.predicted_violation_count < 0
-                or not math.isfinite(prediction.predicted_total_lateness_seconds)
-                or prediction.predicted_total_lateness_seconds < 0
-            ):
-                reasons.append(CONSEQUENCE_MISSING)
 
             if reasons:
                 rejected.append((plan.plan_id, tuple(reasons)))

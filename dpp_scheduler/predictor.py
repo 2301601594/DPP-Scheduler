@@ -168,6 +168,7 @@ class NullDurationPredictor(DurationPredictor):
                 expected_duration=None,
                 conservative_duration=None,
                 in_support=False,
+                prediction_mode="INVALID",
                 predictor_version="null-g2",
             )
             for plan in plans
@@ -183,19 +184,40 @@ class _RidgeModel:
     scales: tuple[float, ...]
     support: tuple[tuple[float, float], ...]
 
-    def base_prediction(self, features: dict[str, float]) -> tuple[float, bool]:
+    def base_prediction(
+        self, features: dict[str, float]
+    ) -> tuple[float, bool, float]:
         values = tuple(_finite(features[name], label=name) for name in self.names)
         in_support = all(
             lower <= value <= upper
             for value, (lower, upper) in zip(values, self.support)
         )
-        result = self.intercept + sum(
+        clipped = tuple(
+            min(upper, max(lower, value))
+            for value, (lower, upper) in zip(values, self.support)
+        )
+        boundary = self.intercept + sum(
             coefficient * ((value - mean) / scale)
             for value, coefficient, mean, scale in zip(
-                values, self.coefficients, self.means, self.scales
+                clipped, self.coefficients, self.means, self.scales
             )
         )
-        return result, in_support
+        high_extrapolation = sum(
+            max(0.0, coefficient / scale) * max(0.0, value - upper)
+            for value, coefficient, scale, (_, upper) in zip(
+                values, self.coefficients, self.scales, self.support
+            )
+        )
+        ood_distance = max(
+            (
+                abs(value - clipped_value) / scale
+                for value, clipped_value, scale in zip(
+                    values, clipped, self.scales
+                )
+            ),
+            default=0.0,
+        )
+        return boundary + high_extrapolation, in_support, ood_distance
 
 
 @dataclass(frozen=True)
@@ -257,13 +279,25 @@ class RidgeDurationPredictor(DurationPredictor):
         predictor_version: str,
         models: dict[str, _RidgeModel],
         calibrator: OnlineResidualCalibrator,
+        ood_uncertainty_coefficient: float = 0.05,
     ) -> None:
+        if (
+            not math.isfinite(ood_uncertainty_coefficient)
+            or ood_uncertainty_coefficient < 0
+        ):
+            raise ValueError("OOD uncertainty coefficient must be non-negative")
         self.predictor_version = predictor_version
         self._models = models
         self._calibrator = calibrator
+        self.ood_uncertainty_coefficient = float(ood_uncertainty_coefficient)
 
     @classmethod
-    def from_artifact(cls, artifact_root: str | Path) -> RidgeDurationPredictor:
+    def from_artifact(
+        cls,
+        artifact_root: str | Path,
+        *,
+        ood_uncertainty_coefficient: float = 0.05,
+    ) -> RidgeDurationPredictor:
         root = Path(artifact_root).resolve()
         manifest = _load_json(root / "artifact_manifest.json")
         if (
@@ -368,6 +402,7 @@ class RidgeDurationPredictor(DurationPredictor):
             predictor_version=ONLINE_PREDICTOR_VERSION,
             models=models,
             calibrator=OnlineResidualCalibrator(calibration),
+            ood_uncertainty_coefficient=ood_uncertainty_coefficient,
         )
 
     def predict_with_audit(
@@ -375,16 +410,20 @@ class RidgeDurationPredictor(DurationPredictor):
     ) -> PredictionAudit:
         try:
             kind, features = build_plan_features(snapshot, plan)
-            base, in_support = self._models[kind].base_prediction(features)
-            if not in_support:
-                raise ValueError("feature vector is outside frozen support domain")
+            base, in_support, ood_distance = self._models[kind].base_prediction(
+                features
+            )
             if not math.isfinite(base) or base <= 0:
                 raise ValueError("base duration prediction is non-positive or non-finite")
             residual_mean, centered_p95, source, sample_count = (
                 self._calibrator.values(kind)
             )
             expected = base + residual_mean
-            conservative = expected + centered_p95
+            conservative = (
+                expected
+                + centered_p95
+                + self.ood_uncertainty_coefficient * ood_distance
+            )
             if (
                 not math.isfinite(expected)
                 or not math.isfinite(conservative)
@@ -398,7 +437,11 @@ class RidgeDurationPredictor(DurationPredictor):
                 snapshot_hash=snapshot.snapshot_hash,
                 expected_duration=expected,
                 conservative_duration=conservative,
-                in_support=True,
+                in_support=in_support,
+                ood_distance=ood_distance,
+                prediction_mode=(
+                    "INTERPOLATION" if in_support else "CONSTRAINED_EXTRAPOLATION"
+                ),
                 predictor_version=self.predictor_version,
             )
             return PredictionAudit(
@@ -416,6 +459,7 @@ class RidgeDurationPredictor(DurationPredictor):
                     expected_duration=None,
                     conservative_duration=None,
                     in_support=False,
+                    prediction_mode="INVALID",
                     predictor_version=self.predictor_version,
                 ),
                 batch_kind=classify_batch(plan),

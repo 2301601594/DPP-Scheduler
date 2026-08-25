@@ -21,6 +21,7 @@ from dpp_scheduler.settings import (
     DPPSettings,
     FallbackSettings,
     ObligationSettings,
+    PredictorSettings,
     SafeSetSettings,
     SchedulerDiagnosticsSettings,
     SchedulerSettings,
@@ -118,7 +119,7 @@ def load_obligation_settings(runtime: ActiveRuntime) -> ObligationSettings:
 
 
 def load_dpp_settings(runtime: ActiveRuntime) -> DPPSettings:
-    """Load the frozen normalized DPP score and debt-update parameters."""
+    """Load v2 settings, including explicit provisional reference status."""
     with runtime.config_path.open("r", encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
     dpp = config.get("dpp") if isinstance(config, dict) else None
@@ -132,29 +133,19 @@ def load_dpp_settings(runtime: ActiveRuntime) -> DPPSettings:
         )
     except ValueError as error:
         raise ActiveConfigError(str(error)) from error
-    manifest_value = dpp.get("freeze_manifest_path")
-    expected_sha = dpp.get("freeze_manifest_sha256")
-    if not isinstance(manifest_value, str) or not isinstance(expected_sha, str):
-        raise ActiveConfigError("DPP freeze manifest path/hash are required")
-    manifest_path = (REPOSITORY_ROOT / manifest_value).resolve()
-    try:
-        manifest_path.relative_to(REPOSITORY_ROOT.resolve())
-    except ValueError:
-        raise ActiveConfigError("DPP freeze manifest escapes repository") from None
-    if not manifest_path.is_file():
-        raise ActiveConfigError(f"DPP freeze manifest is missing: {manifest_path}")
-    if sha256_file(manifest_path) != expected_sha:
-        raise ActiveConfigError("DPP freeze manifest hash mismatch")
-    with manifest_path.open("r", encoding="utf-8") as stream:
-        manifest = json.load(stream)
-    parameters = manifest.get("parameters") if isinstance(manifest, dict) else None
-    if not isinstance(parameters, dict) or parameters != {
-        "epsilon_tbt": settings.epsilon_tbt,
-        "epsilon_ttft": settings.epsilon_ttft,
-        "weight_v": settings.weight_v,
-    }:
-        raise ActiveConfigError("DPP config and freeze manifest disagree")
     return settings
+
+
+def load_predictor_settings(runtime: ActiveRuntime) -> PredictorSettings:
+    with runtime.config_path.open("r", encoding="utf-8") as stream:
+        config = yaml.safe_load(stream)
+    predictor = config.get("predictor") if isinstance(config, dict) else None
+    if not isinstance(predictor, dict):
+        raise ActiveConfigError("active config predictor section is missing")
+    try:
+        return PredictorSettings.from_mapping(predictor)
+    except ValueError as error:
+        raise ActiveConfigError(str(error)) from error
 
 
 def sha256_file(path: Path) -> str:
@@ -689,7 +680,7 @@ def candidate_runtime_signature(runtime: ActiveRuntime) -> tuple[dict[str, Any],
 
 
 def load_frozen_candidate_settings(runtime: ActiveRuntime) -> FrozenCandidateSettings:
-    """Load Candidate Generator settings only from a matching frozen artifact."""
+    """Load the user-frozen v2 Candidate Generator constants."""
     with runtime.config_path.open("r", encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
     candidate = config.get("candidate_generator") if isinstance(config, dict) else None
@@ -701,91 +692,11 @@ def load_frozen_candidate_settings(runtime: ActiveRuntime) -> FrozenCandidateSet
         raise ActiveConfigError(str(error)) from error
     if not settings.frozen:
         raise ActiveConfigError("Candidate Generator parameters are not frozen")
-    value = candidate.get("freeze_manifest_path")
-    expected_hash = candidate.get("freeze_manifest_sha256")
-    expected_signature = candidate.get("runtime_signature_sha256")
-    freeze_kind = candidate.get("freeze_kind", "measured")
-    if not value or not expected_hash or not expected_signature:
-        raise ActiveConfigError("candidate freeze manifest/hash/signature is incomplete")
-    if freeze_kind not in {"measured", "user_directed_integration"}:
-        raise ActiveConfigError("unknown candidate freeze kind")
-    manifest_path = Path(str(value))
-    if not manifest_path.is_absolute():
-        manifest_path = runtime.workspace / manifest_path
-    manifest_path = manifest_path.resolve()
-    if freeze_kind == "measured":
-        allowed_root = runtime.processed_results.resolve()
-        expected_name = "manifest.json"
-        escape_error = "candidate freeze manifest escapes processed results"
-    else:
-        allowed_root = (runtime.workspace / "configs").resolve()
-        expected_name = "candidate_generator_integration_freeze.json"
-        escape_error = "candidate integration freeze escapes configs"
-        if candidate.get("formal_benchmark_eligible") is not False:
-            raise ActiveConfigError(
-                "integration-frozen Candidate parameters cannot enable formal benchmarks"
-            )
-    if allowed_root not in manifest_path.parents:
-        raise ActiveConfigError(escape_error)
-    if not manifest_path.is_file() or manifest_path.name != expected_name:
-        raise ActiveConfigError(f"candidate freeze manifest is absent: {manifest_path}")
-    if manifest_path.lstat().st_uid != os.getuid():
-        raise ActiveConfigError("candidate freeze manifest is not user-owned")
-    observed_hash = sha256_file(manifest_path)
-    if observed_hash != str(expected_hash):
-        raise ActiveConfigError("candidate freeze manifest hash mismatch")
-    with manifest_path.open("r", encoding="utf-8") as stream:
-        manifest = json.load(stream)
-    expected_identity = (
-        (2, "candidate_parameter_freeze_v2", "frozen")
-        if freeze_kind == "measured"
-        else (
-            1,
-            "candidate_parameter_integration_freeze_v1",
-            "frozen_for_scheduler_integration",
-        )
-    )
-    if (
-        manifest.get("schema_version"),
-        manifest.get("artifact_id"),
-        manifest.get("status"),
-    ) != expected_identity:
-        raise ActiveConfigError("candidate freeze manifest schema/identity mismatch")
     _, observed_signature = candidate_runtime_signature(runtime)
-    if observed_signature != str(expected_signature) or manifest.get(
-        "runtime_signature_sha256"
-    ) != observed_signature:
-        raise ActiveConfigError("candidate runtime signature mismatch")
-    if manifest.get("parameters_frozen") is not True:
-        raise ActiveConfigError("candidate freeze manifest is not frozen")
-    if freeze_kind == "user_directed_integration" and manifest.get(
-        "formal_benchmark_eligible"
-    ) is not False:
-        raise ActiveConfigError(
-            "candidate integration freeze manifest must reject formal benchmarks"
-        )
-    manifest_horizon = manifest.get("critical_horizon_seconds")
-    manifest_knee = manifest.get("prefill_knee_tokens")
-    if isinstance(manifest_horizon, bool) or not isinstance(
-        manifest_horizon, (int, float)
-    ):
-        raise ActiveConfigError("candidate manifest critical horizon is invalid")
-    if isinstance(manifest_knee, bool) or not isinstance(manifest_knee, int):
-        raise ActiveConfigError("candidate manifest Prefill knee is invalid")
-    if float(manifest_horizon) != settings.critical_horizon_seconds:
-        raise ActiveConfigError("critical horizon differs from freeze manifest")
-    if manifest_knee != settings.prefill_knee_tokens:
-        raise ActiveConfigError("Prefill knee differs from freeze manifest")
-    if freeze_kind == "user_directed_integration" and (
-        manifest.get("maximum_seed_candidates") != settings.maximum_seed_candidates
-        or manifest.get("minimum_prefill_chunk_tokens")
-        != settings.minimum_prefill_chunk_tokens
-    ):
-        raise ActiveConfigError("Candidate integration settings differ from manifest")
     return FrozenCandidateSettings(
         settings=settings,
-        manifest_path=manifest_path,
-        manifest_sha256=observed_hash,
+        manifest_path=runtime.config_path,
+        manifest_sha256=runtime.config_sha256,
         runtime_signature_sha256=observed_signature,
     )
 

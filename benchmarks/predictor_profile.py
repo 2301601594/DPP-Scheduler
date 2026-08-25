@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 
-PROFILE_SCHEMA_VERSION = 1
+PROFILE_SCHEMA_VERSION = 2
+SUPPORTED_PROFILE_SCHEMA_VERSIONS = (1, PROFILE_SCHEMA_VERSION)
 CAMPAIGN_ID = "predictor_profile_stock_n500_v1"
 TMUX_SESSION = "predictor-profile-stock-n500-v1"
 FORMAL_REQUEST_COUNT = 500
@@ -108,8 +109,28 @@ def load_scheduled_batches(
                     f"scheduled batch line {line_number} has forbidden fields: "
                     f"{sorted(forbidden)}"
                 )
-            if row.get("schema_version") != PROFILE_SCHEMA_VERSION:
+            schema_version = row.get("schema_version")
+            if schema_version not in SUPPORTED_PROFILE_SCHEMA_VERSIONS:
                 raise ValueError(f"scheduled batch line {line_number} schema mismatch")
+            if schema_version == PROFILE_SCHEMA_VERSION:
+                if row.get("profile_kind") != "stock_natural_workload":
+                    raise ValueError(
+                        f"scheduled batch line {line_number} profile kind mismatch"
+                    )
+                for count_name in (
+                    "snapshot_prefill_count",
+                    "snapshot_decode_count",
+                ):
+                    count = row.get(count_name)
+                    if (
+                        isinstance(count, bool)
+                        or not isinstance(count, int)
+                        or count < 0
+                    ):
+                        raise ValueError(
+                            f"scheduled batch line {line_number} has invalid "
+                            f"{count_name}"
+                        )
             if row.get("run_id") != expected_run_id:
                 raise ValueError(f"scheduled batch line {line_number} run_id mismatch")
             index = int(row.get("iteration_index", -1))
@@ -201,7 +222,7 @@ def merge_iteration_profiles(
             stream.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
 
     return {
-        "schema_version": PROFILE_SCHEMA_VERSION,
+        "schema_version": max(int(row["schema_version"]) for row in batches),
         "valid": True,
         "run_id": expected_run_id,
         "iteration_count": len(batches),
