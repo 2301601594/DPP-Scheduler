@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import time
 from abc import ABC, abstractmethod
@@ -52,6 +53,7 @@ PREDICTOR_ARTIFACT_PATH_ENV = "DPP_PREDICTOR_ARTIFACT_PATH"
 PREDICTOR_EVAL_RECIPE_SEED_ENV = "DPP_PREDICTOR_EVAL_RECIPE_SEED"
 PREDICTOR_EVAL_RECIPE_MODE_ENV = "DPP_PREDICTOR_EVAL_RECIPE_MODE"
 DPP_DIAGNOSTIC_ITERATION_LOG_ENV = "DPP_DIAGNOSTIC_ITERATION_LOG"
+DPP_DIAGNOSTIC_AGGREGATE_PATH_ENV = "DPP_DIAGNOSTIC_AGGREGATE_PATH"
 DPP_EXECUTION_SCOPE_ENV = "DPP_EXECUTION_SCOPE"
 
 VLLM_OFFICIAL_ITERATION_TIMING = "vllm_official_iteration_details"
@@ -1087,6 +1089,10 @@ def get_modular_scheduler_class() -> type:
             self._dpp_obligation_updates: list[LedgerUpdate] = []
             self._dpp_control_pending_updates: list[LedgerUpdate] = []
             self._dpp_external_event_sequence = 0
+            self._dpp_aggregate_path = os.environ.get(
+                DPP_DIAGNOSTIC_AGGREGATE_PATH_ENV
+            )
+            self._dpp_aggregate = self._dpp_new_aggregate()
 
         def add_request(self, request: Any) -> None:
             is_new = request.request_id not in self.requests
@@ -1105,6 +1111,194 @@ def get_modular_scheduler_class() -> type:
                 return None
             name = getattr(value, "name", None)
             return str(name if name is not None else value).lower()
+
+        @staticmethod
+        def _dpp_new_aggregate() -> dict[str, Any]:
+            buckets = ("ZERO", "P25", "P50", "P75", "MAX", "FINISH", "OTHER")
+            return {
+                "selection_histogram": {b: 0 for b in buckets},
+                "tie_selected_histogram": {b: 0 for b in buckets},
+                "prefill_backlog_frame_count": 0,
+                "tie_frame_count": 0,
+                "mixed_iteration_count": 0,
+                "decode_only_iteration_count": 0,
+                "prefill_only_iteration_count": 0,
+                "selected_prefill_progress": [],
+                "selected_prefill_tokens": [],
+                "actual_duration_seconds": {
+                    "mixed": [],
+                    "decode_only": [],
+                    "prefill_only": [],
+                },
+                "max_selected_frames": {},
+            }
+
+        @staticmethod
+        def _dpp_aggregate_bucket(template_id: str) -> str:
+            parts = template_id.split(":")
+            if len(parts) >= 2 and parts[1] in (
+                "ZERO",
+                "P25",
+                "P50",
+                "P75",
+                "MAX",
+                "FINISH",
+            ):
+                return parts[1]
+            return "OTHER"
+
+        @staticmethod
+        def _dpp_percentile(values: list[float], p: float) -> float | None:
+            if not values:
+                return None
+            ordered = sorted(values)
+            return ordered[min(len(ordered) - 1, int(p * len(ordered)))]
+
+        def _dpp_stats(self, values: list[float]) -> dict[str, Any]:
+            return {
+                "count": len(values),
+                "mean": sum(values) / len(values) if values else None,
+                "p50": self._dpp_percentile(values, 0.50),
+                "p95": self._dpp_percentile(values, 0.95),
+                "max": max(values) if values else None,
+            }
+
+        def _dpp_duration_stats(
+            self,
+            values: list[float],
+            thresholds_ms: tuple[float, ...] = (250.0, 300.0, 500.0),
+        ) -> dict[str, Any]:
+            stats = self._dpp_stats(values)
+            stats.update(
+                {
+                    "p90": self._dpp_percentile(values, 0.90),
+                    "p99": self._dpp_percentile(values, 0.99),
+                }
+            )
+            stats.update(
+                {
+                    f"gt{int(thr)}ms": sum(
+                        1 for value in values if value * 1000.0 > thr
+                    )
+                    for thr in thresholds_ms
+                }
+            )
+            return stats
+
+        def _dpp_write_aggregate(self) -> None:
+            path = self._dpp_aggregate_path
+            if not path:
+                return
+            agg = self._dpp_aggregate
+            max_frames = agg["max_selected_frames"]
+            max_durations = [
+                float(entry["actual_duration_seconds"])
+                for entry in max_frames.values()
+                if entry.get("actual_duration_seconds") is not None
+            ]
+            for field in (
+                "sum_tbt_debt",
+                "max_tbt_debt",
+                "sum_ttft_debt",
+                "max_ttft_debt",
+            ):
+                max_frames_by_id = max_frames
+                values = [float(e[field]) for e in max_frames_by_id.values()]
+                agg.setdefault("max_audit", {})[field + "_mean"] = (
+                    sum(values) / len(values) if values else None
+                )
+                agg["max_audit"][field + "_max"] = max(values) if values else None
+            payload = {
+                "schema_version": 1,
+                "kind": "dpp_diagnostic_aggregate",
+                "selection_histogram": agg["selection_histogram"],
+                "tie_selected_histogram": agg["tie_selected_histogram"],
+                "prefill_backlog_frame_count": agg["prefill_backlog_frame_count"],
+                "tie_frame_count": agg["tie_frame_count"],
+                "mixed_iteration_count": agg["mixed_iteration_count"],
+                "decode_only_iteration_count": agg["decode_only_iteration_count"],
+                "prefill_only_iteration_count": agg["prefill_only_iteration_count"],
+                "selected_prefill_progress": self._dpp_stats(
+                    agg["selected_prefill_progress"]
+                ),
+                "selected_prefill_tokens": self._dpp_stats(
+                    agg["selected_prefill_tokens"]
+                ),
+                "actual_duration_seconds": {
+                    "mixed": self._dpp_duration_stats(
+                        agg["actual_duration_seconds"]["mixed"]
+                    ),
+                    "decode_only": self._dpp_duration_stats(
+                        agg["actual_duration_seconds"]["decode_only"]
+                    ),
+                    "prefill_only": self._dpp_duration_stats(
+                        agg["actual_duration_seconds"]["prefill_only"]
+                    ),
+                },
+                "max_audit": {
+                    "count": len(max_frames),
+                    "duration": self._dpp_duration_stats(max_durations),
+                    **agg.get("max_audit", {}),
+                },
+            }
+            with open(path, "w", encoding="utf-8") as stream:
+                json.dump(payload, stream, ensure_ascii=False, sort_keys=True, indent=1)
+            logger.info(
+                "ModularDPPScheduler diagnostic aggregate=%s", path
+            )
+
+        def _dpp_accumulate_diagnostic_aggregate(
+            self,
+            *,
+            snapshot: StateSnapshot,
+            control: Any,
+            plan: BatchPlan,
+            selected_bucket: str,
+            selected_prefill_progress: float | None,
+            frame_tie: dict[str, Any],
+        ) -> None:
+            """Bounded in-memory aggregate for run-end diagnostic artifacts."""
+            agg = self._dpp_aggregate
+            agg["selection_histogram"][selected_bucket] += 1
+            prefill_count = len(snapshot.waiting_prefill_requests)
+            decode_count = len(snapshot.active_decode_requests)
+            if prefill_count > 0:
+                agg["prefill_backlog_frame_count"] += 1
+            if prefill_count > 0 and decode_count > 0:
+                agg["mixed_iteration_count"] += 1
+            elif prefill_count > 0:
+                agg["prefill_only_iteration_count"] += 1
+            elif decode_count > 0:
+                agg["decode_only_iteration_count"] += 1
+            if frame_tie["winner_tie"]:
+                agg["tie_frame_count"] += 1
+                agg["tie_selected_histogram"][selected_bucket] += 1
+            if selected_prefill_progress is not None:
+                agg["selected_prefill_progress"].append(selected_prefill_progress)
+                agg["selected_prefill_tokens"].append(
+                    int(plan.total_prefill_tokens)
+                )
+            if selected_bucket == "MAX":
+                agg["max_selected_frames"][snapshot.frame_id] = {
+                    "frame_id": snapshot.frame_id,
+                    "current_prefill_count": prefill_count,
+                    "current_decode_count": decode_count,
+                    "sum_ttft_debt": sum(
+                        value for _, value in control.ttft_service_debts
+                    ),
+                    "max_ttft_debt": max(
+                        (value for _, value in control.ttft_service_debts),
+                        default=0.0,
+                    ),
+                    "sum_tbt_debt": sum(
+                        value for _, value in control.tbt_service_debts
+                    ),
+                    "max_tbt_debt": max(
+                        (value for _, value in control.tbt_service_debts),
+                        default=0.0,
+                    ),
+                    "actual_duration_seconds": None,
+                }
 
         def _dpp_record_obligation_update(self, update: LedgerUpdate) -> None:
             self._dpp_obligation_updates.append(update)
@@ -1217,6 +1411,7 @@ def get_modular_scheduler_class() -> type:
                     candidate_scores,
                     key=lambda score: (
                         -score.score,
+                        -score.prefill_progress,
                         score.effective_duration,
                         score.prefill_budget,
                         score.plan_id,
@@ -1231,6 +1426,9 @@ def get_modular_scheduler_class() -> type:
                     if decision.reason == "DPP_V2_MAX_DRIFT_RATE"
                     and decision.selected_plan is not None
                     else None
+                )
+                winner_score = max(
+                    (score.score for score in candidate_scores), default=None
                 )
                 candidate_score_records = []
                 for score in candidate_scores:
@@ -1272,12 +1470,23 @@ def get_modular_scheduler_class() -> type:
                             "decode_reference_concurrency": (
                                 score.decode_reference_concurrency
                             ),
+                            "prefill_progress_utility": score.prefill_progress,
+                            "score_tied_with_winner": (
+                                winner_score is not None
+                                and math.isclose(
+                                    score.score,
+                                    winner_score,
+                                    rel_tol=self._dpp_selector.settings.score_rel_tol,
+                                    abs_tol=self._dpp_selector.settings.score_abs_tol,
+                                )
+                            ),
                             "selection_rank": rank_by_plan_id[score.plan_id],
                             "selected": (
                                 score.plan_id == selected_scored_plan_id
                             ),
                             "tie_break_key": {
                                 "score_desc": score.score,
+                                "prefill_progress_desc": score.prefill_progress,
                                 "effective_duration_asc": score.effective_duration,
                                 "prefill_budget_asc": score.prefill_budget,
                                 "plan_id_asc": score.plan_id,
@@ -1285,6 +1494,52 @@ def get_modular_scheduler_class() -> type:
                         }
                     )
 
+            selected_bucket = self._dpp_aggregate_bucket(plan.template_id)
+            selected_prefill_progress: float | None = None
+            frame_tie: dict[str, Any]
+            if candidate_scores and decision.reason == "DPP_V2_MAX_DRIFT_RATE":
+                winner_score = max(score.score for score in candidate_scores)
+                tie_set = [
+                    score
+                    for score in candidate_scores
+                    if math.isclose(
+                        score.score,
+                        winner_score,
+                        rel_tol=self._dpp_selector.settings.score_rel_tol,
+                        abs_tol=self._dpp_selector.settings.score_abs_tol,
+                    )
+                ]
+                old_t0_winner = min(
+                    tie_set,
+                    key=lambda score: (
+                        score.effective_duration,
+                        score.prefill_budget,
+                        score.plan_id,
+                    ),
+                )
+                selected_score = next(
+                    (
+                        score
+                        for score in candidate_scores
+                        if score.plan_id == plan.plan_id
+                    ),
+                    None,
+                )
+                if selected_score is not None:
+                    selected_prefill_progress = selected_score.prefill_progress
+                frame_tie = {
+                    "winner_tie_size": len(tie_set),
+                    "winner_tie": len(tie_set) >= 2,
+                    "tie_break_changed_winner": (
+                        old_t0_winner.plan_id != plan.plan_id
+                    ),
+                }
+            else:
+                frame_tie = {
+                    "winner_tie_size": None,
+                    "winner_tie": False,
+                    "tie_break_changed_winner": False,
+                }
             record = self._dpp_progress_watchdog.record_iteration(
                 workload_nonempty=bool(
                     snapshot.active_decode_requests
@@ -1340,9 +1595,15 @@ def get_modular_scheduler_class() -> type:
                     "rejected_candidates_scoring_status": "not_scored",
                     "candidate_scores": candidate_score_records,
                     "selection_tie_break_order": (
-                        "score_desc_with_isclose,effective_duration_asc,"
-                        "prefill_budget_asc,plan_id_asc"
+                        "score_desc_with_isclose,prefill_progress_desc,"
+                        "effective_duration_asc,prefill_budget_asc,plan_id_asc"
                     ),
+                    "winner_tie_size": frame_tie["winner_tie_size"],
+                    "winner_tie": frame_tie["winner_tie"],
+                    "tie_break_changed_winner": frame_tie["tie_break_changed_winner"],
+                    "selected_template": plan.template_id,
+                    "selected_prefill_tokens": plan.total_prefill_tokens,
+                    "selected_prefill_progress": selected_prefill_progress,
                     "fallback_reason": (
                         fallback_result.reason if fallback_result else None
                     ),
@@ -1353,6 +1614,14 @@ def get_modular_scheduler_class() -> type:
                 logger.error("ModularDPPScheduler zero-progress dump=%s", record)
             elif self._dpp_diagnostic_iteration_log:
                 logger.info("ModularDPPScheduler diagnostic=%s", record)
+            self._dpp_accumulate_diagnostic_aggregate(
+                snapshot=snapshot,
+                control=control,
+                plan=plan,
+                selected_bucket=selected_bucket,
+                selected_prefill_progress=selected_prefill_progress,
+                frame_tie=frame_tie,
+            )
 
         def schedule(self, throttle_prefills: bool = False) -> Any:
             del throttle_prefills
@@ -1373,15 +1642,12 @@ def get_modular_scheduler_class() -> type:
             safe_result = self._dpp_safe_set.filter(snapshot, plans, predictions)
             if safe_result.snapshot_hash != snapshot.snapshot_hash:
                 raise RuntimeError("Safe-Set snapshot_hash mismatch")
-            candidate_scores = ()
-            if self._dpp_diagnostic_iteration_log:
-                decision, candidate_scores = self._dpp_selector.select_with_audit(
-                    snapshot, control, safe_result.safe_candidates
-                )
-            else:
-                decision = self._dpp_selector.select(
-                    snapshot, control, safe_result.safe_candidates
-                )
+            # Candidate scores are always computed: the bounded diagnostic
+            # aggregate needs them even when per-frame logging is disabled,
+            # and scoring is pure arithmetic over at most six candidates.
+            decision, candidate_scores = self._dpp_selector.select_with_audit(
+                snapshot, control, safe_result.safe_candidates
+            )
             fallback_result = None
             if decision.selected_plan is None:
                 fallback_result = resolve_fallback(
@@ -1559,6 +1825,25 @@ def get_modular_scheduler_class() -> type:
             actual_duration = pending["actual_duration_seconds"]
             if actual_duration is None:
                 raise RuntimeError("modular Predictor iteration timing is missing")
+            executed = pending["plan"]
+            if executed.total_prefill_tokens > 0 and executed.total_decode_tokens > 0:
+                self._dpp_aggregate["actual_duration_seconds"]["mixed"].append(
+                    actual_duration
+                )
+            elif executed.total_prefill_tokens > 0:
+                self._dpp_aggregate["actual_duration_seconds"]["prefill_only"].append(
+                    actual_duration
+                )
+            elif executed.total_decode_tokens > 0:
+                self._dpp_aggregate["actual_duration_seconds"]["decode_only"].append(
+                    actual_duration
+                )
+            if self._dpp_aggregate_bucket(executed.template_id) == "MAX":
+                max_entry = self._dpp_aggregate["max_selected_frames"].get(
+                    pending["snapshot"].frame_id
+                )
+                if max_entry is not None:
+                    max_entry["actual_duration_seconds"] = actual_duration
             next_control = self._dpp_state_store.update_from_actual(
                 previous_snapshot=pending["snapshot"],
                 actual_duration_seconds=actual_duration,
@@ -1600,6 +1885,15 @@ def get_modular_scheduler_class() -> type:
                 base_duration_seconds=pending["base_duration_seconds"],
             )
             return result
+
+        def shutdown(self) -> None:
+            try:
+                self._dpp_write_aggregate()
+            except Exception:
+                logger.exception(
+                    "ModularDPPScheduler diagnostic aggregate write failed"
+                )
+            super().shutdown()
 
     ModularDPPScheduler.__module__ = "dpp_scheduler.vllm_scheduler"
     return ModularDPPScheduler

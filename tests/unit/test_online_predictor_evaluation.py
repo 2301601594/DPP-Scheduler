@@ -110,6 +110,25 @@ class OnlinePredictorEvaluationTests(unittest.TestCase):
             callbacks[0]["timing_source"], VLLM_ALIGNED_ITERATION_TIMING
         )
 
+    def test_diagnostic_aggregate_bucket_maps_candidate_and_zero_plan_templates(
+        self,
+    ) -> None:
+        from dpp_scheduler.vllm_adapter import get_modular_scheduler_class
+
+        scheduler_cls = get_modular_scheduler_class()
+        cases = {
+            "ALL_DECODE:P25:requested_106": "P25",
+            "ALL_DECODE:MAX:requested_321": "MAX",
+            "ALL_DECODE:FINISH:requested_197": "FINISH",
+            "ZERO:IDLE_EMPTY_QUEUE": "OTHER",
+            "ZERO:NO_SAFE_DECISION": "OTHER",
+            "FALLBACK_DECODE_ONLY": "OTHER",
+        }
+        for template_id, expected in cases.items():
+            self.assertEqual(
+                scheduler_cls._dpp_aggregate_bucket(template_id), expected
+            )
+
     def test_timing_incompatibility_suppresses_effectiveness_conclusion(self) -> None:
         result = _effectiveness_result(
             {

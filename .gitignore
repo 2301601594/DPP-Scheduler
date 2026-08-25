@@ -7,6 +7,8 @@ data/raw/
 traces/**/*.jsonl
 results/raw/
 results/processed/qwen3_14b_dgx_spark/predictor_iteration_dataset_v1/
+results/processed/qwen3_14b_dgx_spark/dpp_v2_phase_a_tie_analysis_v1/phase_a_report.json
+results/processed/qwen3_14b_dgx_spark/dpp_v2_phase_a1_tiebreak_analysis_v1/phase_a1_frame_changes.jsonl
 results/dataset/
 artifacts/qwen3_14b_dgx_spark/*_stage/
 

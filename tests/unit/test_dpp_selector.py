@@ -20,7 +20,7 @@ from dpp_scheduler.contracts import (
     SafeCandidate,
     StateSnapshot,
 )
-from dpp_scheduler.dpp_selector import DPPSelector
+from dpp_scheduler.dpp_selector import DPPScore, DPPSelector
 from dpp_scheduler.settings import DPPSettings
 from dpp_scheduler.state_store import DuplicateLedgerEvent, InMemoryStateStore
 from dpp_scheduler.vllm_adapter import get_modular_scheduler_class
@@ -181,6 +181,164 @@ class DPPSelectorV2Tests(unittest.TestCase):
             DPPSelector(settings()).select(
                 state, ControlState(state.snapshot_hash), (bad,)
             )
+
+
+def multi_candidate(
+    state: StateSnapshot,
+    plan_id: str,
+    prefill_items: tuple[tuple[str, int], ...],
+    *,
+    duration: float = 0.1,
+) -> SafeCandidate:
+    decode_items = tuple(item.request_id for item in state.active_decode_requests)
+    plan = BatchPlan(
+        plan_id=plan_id,
+        snapshot_hash=state.snapshot_hash,
+        template_id="test",
+        prefill_items=prefill_items,
+        decode_items=decode_items,
+        total_prefill_tokens=sum(tokens for _, tokens in prefill_items),
+        total_decode_tokens=len(decode_items),
+        total_sequences=project_sequence_count(state, prefill_items),
+        projected_kv_blocks=project_kv_blocks(state, prefill_items, decode_items),
+        mandatory_request_ids=(),
+    )
+    prediction = Prediction(
+        plan_id=plan_id,
+        snapshot_hash=state.snapshot_hash,
+        expected_duration=duration,
+        conservative_duration=duration + 0.2,
+        in_support=True,
+        ood_distance=0.0,
+        prediction_mode="INTERPOLATION",
+        predictor_version="test",
+    )
+    return SafeCandidate(
+        snapshot_hash=state.snapshot_hash,
+        plan=plan,
+        prediction=prediction,
+        predicted_violation_count=0,
+        predicted_total_lateness_seconds=0.0,
+        conservative_deadline_margin_seconds=None,
+    )
+
+
+def manual_score(
+    plan_id: str,
+    *,
+    score: float,
+    prefill_progress: float,
+    duration: float = 0.1,
+    prefill_budget: int = 0,
+) -> DPPScore:
+    return DPPScore(
+        plan_id=plan_id,
+        prefill_drift=0.0,
+        decode_drift=0.0,
+        total_drift=-score * duration,
+        effective_duration=duration,
+        score=score,
+        prefill_budget=prefill_budget,
+        current_prefill_count=0,
+        current_decode_count=0,
+        prefill_reference_concurrency=1,
+        decode_reference_concurrency=1,
+        prefill_progress=prefill_progress,
+    )
+
+
+class ProgressTieBreakTests(unittest.TestCase):
+    """T1 progress-first tie-break semantics (plan Phase B section 11)."""
+
+    def test_case1_identical_score_larger_progress_wins(self) -> None:
+        state = snapshot(
+            prefill=(PrefillRequest("p", 0.0, 100, 0, ttft_slo_seconds=2.0),)
+        )
+        control = ControlState(state.snapshot_hash, (("p", 0.0),), ())
+        p25 = candidate(state, "p25", prefill_tokens=50, duration=0.1)
+        max_plan = candidate(state, "max", prefill_tokens=100, duration=0.1)
+        decision = DPPSelector(settings()).select(state, control, (p25, max_plan))
+        self.assertEqual(decision.selected_plan, max_plan.plan)
+
+    def test_case2_isclose_range_score_uses_progress(self) -> None:
+        state = snapshot()
+        selector = DPPSelector(settings())
+        cand_a = candidate(state, "a")
+        cand_b = candidate(state, "b")
+        scored = (
+            (cand_a, manual_score("a", score=0.0, prefill_progress=0.20)),
+            (cand_b, manual_score("b", score=5e-13, prefill_progress=0.50)),
+        )
+        self.assertTrue(math.isclose(0.0, 5e-13, rel_tol=1e-9, abs_tol=1e-12))
+        decision = selector._decision_from_scored(state, scored)
+        self.assertEqual(decision.selected_plan, cand_b.plan)
+
+    def test_case3_clear_score_winner_not_overridden(self) -> None:
+        state = snapshot()
+        selector = DPPSelector(settings())
+        cand_a = candidate(state, "a")
+        cand_b = candidate(state, "b")
+        scored = (
+            (cand_a, manual_score("a", score=0.02, prefill_progress=0.10)),
+            (cand_b, manual_score("b", score=0.01, prefill_progress=0.90)),
+        )
+        self.assertFalse(math.isclose(0.02, 0.01, rel_tol=1e-9, abs_tol=1e-12))
+        decision = selector._decision_from_scored(state, scored)
+        self.assertEqual(decision.selected_plan, cand_a.plan)
+
+    def test_case4_equal_score_and_progress_uses_duration(self) -> None:
+        state = snapshot(
+            prefill=(PrefillRequest("p", 0.0, 100, 0, ttft_slo_seconds=2.0),)
+        )
+        control = ControlState(state.snapshot_hash, (("p", 0.0),), ())
+        slow = candidate(state, "slow", prefill_tokens=50, duration=0.22)
+        fast = candidate(state, "fast", prefill_tokens=50, duration=0.18)
+        decision = DPPSelector(settings()).select(state, control, (slow, fast))
+        self.assertEqual(decision.selected_plan, fast.plan)
+
+    def test_case5_budget_then_plan_id_remain_final_fallbacks(self) -> None:
+        state = snapshot(
+            prefill=(
+                PrefillRequest("r1", 0.0, 100, 0, ttft_slo_seconds=2.0),
+                PrefillRequest("r2", 0.0, 200, 0, ttft_slo_seconds=2.0),
+            )
+        )
+        control = ControlState(
+            state.snapshot_hash, (("r1", 0.0), ("r2", 0.0)), ()
+        )
+        smaller_budget = multi_candidate(state, "plan-a", (("r1", 50),))
+        larger_budget = multi_candidate(state, "plan-b", (("r2", 100),))
+        decision = DPPSelector(settings()).select(
+            state, control, (larger_budget, smaller_budget)
+        )
+        self.assertEqual(decision.selected_plan, smaller_budget.plan)
+
+        same_budget_a = multi_candidate(state, "plan-a", (("r1", 50),))
+        same_budget_b = multi_candidate(state, "plan-b", (("r1", 50),))
+        decision = DPPSelector(settings()).select(
+            state, control, (same_budget_b, same_budget_a)
+        )
+        self.assertEqual(decision.selected_plan, same_budget_a.plan)
+
+    def test_case6_decode_only_keeps_previous_behavior(self) -> None:
+        state = snapshot(decode=(DecodeRequest("d", 0.0, 100, tbt_slo_seconds=0.25),))
+        control = ControlState(state.snapshot_hash, (), (("d", 0.0),))
+        slow = candidate(state, "slow", duration=0.2)
+        fast = candidate(state, "fast", duration=0.1)
+        decision = DPPSelector(settings()).select(state, control, (slow, fast))
+        self.assertEqual(decision.selected_plan, fast.plan)
+
+    def test_case7_clear_winner_survives_large_progress_gap(self) -> None:
+        state = snapshot()
+        selector = DPPSelector(settings())
+        p25 = candidate(state, "p25")
+        max_plan = candidate(state, "max")
+        scored = (
+            (p25, manual_score("p25", score=0.01, prefill_progress=0.2)),
+            (max_plan, manual_score("max", score=-0.05, prefill_progress=1.0)),
+        )
+        decision = selector._decision_from_scored(state, scored)
+        self.assertEqual(decision.selected_plan, p25.plan)
 
 
 class RequestDebtStateTests(unittest.TestCase):

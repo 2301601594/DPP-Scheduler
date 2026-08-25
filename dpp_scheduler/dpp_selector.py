@@ -29,6 +29,10 @@ class DPPScore:
     current_decode_count: int
     prefill_reference_concurrency: int
     decode_reference_concurrency: int
+    # Normalized Prefill progress U_P = sum_i c_i^P(a) / p_i over the
+    # plan's actual per-request Prefill service. Used ONLY for isclose
+    # score tie-breaking; never part of the main DPP score.
+    prefill_progress: float
 
 
 def _finite_positive(label: str, value: float | None, maximum: float) -> float:
@@ -112,6 +116,11 @@ class DPPSelector:
             )
             prefill_changes.append(predicted * predicted - current * current)
 
+        prefill_progress = math.fsum(
+            prefill_service.get(request_id, 0)
+            / prefill_by_id[request_id].token_count
+            for request_id in sorted(ttft)
+        )
         decode_changes: list[float] = []
         for request_id in sorted(tbt):
             request = decode_by_id[request_id]
@@ -154,6 +163,7 @@ class DPPSelector:
                 self.settings.prefill_reference_concurrency
             ),
             decode_reference_concurrency=self.settings.decode_reference_concurrency,
+            prefill_progress=prefill_progress,
         )
 
     def _score_candidates(
@@ -192,10 +202,12 @@ class DPPSelector:
                 selected_candidate, selected_score = candidate, score
                 continue
             if tied and (
+                -score.prefill_progress,
                 score.effective_duration,
                 score.prefill_budget,
                 score.plan_id,
             ) < (
+                -selected_score.prefill_progress,
                 selected_score.effective_duration,
                 selected_score.prefill_budget,
                 selected_score.plan_id,

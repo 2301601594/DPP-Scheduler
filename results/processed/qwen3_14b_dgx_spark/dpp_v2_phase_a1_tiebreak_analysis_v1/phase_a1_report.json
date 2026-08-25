@@ -1,0 +1,319 @@
+{
+ "schema_version": 1,
+ "analysis": "dpp_v2_phase_a1_tiebreak_counterfactual",
+ "data_source": {
+  "startup_log": "results/raw/qwen3_14b_dgx_spark/dpp_v2_slo_diagnostic_qps0p2_seed1001_timingfix_v1/runs/dpp_v2_diag_n100_qps0p2_seed1001_timingfix_01/startup.log",
+  "trace": "results/raw/qwen3_14b_dgx_spark/scheduler_comparison_dev_n300_seed1001_v1/traces_attempt_01/qps_0.2_seed_1001.jsonl",
+  "frames_parsed": 4628,
+  "frames_with_candidates": 4627
+ },
+ "t0_replay_mismatch": 0,
+ "clear_winner_frames_changed_by_t1_t2": 0,
+ "prefill_backlog_frames": 668,
+ "tie_frames": 259,
+ "unmapped_request_ids": [],
+ "selection_histograms": {
+  "T0": {
+   "P25": 342,
+   "P50": 87,
+   "P75": 64,
+   "MAX": 71,
+   "ZERO": 99,
+   "FINISH": 5
+  },
+  "T1": {
+   "P25": 177,
+   "MAX": 295,
+   "P50": 56,
+   "P75": 36,
+   "ZERO": 99,
+   "FINISH": 5
+  },
+  "T2": {
+   "P25": 177,
+   "MAX": 295,
+   "P50": 56,
+   "P75": 36,
+   "ZERO": 99,
+   "FINISH": 5
+  }
+ },
+ "selection_histograms_tie_frames_only": {
+  "T0": {
+   "P25": 165,
+   "P75": 47,
+   "P50": 47
+  },
+  "T1": {
+   "MAX": 224,
+   "P50": 16,
+   "P75": 19
+  },
+  "T2": {
+   "MAX": 224,
+   "P50": 16,
+   "P75": 19
+  }
+ },
+ "selection_ratios_all_backlog_frames": {
+  "T0_max_count": 71,
+  "T0_max_ratio": 0.1062874251497006,
+  "T0_p75max_count": 135,
+  "T0_p75max_ratio": 0.20209580838323354,
+  "T0_p25p50_count": 429,
+  "T0_p25p50_ratio": 0.6422155688622755,
+  "T1_max_count": 295,
+  "T1_max_ratio": 0.4416167664670659,
+  "T1_p75max_count": 331,
+  "T1_p75max_ratio": 0.49550898203592814,
+  "T1_p25p50_count": 233,
+  "T1_p25p50_ratio": 0.34880239520958084,
+  "T2_max_count": 295,
+  "T2_max_ratio": 0.4416167664670659,
+  "T2_p75max_count": 331,
+  "T2_p75max_ratio": 0.49550898203592814,
+  "T2_p25p50_count": 233,
+  "T2_p25p50_ratio": 0.34880239520958084
+ },
+ "selection_ratios_tie_frames": {
+  "T0_max_count": 0,
+  "T0_max_ratio": 0.0,
+  "T0_p75max_count": 47,
+  "T0_p75max_ratio": 0.18146718146718147,
+  "T0_p25p50_count": 212,
+  "T0_p25p50_ratio": 0.8185328185328186,
+  "T1_max_count": 224,
+  "T1_max_ratio": 0.8648648648648649,
+  "T1_p75max_count": 243,
+  "T1_p75max_ratio": 0.9382239382239382,
+  "T1_p25p50_count": 16,
+  "T1_p25p50_ratio": 0.06177606177606178,
+  "T2_max_count": 224,
+  "T2_max_ratio": 0.8648648648648649,
+  "T2_p75max_count": 243,
+  "T2_p75max_ratio": 0.9382239382239382,
+  "T2_p25p50_count": 16,
+  "T2_p25p50_ratio": 0.06177606177606178
+ },
+ "changed_selection": {
+  "T1_vs_T0": 259,
+  "T2_vs_T0": 259,
+  "T1_vs_T2": 0,
+  "T1_vs_T0_ratio": 0.38772455089820357,
+  "T2_vs_T0_ratio": 0.38772455089820357
+ },
+ "prefill_tokens": {
+  "T0": {
+   "count": 668,
+   "mean": 109.42065868263474,
+   "p50": 47,
+   "p90": 324,
+   "p95": 504,
+   "p99": 510,
+   "max": 1519
+  },
+  "T1": {
+   "count": 668,
+   "mean": 146.49401197604791,
+   "p50": 99,
+   "p90": 349,
+   "p95": 504,
+   "p99": 510,
+   "max": 1519
+  },
+  "T2": {
+   "count": 668,
+   "mean": 146.49401197604791,
+   "p50": 99,
+   "p90": 349,
+   "p95": 504,
+   "p99": 510,
+   "max": 1519
+  }
+ },
+ "prefill_progress": {
+  "T0": {
+   "count": 668,
+   "mean": 0.1497005988023952,
+   "p50": 0.12947658402203857,
+   "p90": 0.24958123953098826,
+   "p95": 0.3005464480874317,
+   "p99": 0.9584903810540535,
+   "max": 1.251848201084278
+  },
+  "T1": {
+   "count": 668,
+   "mean": 0.25461113096192456,
+   "p50": 0.21076923076923076,
+   "p90": 0.5659574468085107,
+   "p95": 0.7508090614886731,
+   "p99": 0.9584903810540535,
+   "max": 1.251848201084278
+  },
+  "T2": {
+   "count": 668,
+   "mean": 0.25461113096192456,
+   "p50": 0.21076923076923076,
+   "p90": 0.5659574468085107,
+   "p95": 0.7508090614886731,
+   "p99": 0.9584903810540535,
+   "max": 1.251848201084278
+  }
+ },
+ "prefill_progress_rate": {
+  "T0": {
+   "count": 668,
+   "mean": 0.7760132585013455,
+   "p50": 0.6755668743917504,
+   "p90": 1.4081717000999416,
+   "p95": 1.9560376128656523,
+   "p99": 3.8784366835210826,
+   "max": 5.974993122849445
+  },
+  "T1": {
+   "count": 668,
+   "mean": 1.2920247039201944,
+   "p50": 0.9191099493084807,
+   "p90": 3.0392667067758556,
+   "p95": 3.6414715822896646,
+   "p99": 5.772023326051047,
+   "max": 10.426502152314582
+  },
+  "T2": {
+   "count": 668,
+   "mean": 1.2920247039201944,
+   "p50": 0.9191099493084807,
+   "p90": 3.0392667067758556,
+   "p95": 3.6414715822896646,
+   "p99": 5.772023326051047,
+   "max": 10.426502152314582
+  }
+ },
+ "effective_duration": {
+  "T0": {
+   "count": 668,
+   "mean": 0.1979540646958948,
+   "p50": 0.18411412715344505,
+   "p90": 0.28505162152482344,
+   "p95": 0.31611116428557345,
+   "p99": 0.3416026803160118,
+   "max": 0.6399918860712928
+  },
+  "T1": {
+   "count": 668,
+   "mean": 0.20791666098652734,
+   "p50": 0.20471422962028607,
+   "p90": 0.28505162152482344,
+   "p95": 0.31611116428557345,
+   "p99": 0.3416026803160118,
+   "max": 0.6399918860712928
+  },
+  "T2": {
+   "count": 668,
+   "mean": 0.20791666098652734,
+   "p50": 0.20471422962028607,
+   "p90": 0.28505162152482344,
+   "p95": 0.31611116428557345,
+   "p99": 0.3416026803160118,
+   "max": 0.6399918860712928
+  }
+ },
+ "mixed_effective_duration": {
+  "T0": {
+   "count": 660,
+   "mean": 0.19886531829801588,
+   "p50": 0.1846233140338988,
+   "p90": 0.2864035277333046,
+   "p95": 0.31643082018092494,
+   "p99": 0.3416026803160118,
+   "max": 0.6399918860712928
+  },
+  "T1": {
+   "count": 660,
+   "mean": 0.2087470732945023,
+   "p50": 0.20573205159624566,
+   "p90": 0.2864035277333046,
+   "p95": 0.31643082018092494,
+   "p99": 0.3416026803160118,
+   "max": 0.6399918860712928
+  },
+  "T2": {
+   "count": 660,
+   "mean": 0.2087470732945023,
+   "p50": 0.20573205159624566,
+   "p90": 0.2864035277333046,
+   "p95": 0.31643082018092494,
+   "p99": 0.3416026803160118,
+   "max": 0.6399918860712928
+  }
+ },
+ "duration_threshold_counts": {
+  "T0": {
+   "250.0": 129,
+   "300.0": 51,
+   "500.0": 1
+  },
+  "T1": {
+   "250.0": 129,
+   "300.0": 51,
+   "500.0": 1
+  },
+  "T2": {
+   "250.0": 129,
+   "300.0": 51,
+   "500.0": 1
+  }
+ },
+ "envelope_250ms_tie_frames": {
+  "T0_within": 259,
+  "T1_within": 259,
+  "T2_within": 259,
+  "cross": {
+   "T0<=250_T1>250": 0,
+   "T0<=250_T2>250": 0,
+   "T1<=250_T2>250": 0
+  }
+ },
+ "max_transition_analysis": {
+  "t1_max_frame_count": 295,
+  "t2_selection_on_t1_max_frames": {
+   "MAX": 295
+  },
+  "up": {
+   "t1_max_mean": 0.3352636079690399,
+   "t2_mean": 0.3352636079690399,
+   "t2_t1_ratio": 1.0
+  },
+  "duration": {
+   "t1_max_mean": 0.18839012407017036,
+   "t2_mean": 0.18839012407017036,
+   "t2_t1_ratio": 1.0
+  }
+ },
+ "finish_analysis": {
+  "finish_available_frames": 62,
+  "finish_selected": {
+   "T0": 5,
+   "T1": 5,
+   "T2": 5
+  }
+ },
+ "synthetic_clear_winner_check": {
+  "note": "Candidate A score=0.02 G_P=0.5 vs B score=0.01 G_P=10.0; scores not isclose, A must win regardless of G_P.",
+  "winner": "A",
+  "pass": true
+ },
+ "recommendation": {
+  "t2_passes_all_criteria": false,
+  "failed_criteria": [
+   "2: T2 does not reduce MAX ratio vs T1 (T1 == T2, 44.2% both)",
+   "4: T2 does not reduce >250/>300/>500ms counts vs T1 (identical)"
+  ],
+  "t1_equiv_t2": true,
+  "t1_max_heavy_mitigation": "all 259 tie frames have exactly zero TTFT/TBT debt; T0/T1/T2 winners are all <= 250 ms; global duration tails and threshold counts are unchanged",
+  "suggested_options": [
+   "A (preferred): implement T1 progress-first tie-break per plan section 13, observe MAX monopoly and TBT on n=20/n=50",
+   "B: keep T0, enter Phase B V_P*U_P discussion; note Phase B degenerates to V_P*G_P ordering on zero-drift tie frames"
+  ]
+ }
+}
