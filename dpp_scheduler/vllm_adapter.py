@@ -72,13 +72,19 @@ def _build_iteration_timing_bridge(original: Callable[..., Any]) -> Callable[...
             finally:
                 aligned_duration = time.monotonic() - aligned_started
 
-        if (
-            scheduler_output is None
-            or int(scheduler_output.total_num_scheduled_tokens) == 0
-        ):
+        if scheduler_output is None:
             return
         callback = getattr(core.scheduler, "_dpp_record_iteration_duration", None)
         if callback is None:
+            return
+        zero_token_iteration = int(scheduler_output.total_num_scheduled_tokens) == 0
+        if zero_token_iteration and not bool(
+            getattr(
+                core.scheduler,
+                "_dpp_capture_zero_token_iteration_timing",
+                False,
+            )
+        ):
             return
         if details is not None:
             duration_seconds = float(details.elapsed_ms) / 1000.0
@@ -997,6 +1003,12 @@ def get_modular_scheduler_class() -> type:
     class ModularDPPScheduler(Scheduler):
         """Exact-plan development scheduler, disabled until inputs freeze."""
 
+        # vLLM can emit one zero-token cleanup frame after a request reaches its
+        # client length guard. Modular DPP binds feedback for that frame, so it
+        # must receive the aligned context-manager duration even though vLLM's
+        # official iteration-details logger intentionally omits zero-token work.
+        _dpp_capture_zero_token_iteration_timing = True
+
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             install_vllm_iteration_timing_bridge()
             runtime = load_active_runtime(REPOSITORY_ROOT / ACTIVE_CONFIG_RELATIVE)
@@ -1132,7 +1144,6 @@ def get_modular_scheduler_class() -> type:
             duration_seconds: float,
             timing_source: str,
         ) -> None:
-            del iteration_index, timing_source
             pending = self._dpp_predictor_pending
             if pending is None:
                 raise RuntimeError("modular Predictor timing has no selected plan")
@@ -1141,6 +1152,8 @@ def get_modular_scheduler_class() -> type:
             if pending["actual_duration_seconds"] is not None:
                 raise RuntimeError("duplicate modular Predictor iteration timing")
             pending["actual_duration_seconds"] = duration_seconds
+            pending["actual_iteration_index"] = iteration_index
+            pending["actual_timing_source"] = timing_source
 
         @staticmethod
         def _dpp_zero_plan(
@@ -1174,6 +1187,8 @@ def get_modular_scheduler_class() -> type:
                 "base_duration_seconds": base_duration_seconds,
                 "scheduler_output": scheduler_output,
                 "actual_duration_seconds": None,
+                "actual_iteration_index": None,
+                "actual_timing_source": None,
                 "skip_predictor_update": skip_predictor_update,
             }
 
@@ -1554,10 +1569,20 @@ def get_modular_scheduler_class() -> type:
             )
             if self._dpp_diagnostic_iteration_log:
                 logger.info(
-                    "ModularDPPScheduler feedback frame=%s actual_prefill=%s "
-                    "ledger_events=%s next_control=(%s,%.6f,%.6f)",
+                    "ModularDPPScheduler feedback frame=%s scheduled_tokens=%s "
+                    "actual_duration_seconds=%.9f timing_source=%s "
+                    "iteration_index=%s actual_prefill=%s actual_decode=%s "
+                    "initialized_tbt=%s terminal=%s ledger_events=%s "
+                    "next_control=(%s,%.6f,%.6f)",
                     pending["snapshot"].frame_id,
+                    int(scheduler_output.total_num_scheduled_tokens),
+                    actual_duration,
+                    pending["actual_timing_source"],
+                    pending["actual_iteration_index"],
                     sum(tokens for _, tokens in actual_prefill_items),
+                    len(actual_decode_items),
+                    len(initialized_tbt),
+                    len(terminal_request_ids),
                     len(self._dpp_control_pending_updates),
                     len(next_control.ttft_service_debts),
                     len(next_control.tbt_service_debts),

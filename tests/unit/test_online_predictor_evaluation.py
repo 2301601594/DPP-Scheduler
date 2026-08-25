@@ -71,6 +71,45 @@ class OnlinePredictorEvaluationTests(unittest.TestCase):
             callbacks[0]["timing_source"], VLLM_ALIGNED_ITERATION_TIMING
         )
 
+    def test_iteration_bridge_skips_zero_token_timing_without_opt_in(self) -> None:
+        callbacks = []
+
+        @contextmanager
+        def aligned_capture(_core, _scheduler_output):
+            yield None
+
+        scheduler = SimpleNamespace(
+            _dpp_record_iteration_duration=lambda **kwargs: callbacks.append(kwargs)
+        )
+        core = SimpleNamespace(scheduler=scheduler)
+        output = SimpleNamespace(total_num_scheduled_tokens=0)
+        with _build_iteration_timing_bridge(aligned_capture)(core, output):
+            pass
+        self.assertEqual(callbacks, [])
+
+    def test_iteration_bridge_captures_opted_in_zero_token_cleanup(self) -> None:
+        callbacks = []
+
+        @contextmanager
+        def aligned_capture(_core, _scheduler_output):
+            yield None
+
+        scheduler = SimpleNamespace(
+            _dpp_capture_zero_token_iteration_timing=True,
+            _dpp_record_iteration_duration=lambda **kwargs: callbacks.append(kwargs),
+        )
+        core = SimpleNamespace(scheduler=scheduler)
+        output = SimpleNamespace(total_num_scheduled_tokens=0)
+        with _build_iteration_timing_bridge(aligned_capture)(core, output):
+            pass
+        self.assertEqual(len(callbacks), 1)
+        self.assertIs(callbacks[0]["scheduler_output"], output)
+        self.assertIsNone(callbacks[0]["iteration_index"])
+        self.assertGreater(callbacks[0]["duration_seconds"], 0.0)
+        self.assertEqual(
+            callbacks[0]["timing_source"], VLLM_ALIGNED_ITERATION_TIMING
+        )
+
     def test_timing_incompatibility_suppresses_effectiveness_conclusion(self) -> None:
         result = _effectiveness_result(
             {
