@@ -22,6 +22,7 @@ from benchmarks.predictor_profile import (
 from benchmarks.qwen3_runtime import (
     ActiveConfigError,
     build_targeted_profile_server_command,
+    candidate_runtime_signature,
     load_active_runtime,
     require_frozen_for_execution,
     resolve_under,
@@ -232,6 +233,9 @@ def main() -> int:
         "recipes": [recipe.as_dict() for recipe in recipes],
     }
     command = build_targeted_profile_server_command(runtime, port=args.port)
+    runtime_consistency, runtime_consistency_sha256 = candidate_runtime_signature(
+        runtime
+    )
     preview = _resolved_preview(
         runtime,
         trace_path,
@@ -239,6 +243,11 @@ def main() -> int:
         output_dir,
         command,
         rows,
+        scheduler_policy="targeted-profile",
+        source_request_count=len(source_rows),
+        diagnostic_iteration_log=False,
+        campaign_id=args.campaign_id,
+        comparison_scope="targeted_predictor_profile",
     )
     preview.update(
         {
@@ -253,6 +262,8 @@ def main() -> int:
             "implementation_sha256": _implementation_hashes(runtime.workspace),
             "arrival_mode": "controlled_burst",
             "dispatch_interval_seconds": args.dispatch_interval,
+            "runtime_consistency": runtime_consistency,
+            "runtime_consistency_sha256": runtime_consistency_sha256,
             "run_timeout_seconds": args.run_timeout,
             "request_timeout_seconds": args.request_timeout,
         }
@@ -369,8 +380,18 @@ def main() -> int:
     finally:
         _stop_server(process)
         manifest["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
-        if startup_log.exists():
-            manifest["startup_log_sha256"] = sha256_file(startup_log)
+        for name in (
+            "startup.log",
+            "scheduled_batches.jsonl",
+            "iteration_profile.jsonl",
+            "per_request.jsonl",
+            "summary.json",
+            "profile_validation.json",
+            "target_validation.json",
+        ):
+            path = output_dir / name
+            if path.exists():
+                manifest.setdefault("file_sha256", {})[name] = sha256_file(path)
         _atomic_json(manifest_path, manifest)
 
     print(json.dumps(manifest["target_validation"], ensure_ascii=False, indent=2))

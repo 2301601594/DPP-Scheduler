@@ -28,7 +28,10 @@ from benchmarks.run_predictor_profile_campaign import (
     _save_state,
     worker,
 )
-from dpp_scheduler.vllm_adapter import build_stock_profile_record
+from dpp_scheduler.vllm_adapter import (
+    build_stock_profile_record,
+    capture_stock_profile_state,
+)
 
 
 class _CachedRequests:
@@ -116,6 +119,27 @@ class PredictorProfileTests(unittest.TestCase):
             iteration_index=0,
             captured_state={
                 "snapshot_hash": "a" * 64,
+                "snapshot_concurrency_semantics": "dpp_stage_queues_v2",
+                "snapshot_prefill_count": 2,
+                "snapshot_decode_count": 1,
+                "snapshot_running_count": 2,
+                "snapshot_waiting_count": 1,
+                "snapshot_running_prefill_count": 1,
+                "snapshot_running_decode_count": 1,
+                "snapshot_waiting_prefill_count": 1,
+                "snapshot_waiting_decode_count": 0,
+                "snapshot_preempted_count": 0,
+                "snapshot_other_waiting_count": 0,
+                "snapshot_requests_with_preemptions_count": 0,
+                "snapshot_total_preemptions": 0,
+                "snapshot_running_request_ids": ("decode", "prefill-old"),
+                "snapshot_waiting_request_ids": ("prefill-new",),
+                "snapshot_running_prefill_request_ids": ("prefill-old",),
+                "snapshot_running_decode_request_ids": ("decode",),
+                "snapshot_waiting_prefill_request_ids": ("prefill-new",),
+                "snapshot_waiting_decode_request_ids": (),
+                "snapshot_preempted_request_ids": (),
+                "snapshot_other_waiting_request_ids": (),
                 "current_context_tokens": {
                     "prefill-new": 0,
                     "prefill-old": 100,
@@ -134,6 +158,60 @@ class PredictorProfileTests(unittest.TestCase):
         self.assertNotIn("remaining_output_tokens", rendered)
         self.assertNotIn("expected_output_tokens", rendered)
         self.assertNotIn("max_tokens", rendered)
+
+    def test_stock_concurrency_matches_dpp_stage_queues(self) -> None:
+        def request(
+            request_id: str,
+            *,
+            status: str,
+            computed: int,
+            prompt: int = 100,
+            current: int | None = None,
+            preemptions: int = 0,
+        ) -> SimpleNamespace:
+            return SimpleNamespace(
+                request_id=request_id,
+                status=status,
+                num_computed_tokens=computed,
+                num_prompt_tokens=prompt,
+                num_tokens=prompt if current is None else current,
+                num_preemptions=preemptions,
+            )
+
+        running_prefill = request("rp", status="RUNNING", computed=50)
+        running_decode = request("rd", status="RUNNING", computed=100, current=101)
+        waiting_prefill = request("wp", status="WAITING", computed=0)
+        waiting_decode = request("wd", status="WAITING", computed=100, current=101)
+        preempted_decode = request(
+            "pd", status="PREEMPTED", computed=0, current=101, preemptions=1
+        )
+        scheduler = SimpleNamespace(
+            requests={
+                item.request_id: item
+                for item in (
+                    running_prefill,
+                    running_decode,
+                    waiting_prefill,
+                    waiting_decode,
+                    preempted_decode,
+                )
+            },
+            running=[running_prefill, running_decode],
+            waiting=[waiting_prefill, waiting_decode, preempted_decode],
+            kv_cache_manager=SimpleNamespace(
+                block_pool=SimpleNamespace(get_num_free_blocks=lambda: 10)
+            ),
+            max_num_scheduled_tokens=2048,
+            max_num_running_reqs=64,
+        )
+        captured = capture_stock_profile_state(scheduler)
+        self.assertEqual(captured["snapshot_prefill_count"], 2)
+        self.assertEqual(captured["snapshot_decode_count"], 1)
+        self.assertEqual(captured["snapshot_waiting_decode_count"], 1)
+        self.assertEqual(captured["snapshot_preempted_count"], 1)
+        self.assertNotIn(
+            "pd", captured["snapshot_running_decode_request_ids"]
+        )
 
     def test_iteration_batches_and_durations_merge_one_to_one(self) -> None:
         batch = {

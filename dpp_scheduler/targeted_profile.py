@@ -92,6 +92,7 @@ class TargetRecipe:
     prefill_distribution: str
     decode_context: str
     repeat_index: int = 0
+    strict_shape: bool = False
 
     def as_dict(self) -> dict[str, int | str]:
         return {
@@ -104,6 +105,7 @@ class TargetRecipe:
             "prefill_distribution": self.prefill_distribution,
             "decode_context": self.decode_context,
             "repeat_index": self.repeat_index,
+            "strict_shape": self.strict_shape,
         }
 
 
@@ -182,6 +184,63 @@ def build_target_recipes(seed: int, *, mode: str = "formal") -> tuple[TargetReci
                                 )
                             )
                             ordinal += 1
+        random.Random(seed).shuffle(recipes)
+        return tuple(recipes)
+    if mode == "ood":
+        recipes = []
+        for repeat in range(32):
+            recipes.extend(
+                (
+                    TargetRecipe(
+                        f"ood-p-{repeat:03d}",
+                        "prefill_only",
+                        1,
+                        1,
+                        0,
+                        "fresh" if repeat % 2 == 0 else "partial",
+                        "balanced",
+                        "none",
+                        repeat,
+                        True,
+                    ),
+                    TargetRecipe(
+                        f"ood-d-short-{repeat:03d}",
+                        "decode_only",
+                        0,
+                        0,
+                        1,
+                        "none",
+                        "balanced",
+                        "short",
+                        repeat,
+                        True,
+                    ),
+                    TargetRecipe(
+                        f"ood-d-wide-{repeat:03d}",
+                        "decode_only",
+                        0,
+                        0,
+                        64,
+                        "none",
+                        "balanced",
+                        "long",
+                        repeat,
+                        True,
+                    ),
+                    TargetRecipe(
+                        f"ood-m-{repeat:03d}",
+                        "mixed",
+                        1,
+                        1,
+                        16,
+                        "any",
+                        "balanced",
+                        "mixed",
+                        repeat,
+                        True,
+                    ),
+                )
+            )
         random.Random(seed).shuffle(recipes)
         return tuple(recipes)
     if mode != "formal":
@@ -405,43 +464,55 @@ def build_target_plan(
     snapshot: StateSnapshot, recipe: TargetRecipe
 ) -> tuple[BatchPlan, dict[str, int | str]] | None:
     """Construct one feasible target plan, adapting only to current availability."""
-    if recipe.batch_kind not in {"prefill_only", "mixed"}:
+    if recipe.batch_kind not in {"prefill_only", "decode_only", "mixed"}:
         raise ValueError(f"invalid target batch kind: {recipe.batch_kind}")
 
     decode_limit = 0
     decode_items: tuple[str, ...] = ()
-    if recipe.batch_kind == "mixed":
+    if recipe.batch_kind in {"decode_only", "mixed"}:
+        decode_budget = snapshot.token_budget - (1 if recipe.batch_kind == "mixed" else 0)
         decode_limit = min(
             recipe.decode_request_cap,
             len(snapshot.active_decode_requests),
-            max(0, snapshot.token_budget - 1),
+            max(0, decode_budget),
         )
+        if recipe.strict_shape and decode_limit != recipe.decode_request_cap:
+            return None
         if decode_limit <= 0:
             return None
         decode_items = _decode_order(snapshot, recipe)[:decode_limit]
 
-    prefill_budget = min(
-        recipe.prefill_token_cap,
-        snapshot.token_budget - len(decode_items),
-    )
-    prefill_requests = _select_prefills(
-        snapshot, recipe, token_cap=prefill_budget
-    )
-    if not prefill_requests:
-        return None
-    prefill_items = _allocate_prefill_tokens(
-        prefill_requests,
-        prefill_budget,
-        recipe.prefill_distribution,
-    )
-    if not prefill_items:
-        return None
+    prefill_items: tuple[tuple[str, int], ...] = ()
+    if recipe.batch_kind != "decode_only":
+        prefill_budget = min(
+            recipe.prefill_token_cap,
+            snapshot.token_budget - len(decode_items),
+        )
+        prefill_requests = _select_prefills(
+            snapshot, recipe, token_cap=prefill_budget
+        )
+        if recipe.strict_shape and len(prefill_requests) < recipe.prefill_request_cap:
+            return None
+        if not prefill_requests:
+            return None
+        prefill_items = _allocate_prefill_tokens(
+            prefill_requests,
+            prefill_budget,
+            recipe.prefill_distribution,
+        )
+        if not prefill_items:
+            return None
 
     fitted = _fit_kv_capacity(snapshot, prefill_items, decode_items)
     if fitted is None:
         return None
     prefill_items, decode_items, projected_kv = fitted
-    if not prefill_items or (recipe.batch_kind == "mixed" and not decode_items):
+    if (
+        recipe.batch_kind != "decode_only"
+        and not prefill_items
+        or recipe.batch_kind in {"decode_only", "mixed"}
+        and not decode_items
+    ):
         return None
 
     total_prefill = sum(tokens for _, tokens in prefill_items)

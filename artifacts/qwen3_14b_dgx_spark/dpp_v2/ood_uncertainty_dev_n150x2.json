@@ -1,0 +1,124 @@
+{
+  "artifact_id": "qwen3_14b_dgx_spark_ood_uncertainty_v1",
+  "calibration_coverage": {
+    "by_batch_kind": {
+      "decode_only": 1.0,
+      "mixed": 0.96875,
+      "prefill_only": 1.0
+    },
+    "overall": 0.9868421052631579,
+    "sample_count": 76,
+    "sample_count_by_batch_kind": {
+      "decode_only": 12,
+      "mixed": 32,
+      "prefill_only": 32
+    }
+  },
+  "coverage_target": 0.95,
+  "created_at_utc": "2026-08-25T08:16:04.900539+00:00",
+  "formal_benchmark_eligible": false,
+  "independence": {
+    "recipe_seeds_disjoint": true,
+    "run_ids_disjoint": true,
+    "source_seeds_disjoint": true
+  },
+  "kappa_by_batch_kind": {
+    "decode_only": 0.0,
+    "mixed": 0.0,
+    "prefill_only": 0.0
+  },
+  "kappa_ood": 0.0,
+  "kappa_required_distribution": {
+    "decode_only": {
+      "higher_q95": 0.0,
+      "max": 0.0,
+      "sample_count": 12
+    },
+    "mixed": {
+      "higher_q95": 0.0,
+      "max": 3.6269288768048353,
+      "sample_count": 32
+    },
+    "prefill_only": {
+      "higher_q95": 0.0,
+      "max": 0.0,
+      "sample_count": 32
+    }
+  },
+  "kappa_required_formula": "max(0,(actual_duration-expected_duration-centered_p95)/d_ood)",
+  "predictor_artifact_manifest_sha256": "04b804baa856983e353b4bef877b0730fba7c08609d20724fa3f46f451999930",
+  "predictor_version": "qwen3-14b-ridge-three-scenario-online-v1",
+  "quantile_method": "higher",
+  "runtime_consistency": {
+    "chunked_prefill": true,
+    "dtype": "bfloat16",
+    "duration_timing_boundary": "vllm_official_after_execute_model_submission_through_model_result_and_sampling",
+    "engine": "vllm_v1",
+    "gpu_memory_utilization": 0.84,
+    "kv_block_size": 16,
+    "kv_cache_dtype": "bfloat16",
+    "max_model_len": 40960,
+    "model_name": "Qwen3-14B",
+    "model_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+    "model_snapshot_sha256": "f48a9e0e58bd23f01869ef5706f5dfe9c6a0f0b21b20cdc54e1745af15c30841",
+    "prefix_caching": false,
+    "sequence_budget": 64,
+    "speculative_decoding": false,
+    "token_budget": 2048,
+    "tokenizer_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+    "usable_kv_blocks": 30149,
+    "vllm_commit": "83ad767eed3be3ee7f2df63be693bfaca5c7c922"
+  },
+  "runtime_consistency_sha256": "826d7ab93de1cd5353647e711c70ac11891affbf26aada65ab2bea7cdf63c251",
+  "schema_version": 1,
+  "scope": "development_nonformal",
+  "sources": {
+    "calibration": [
+      {
+        "campaign_id": "predictor_ood_calibration_v2",
+        "predictor_artifact_manifest_sha256": "04b804baa856983e353b4bef877b0730fba7c08609d20724fa3f46f451999930",
+        "profile_path": "results/raw/qwen3_14b_dgx_spark/predictor_ood_calibration_v2/runs/ood_cal_dev_n150_source1001_recipe7001/predictor_evaluation.jsonl",
+        "profile_sha256": "eb55fa6c037be81331c08488628d10d1b22f5ca466c2d293e7d1c94bab4cd6bb",
+        "recipe_mode": "ood",
+        "recipe_seed": 7001,
+        "run_id": "ood_cal_dev_n150_source1001_recipe7001",
+        "run_manifest_path": "results/raw/qwen3_14b_dgx_spark/predictor_ood_calibration_v2/runs/ood_cal_dev_n150_source1001_recipe7001/run_manifest.json",
+        "run_manifest_sha256": "f244d9a99fa18ca54cd0b5747daf3fc026008aa7e70d3047cba2d69dc122d2b6",
+        "runtime_consistency_sha256": "826d7ab93de1cd5353647e711c70ac11891affbf26aada65ab2bea7cdf63c251",
+        "sample_count": 76,
+        "source_seed": 1001
+      }
+    ],
+    "validation": [
+      {
+        "campaign_id": "predictor_ood_validation_v2",
+        "predictor_artifact_manifest_sha256": "04b804baa856983e353b4bef877b0730fba7c08609d20724fa3f46f451999930",
+        "profile_path": "results/raw/qwen3_14b_dgx_spark/predictor_ood_validation_v2/runs/ood_val_dev_n150_source1002_recipe8001/predictor_evaluation.jsonl",
+        "profile_sha256": "a0dd05019cfd1e38df3f24786ca0b3637591ace40c60d44d8d6331a91200aec5",
+        "recipe_mode": "ood",
+        "recipe_seed": 8001,
+        "run_id": "ood_val_dev_n150_source1002_recipe8001",
+        "run_manifest_path": "results/raw/qwen3_14b_dgx_spark/predictor_ood_validation_v2/runs/ood_val_dev_n150_source1002_recipe8001/run_manifest.json",
+        "run_manifest_sha256": "6308e8fe24bcf348954800f29e9b99a859c85a50c03902ebfbf5026c2c70fa29",
+        "runtime_consistency_sha256": "826d7ab93de1cd5353647e711c70ac11891affbf26aada65ab2bea7cdf63c251",
+        "sample_count": 76,
+        "source_seed": 1002
+      }
+    ]
+  },
+  "status": "frozen_development",
+  "validation_coverage": {
+    "by_batch_kind": {
+      "decode_only": 1.0,
+      "mixed": 1.0,
+      "prefill_only": 1.0
+    },
+    "overall": 1.0,
+    "sample_count": 76,
+    "sample_count_by_batch_kind": {
+      "decode_only": 12,
+      "mixed": 32,
+      "prefill_only": 32
+    }
+  }
+}

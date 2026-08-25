@@ -52,10 +52,12 @@ PREDICTOR_ARTIFACT_PATH_ENV = "DPP_PREDICTOR_ARTIFACT_PATH"
 PREDICTOR_EVAL_RECIPE_SEED_ENV = "DPP_PREDICTOR_EVAL_RECIPE_SEED"
 PREDICTOR_EVAL_RECIPE_MODE_ENV = "DPP_PREDICTOR_EVAL_RECIPE_MODE"
 DPP_DIAGNOSTIC_ITERATION_LOG_ENV = "DPP_DIAGNOSTIC_ITERATION_LOG"
+DPP_EXECUTION_SCOPE_ENV = "DPP_EXECUTION_SCOPE"
 
 VLLM_OFFICIAL_ITERATION_TIMING = "vllm_official_iteration_details"
 VLLM_ALIGNED_ITERATION_TIMING = "vllm_aligned_monotonic"
 STOCK_PROFILE_SCHEMA_VERSION = 2
+STOCK_CONCURRENCY_SEMANTICS = "dpp_stage_queues_v2"
 
 
 def _build_iteration_timing_bridge(original: Callable[..., Any]) -> Callable[..., Any]:
@@ -127,32 +129,89 @@ def _canonical_sha256(payload: Any) -> str:
 
 def capture_stock_profile_state(scheduler: Any) -> dict[str, Any]:
     """Capture only current, length-blind state before stock scheduling."""
+    running = tuple(scheduler.running)
+    waiting = tuple(scheduler.waiting)
+    running_ids = {request.request_id for request in running}
+    waiting_ids = {request.request_id for request in waiting}
+    if running_ids.intersection(waiting_ids):
+        raise RuntimeError("Stock request appears in both running and waiting queues")
+
     request_states = []
     current_context_tokens: dict[str, int] = {}
-    snapshot_prefill_count = 0
-    snapshot_decode_count = 0
+    running_prefill_ids: list[str] = []
+    running_decode_ids: list[str] = []
+    waiting_prefill_ids: list[str] = []
+    waiting_decode_ids: list[str] = []
+    preempted_ids: list[str] = []
+    other_waiting_ids: list[str] = []
+    requests_with_preemptions: list[str] = []
+    total_preemptions = 0
     for request_id in sorted(scheduler.requests):
         request = scheduler.requests[request_id]
         context_tokens = int(request.num_computed_tokens)
         prompt_tokens = int(request.num_prompt_tokens)
+        status = str(request.status)
+        num_preemptions = int(getattr(request, "num_preemptions", 0))
+        current_tokens = int(getattr(request, "num_tokens", prompt_tokens))
         current_context_tokens[request_id] = context_tokens
-        if context_tokens < prompt_tokens:
-            snapshot_prefill_count += 1
+        if num_preemptions > 0:
+            requests_with_preemptions.append(request_id)
+            total_preemptions += num_preemptions
+        if request_id in running_ids:
+            if status != "RUNNING":
+                raise RuntimeError("Stock running queue contains a non-RUNNING request")
+            if context_tokens < prompt_tokens:
+                running_prefill_ids.append(request_id)
+            else:
+                running_decode_ids.append(request_id)
+        elif request_id in waiting_ids:
+            decode_phase = current_tokens > prompt_tokens or context_tokens >= prompt_tokens
+            if status == "PREEMPTED":
+                preempted_ids.append(request_id)
+            elif status == "WAITING" and not decode_phase and context_tokens == 0:
+                waiting_prefill_ids.append(request_id)
+            elif decode_phase:
+                waiting_decode_ids.append(request_id)
+            else:
+                other_waiting_ids.append(request_id)
         else:
-            snapshot_decode_count += 1
+            other_waiting_ids.append(request_id)
         request_states.append(
             {
                 "request_id": request_id,
-                "status": str(request.status),
+                "status": status,
+                "queue": (
+                    "running"
+                    if request_id in running_ids
+                    else "waiting"
+                    if request_id in waiting_ids
+                    else "other"
+                ),
                 "current_context_tokens": context_tokens,
                 "prompt_tokens": prompt_tokens,
+                "current_tokens": current_tokens,
+                "num_preemptions": num_preemptions,
             }
         )
 
+    for values in (
+        running_prefill_ids,
+        running_decode_ids,
+        waiting_prefill_ids,
+        waiting_decode_ids,
+        preempted_ids,
+        other_waiting_ids,
+        requests_with_preemptions,
+    ):
+        values.sort()
+
+    snapshot_prefill_count = len(running_prefill_ids) + len(waiting_prefill_ids)
+    snapshot_decode_count = len(running_decode_ids)
+
     snapshot_payload = {
         "requests": request_states,
-        "running_request_ids": [request.request_id for request in scheduler.running],
-        "waiting_request_ids": [request.request_id for request in scheduler.waiting],
+        "running_request_ids": sorted(running_ids),
+        "waiting_request_ids": sorted(waiting_ids),
         "free_kv_blocks": int(
             scheduler.kv_cache_manager.block_pool.get_num_free_blocks()
         ),
@@ -162,8 +221,27 @@ def capture_stock_profile_state(scheduler: Any) -> dict[str, Any]:
     return {
         "snapshot_hash": _canonical_sha256(snapshot_payload),
         "current_context_tokens": current_context_tokens,
+        "snapshot_concurrency_semantics": STOCK_CONCURRENCY_SEMANTICS,
         "snapshot_prefill_count": snapshot_prefill_count,
         "snapshot_decode_count": snapshot_decode_count,
+        "snapshot_running_count": len(running_ids),
+        "snapshot_waiting_count": len(waiting_ids),
+        "snapshot_running_prefill_count": len(running_prefill_ids),
+        "snapshot_running_decode_count": len(running_decode_ids),
+        "snapshot_waiting_prefill_count": len(waiting_prefill_ids),
+        "snapshot_waiting_decode_count": len(waiting_decode_ids),
+        "snapshot_preempted_count": len(preempted_ids),
+        "snapshot_other_waiting_count": len(other_waiting_ids),
+        "snapshot_requests_with_preemptions_count": len(requests_with_preemptions),
+        "snapshot_total_preemptions": total_preemptions,
+        "snapshot_running_request_ids": tuple(sorted(running_ids)),
+        "snapshot_waiting_request_ids": tuple(sorted(waiting_ids)),
+        "snapshot_running_prefill_request_ids": tuple(running_prefill_ids),
+        "snapshot_running_decode_request_ids": tuple(running_decode_ids),
+        "snapshot_waiting_prefill_request_ids": tuple(waiting_prefill_ids),
+        "snapshot_waiting_decode_request_ids": tuple(waiting_decode_ids),
+        "snapshot_preempted_request_ids": tuple(preempted_ids),
+        "snapshot_other_waiting_request_ids": tuple(other_waiting_ids),
     }
 
 
@@ -213,10 +291,61 @@ def build_stock_profile_record(
         "iteration_index": iteration_index,
         "plan_id": f"stock-{plan_hash[:24]}",
         "snapshot_hash": captured_state["snapshot_hash"],
+        "snapshot_concurrency_semantics": captured_state[
+            "snapshot_concurrency_semantics"
+        ],
         "snapshot_prefill_count": int(
             captured_state["snapshot_prefill_count"]
         ),
         "snapshot_decode_count": int(captured_state["snapshot_decode_count"]),
+        "snapshot_running_count": int(captured_state["snapshot_running_count"]),
+        "snapshot_waiting_count": int(captured_state["snapshot_waiting_count"]),
+        "snapshot_running_prefill_count": int(
+            captured_state["snapshot_running_prefill_count"]
+        ),
+        "snapshot_running_decode_count": int(
+            captured_state["snapshot_running_decode_count"]
+        ),
+        "snapshot_waiting_prefill_count": int(
+            captured_state["snapshot_waiting_prefill_count"]
+        ),
+        "snapshot_waiting_decode_count": int(
+            captured_state["snapshot_waiting_decode_count"]
+        ),
+        "snapshot_preempted_count": int(captured_state["snapshot_preempted_count"]),
+        "snapshot_other_waiting_count": int(
+            captured_state["snapshot_other_waiting_count"]
+        ),
+        "snapshot_requests_with_preemptions_count": int(
+            captured_state["snapshot_requests_with_preemptions_count"]
+        ),
+        "snapshot_total_preemptions": int(
+            captured_state["snapshot_total_preemptions"]
+        ),
+        "snapshot_running_request_ids": list(
+            captured_state["snapshot_running_request_ids"]
+        ),
+        "snapshot_waiting_request_ids": list(
+            captured_state["snapshot_waiting_request_ids"]
+        ),
+        "snapshot_running_prefill_request_ids": list(
+            captured_state["snapshot_running_prefill_request_ids"]
+        ),
+        "snapshot_running_decode_request_ids": list(
+            captured_state["snapshot_running_decode_request_ids"]
+        ),
+        "snapshot_waiting_prefill_request_ids": list(
+            captured_state["snapshot_waiting_prefill_request_ids"]
+        ),
+        "snapshot_waiting_decode_request_ids": list(
+            captured_state["snapshot_waiting_decode_request_ids"]
+        ),
+        "snapshot_preempted_request_ids": list(
+            captured_state["snapshot_preempted_request_ids"]
+        ),
+        "snapshot_other_waiting_request_ids": list(
+            captured_state["snapshot_other_waiting_request_ids"]
+        ),
         "selected_requests": selected_requests,
     }
 
@@ -857,6 +986,7 @@ def get_modular_scheduler_class() -> type:
         load_frozen_safe_set_settings,
         load_obligation_settings,
         load_scheduler_diagnostics_settings,
+        validate_frozen_v2_artifacts,
     )
 
     # vLLM installs handlers on the ``vllm`` logger with propagation disabled.
@@ -878,6 +1008,7 @@ def get_modular_scheduler_class() -> type:
             predictor_settings = load_predictor_settings(runtime)
             diagnostics_settings = load_scheduler_diagnostics_settings(runtime)
             predictor = load_frozen_predictor(runtime)
+            execution_scope = os.environ.get(DPP_EXECUTION_SCOPE_ENV, "")
             if not dpp_settings.live_v2_ready:
                 raise RuntimeError(
                     "live v2 is disabled until Stock reference concurrency is frozen"
@@ -886,6 +1017,13 @@ def get_modular_scheduler_class() -> type:
                 raise RuntimeError(
                     "live v2 is disabled until held-out OOD calibration freezes kappa"
                 )
+            validate_frozen_v2_artifacts(
+                runtime,
+                dpp_settings=dpp_settings,
+                predictor_settings=predictor_settings,
+                predictor=predictor,
+                execution_scope=execution_scope,
+            )
             super().__init__(*args, **kwargs)
             self._dpp_obligation_ledger = ObligationLedger(
                 ttft_slo_seconds=obligation_settings.ttft_slo_seconds,
@@ -1666,8 +1804,13 @@ def get_predictor_evaluation_scheduler_class() -> type:
                 "sample_role": pending["sample_role"],
                 "batch_kind": audit.batch_kind,
                 "in_support": audit.prediction.in_support,
+                "prediction_mode": audit.prediction.prediction_mode,
+                "ood_distance": audit.prediction.ood_distance,
                 "base_duration_seconds": audit.base_duration_seconds,
                 "expected_duration_seconds": audit.prediction.expected_duration,
+                "centered_residual_p95_seconds": (
+                    audit.centered_residual_p95_seconds
+                ),
                 "conservative_duration_seconds": (
                     audit.prediction.conservative_duration
                 ),

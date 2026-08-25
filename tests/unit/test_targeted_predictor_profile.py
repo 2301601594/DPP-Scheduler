@@ -160,6 +160,44 @@ class TargetRecipeTests(unittest.TestCase):
         self.assertEqual(plan.total_decode_tokens, 2)
         self.assertEqual(realized["partial_prefill_requests"], 1)
 
+    def test_ood_recipes_cover_all_batch_kinds_deterministically(self) -> None:
+        recipes = build_target_recipes(7001, mode="ood")
+        self.assertEqual(len(recipes), 128)
+        self.assertEqual(
+            {recipe.batch_kind for recipe in recipes},
+            {"prefill_only", "decode_only", "mixed"},
+        )
+        self.assertTrue(all(recipe.strict_shape for recipe in recipes))
+        self.assertEqual(recipes, build_target_recipes(7001, mode="ood"))
+        self.assertNotEqual(recipes, build_target_recipes(8001, mode="ood"))
+
+    def test_decode_only_target_uses_only_running_decode(self) -> None:
+        snapshot = make_snapshot(
+            prefill=(PrefillRequest("p0", 0.0, 128, 0),),
+            decode=tuple(
+                DecodeRequest(f"d{i}", float(i), 100 + i, ordinal=i)
+                for i in range(3)
+            ),
+        )
+        recipe = TargetRecipe(
+            "d-test",
+            "decode_only",
+            0,
+            0,
+            2,
+            "none",
+            "balanced",
+            "short",
+            strict_shape=True,
+        )
+        built = build_target_plan(snapshot, recipe)
+        self.assertIsNotNone(built)
+        assert built is not None
+        plan, realized = built
+        self.assertEqual(plan.prefill_items, ())
+        self.assertEqual(plan.decode_items, ("d0", "d1"))
+        self.assertEqual(realized["batch_kind"], "decode_only")
+
     def test_full_sequence_budget_rejects_new_prefill(self) -> None:
         snapshot = make_snapshot(
             prefill=(PrefillRequest("new", 0.0, 128, 0),),

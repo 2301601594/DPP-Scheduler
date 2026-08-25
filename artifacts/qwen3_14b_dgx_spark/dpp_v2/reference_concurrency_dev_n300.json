@@ -1,0 +1,75 @@
+{
+  "artifact_id": "qwen3_14b_dgx_spark_reference_concurrency_v2",
+  "created_at_utc": "2026-08-25T07:44:57.086027+00:00",
+  "decode": {
+    "max": 50,
+    "mean": 30.698748684364404,
+    "p50": 36,
+    "p75": 40,
+    "p90": 43,
+    "positive_sample_count": 8551,
+    "sample_count": 8552
+  },
+  "decode_reference_concurrency": 36,
+  "development_operating_region_qps": [
+    0.25
+  ],
+  "formal_benchmark_eligible": false,
+  "model": "Qwen3-14B",
+  "percentile_method": "higher",
+  "platform": "NVIDIA DGX Spark",
+  "positive_decode_frames": 8551,
+  "positive_prefill_frames": 316,
+  "prefill": {
+    "max": 4,
+    "mean": 1.0474683544303798,
+    "p50": 1,
+    "p75": 1,
+    "p90": 1,
+    "positive_sample_count": 316,
+    "sample_count": 8552
+  },
+  "prefill_reference_concurrency": 1,
+  "runtime_consistency": {
+    "chunked_prefill": true,
+    "dtype": "bfloat16",
+    "duration_timing_boundary": "vllm_official_after_execute_model_submission_through_model_result_and_sampling",
+    "engine": "vllm_v1",
+    "gpu_memory_utilization": 0.84,
+    "kv_block_size": 16,
+    "kv_cache_dtype": "bfloat16",
+    "max_model_len": 40960,
+    "model_name": "Qwen3-14B",
+    "model_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+    "model_snapshot_sha256": "f48a9e0e58bd23f01869ef5706f5dfe9c6a0f0b21b20cdc54e1745af15c30841",
+    "prefix_caching": false,
+    "sequence_budget": 64,
+    "speculative_decoding": false,
+    "token_budget": 2048,
+    "tokenizer_revision": "40c069824f4251a91eefaf281ebe4c544efd3e18",
+    "usable_kv_blocks": 30149,
+    "vllm_commit": "83ad767eed3be3ee7f2df63be693bfaca5c7c922"
+  },
+  "runtime_consistency_sha256": "826d7ab93de1cd5353647e711c70ac11891affbf26aada65ab2bea7cdf63c251",
+  "schema_version": 1,
+  "scope": "development_nonformal",
+  "source_kind": "normal_stock_natural_workload_profiling_only",
+  "sources": [
+    {
+      "config_path": "/home/dongj/LLM/configs/dgx_spark_experiment.yaml",
+      "config_sha256": "7ad7b9b5eb76b57a623c2d89fc556d6babeaacd70dc2112d8b1d2e7b6f23d6dc",
+      "frame_count": 8552,
+      "profile_path": "results/raw/qwen3_14b_dgx_spark/stock_reference_concurrency_v2_dev_n300/runs/ref_v2_dev_n300_qps_0p25_seed_1003/iteration_profile.jsonl",
+      "profile_sha256": "25e17a77ad93d6297c8ffd16b08d8ac628f3ceca09368174b810209e1fbc019a",
+      "qps": 0.25,
+      "run_id": "ref_v2_dev_n300_qps_0p25_seed_1003",
+      "run_manifest_path": "results/raw/qwen3_14b_dgx_spark/stock_reference_concurrency_v2_dev_n300/runs/ref_v2_dev_n300_qps_0p25_seed_1003/run_manifest.json",
+      "run_manifest_sha256": "af6c3c1dccf762a3185d8d8b727ae3330411a7a8d6425bd4396bb09366796fdd",
+      "runtime_consistency_sha256": "826d7ab93de1cd5353647e711c70ac11891affbf26aada65ab2bea7cdf63c251",
+      "seed": 1003
+    }
+  ],
+  "statistic": "p50_positive_frames",
+  "status": "frozen_development",
+  "total_frames": 8552
+}

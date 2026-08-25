@@ -12,6 +12,7 @@ from typing import Any
 
 PROFILE_SCHEMA_VERSION = 2
 SUPPORTED_PROFILE_SCHEMA_VERSIONS = (1, PROFILE_SCHEMA_VERSION)
+STOCK_CONCURRENCY_SEMANTICS = "dpp_stage_queues_v2"
 CAMPAIGN_ID = "predictor_profile_stock_n500_v1"
 TMUX_SESSION = "predictor-profile-stock-n500-v1"
 FORMAL_REQUEST_COUNT = 500
@@ -117,10 +118,29 @@ def load_scheduled_batches(
                     raise ValueError(
                         f"scheduled batch line {line_number} profile kind mismatch"
                     )
-                for count_name in (
+                if row.get("snapshot_concurrency_semantics") != (
+                    STOCK_CONCURRENCY_SEMANTICS
+                ):
+                    raise ValueError(
+                        f"scheduled batch line {line_number} concurrency semantics "
+                        "mismatch"
+                    )
+                count_names = (
                     "snapshot_prefill_count",
                     "snapshot_decode_count",
-                ):
+                    "snapshot_running_count",
+                    "snapshot_waiting_count",
+                    "snapshot_running_prefill_count",
+                    "snapshot_running_decode_count",
+                    "snapshot_waiting_prefill_count",
+                    "snapshot_waiting_decode_count",
+                    "snapshot_preempted_count",
+                    "snapshot_other_waiting_count",
+                    "snapshot_requests_with_preemptions_count",
+                    "snapshot_total_preemptions",
+                )
+                counts: dict[str, int] = {}
+                for count_name in count_names:
                     count = row.get(count_name)
                     if (
                         isinstance(count, bool)
@@ -131,6 +151,97 @@ def load_scheduled_batches(
                             f"scheduled batch line {line_number} has invalid "
                             f"{count_name}"
                         )
+                    counts[count_name] = count
+                if counts["snapshot_prefill_count"] != (
+                    counts["snapshot_running_prefill_count"]
+                    + counts["snapshot_waiting_prefill_count"]
+                ):
+                    raise ValueError(
+                        f"scheduled batch line {line_number} Prefill audit mismatch"
+                    )
+                if counts["snapshot_decode_count"] != counts[
+                    "snapshot_running_decode_count"
+                ]:
+                    raise ValueError(
+                        f"scheduled batch line {line_number} Decode audit mismatch"
+                    )
+                if counts["snapshot_running_count"] != (
+                    counts["snapshot_running_prefill_count"]
+                    + counts["snapshot_running_decode_count"]
+                ):
+                    raise ValueError(
+                        f"scheduled batch line {line_number} running audit mismatch"
+                    )
+                if counts["snapshot_waiting_count"] != (
+                    counts["snapshot_waiting_prefill_count"]
+                    + counts["snapshot_waiting_decode_count"]
+                    + counts["snapshot_preempted_count"]
+                    + counts["snapshot_other_waiting_count"]
+                ):
+                    raise ValueError(
+                        f"scheduled batch line {line_number} waiting audit mismatch"
+                    )
+                id_fields = {
+                    "snapshot_running_request_ids": "snapshot_running_count",
+                    "snapshot_waiting_request_ids": "snapshot_waiting_count",
+                    "snapshot_running_prefill_request_ids": (
+                        "snapshot_running_prefill_count"
+                    ),
+                    "snapshot_running_decode_request_ids": (
+                        "snapshot_running_decode_count"
+                    ),
+                    "snapshot_waiting_prefill_request_ids": (
+                        "snapshot_waiting_prefill_count"
+                    ),
+                    "snapshot_waiting_decode_request_ids": (
+                        "snapshot_waiting_decode_count"
+                    ),
+                    "snapshot_preempted_request_ids": "snapshot_preempted_count",
+                    "snapshot_other_waiting_request_ids": (
+                        "snapshot_other_waiting_count"
+                    ),
+                }
+                ids: dict[str, set[str]] = {}
+                for id_field, count_field in id_fields.items():
+                    raw_ids = row.get(id_field)
+                    if not isinstance(raw_ids, list) or not all(
+                        isinstance(request_id, str) and request_id
+                        for request_id in raw_ids
+                    ):
+                        raise ValueError(
+                            f"scheduled batch line {line_number} has invalid {id_field}"
+                        )
+                    unique = set(raw_ids)
+                    if len(unique) != len(raw_ids) or len(unique) != counts[count_field]:
+                        raise ValueError(
+                            f"scheduled batch line {line_number} {id_field} audit "
+                            "mismatch"
+                        )
+                    ids[id_field] = unique
+                if ids["snapshot_running_request_ids"].intersection(
+                    ids["snapshot_waiting_request_ids"]
+                ):
+                    raise ValueError(
+                        f"scheduled batch line {line_number} queue IDs overlap"
+                    )
+                running_parts = (
+                    ids["snapshot_running_prefill_request_ids"]
+                    | ids["snapshot_running_decode_request_ids"]
+                )
+                waiting_parts = (
+                    ids["snapshot_waiting_prefill_request_ids"]
+                    | ids["snapshot_waiting_decode_request_ids"]
+                    | ids["snapshot_preempted_request_ids"]
+                    | ids["snapshot_other_waiting_request_ids"]
+                )
+                if running_parts != ids["snapshot_running_request_ids"]:
+                    raise ValueError(
+                        f"scheduled batch line {line_number} running IDs mismatch"
+                    )
+                if waiting_parts != ids["snapshot_waiting_request_ids"]:
+                    raise ValueError(
+                        f"scheduled batch line {line_number} waiting IDs mismatch"
+                    )
             if row.get("run_id") != expected_run_id:
                 raise ValueError(f"scheduled batch line {line_number} run_id mismatch")
             index = int(row.get("iteration_index", -1))
@@ -221,7 +332,7 @@ def merge_iteration_profiles(
             row["actual_duration_seconds"] = durations[index]
             stream.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
 
-    return {
+    result = {
         "schema_version": max(int(row["schema_version"]) for row in batches),
         "valid": True,
         "run_id": expected_run_id,
@@ -232,6 +343,28 @@ def merge_iteration_profiles(
         "duration_min_seconds": min(durations.values()),
         "duration_max_seconds": max(durations.values()),
     }
+    if result["schema_version"] == PROFILE_SCHEMA_VERSION:
+        result["snapshot_concurrency_audit"] = {
+            "semantics": STOCK_CONCURRENCY_SEMANTICS,
+            "frames": len(batches),
+            "maximum_prefill_count": max(
+                int(row["snapshot_prefill_count"]) for row in batches
+            ),
+            "maximum_decode_count": max(
+                int(row["snapshot_decode_count"]) for row in batches
+            ),
+            "frames_with_waiting_decode": sum(
+                int(row["snapshot_waiting_decode_count"]) > 0 for row in batches
+            ),
+            "frames_with_preempted": sum(
+                int(row["snapshot_preempted_count"]) > 0 for row in batches
+            ),
+            "maximum_active_request_preemption_sum": max(
+                int(row["snapshot_total_preemptions"]) for row in batches
+            ),
+            "queue_partition_invariants_valid": True,
+        }
+    return result
 
 
 def validate_run_directory(

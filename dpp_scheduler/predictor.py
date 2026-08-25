@@ -135,6 +135,7 @@ class PredictionAudit:
     base_duration_seconds: float | None
     calibration_source: str | None
     calibration_sample_count: int
+    centered_residual_p95_seconds: float | None = None
     predictor_cpu_seconds: float | None = None
     rejection_reason: str | None = None
 
@@ -450,6 +451,7 @@ class RidgeDurationPredictor(DurationPredictor):
                 base_duration_seconds=base,
                 calibration_source=source,
                 calibration_sample_count=sample_count,
+                centered_residual_p95_seconds=centered_p95,
             )
         except (KeyError, TypeError, ValueError) as error:
             return PredictionAudit(
@@ -466,6 +468,7 @@ class RidgeDurationPredictor(DurationPredictor):
                 base_duration_seconds=None,
                 calibration_source=None,
                 calibration_sample_count=0,
+                centered_residual_p95_seconds=None,
                 rejection_reason=f"{type(error).__name__}: {error}",
             )
 

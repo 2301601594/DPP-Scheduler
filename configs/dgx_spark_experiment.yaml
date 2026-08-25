@@ -199,6 +199,14 @@ predictor:
       - snapshot_hash
       - snapshot_prefill_count
       - snapshot_decode_count
+      - snapshot_running_count
+      - snapshot_waiting_count
+      - snapshot_running_prefill_count
+      - snapshot_running_decode_count
+      - snapshot_waiting_prefill_count
+      - snapshot_waiting_decode_count
+      - snapshot_preempted_count
+      - snapshot_total_preemptions
       - actual_duration_seconds
     per_selected_request:
       - request_id
@@ -249,14 +257,17 @@ predictor:
     strategy: clipped_monotonic_ridge
     lower_bound_policy: clip_without_optimistic_downward_extrapolation
     centered_residual_p95: true
-    ood_uncertainty_coefficient: 0.05
-    parameter_status: provisional_pending_held_out_ood_calibration
-    provisional_basis: >-
-      Engineering-only nonzero placeholder in seconds per standardized OOD
-      distance. It is not benchmark-eligible and must be replaced by an
-      independently held-out OOD calibration artifact.
-    calibration_source: null
-    live_v2_eligible: false
+    ood_uncertainty_coefficient: 0.0
+    parameter_status: frozen_from_development_held_out_ood_calibration
+    development_freeze_basis: >-
+      Measured higher-Q95 calibration by Prefill-only, Decode-only, and Mixed
+      batch kind from one independent n=150 calibration run, with a separate
+      n=150 validation run. This development freeze is not formal-benchmark
+      eligible; the measured Q95 is zero and was not supplied as a default.
+    calibration_artifact_path: >-
+      artifacts/qwen3_14b_dgx_spark/dpp_v2/ood_uncertainty_dev_n150x2.json
+    calibration_artifact_sha256: a2d3ffb85b6290013b1c628287ceafdfa63ef348b3a731f2514ac13236fc0859
+    live_v2_eligible: true
 
 safe_set:
   parameter_status: provisional_for_scheduler_integration
@@ -293,17 +304,19 @@ fallback:
 
 dpp:
   algorithm: request_service_deficit_v2
-  parameter_status: provisional_pending_profiling
+  parameter_status: frozen_for_development_nonformal_validation
   formal_benchmark_eligible: false
   reference_concurrency:
     statistic: p50_positive_frames
     prefill: 1
-    decode: 32
-    parameter_status: provisional_pending_stock_profiling
-    artifact: null
-    provisional_basis: >-
-      Engineering-only defaults for code and unit tests. They are not measured,
-      are not benchmark-eligible, and live v2 rejects this status.
+    decode: 36
+    parameter_status: frozen_from_development_stock_n300_positive_frame_p50
+    artifact_path: >-
+      artifacts/qwen3_14b_dgx_spark/dpp_v2/reference_concurrency_dev_n300.json
+    artifact_sha256: 6d2ac889f687166d9cd8a2d072a4dce62205eee380cf071ca13ec1e4534ab2ea
+    development_freeze_basis: >-
+      Measured positive-frame P50 from one normal Stock n=300 run at QPS=0.25
+      and seed=1003. This development freeze is not formal-benchmark eligible.
   control_state: [ttft_service_debts_by_request, tbt_service_debts_by_request]
   use_variable_frame_rate: true
   effective_duration:

@@ -18,6 +18,7 @@ from benchmarks.predictor_online_evaluation import analyze_evaluation
 from benchmarks.qwen3_runtime import (
     ActiveConfigError,
     build_predictor_evaluation_server_command,
+    candidate_runtime_signature,
     load_active_runtime,
     load_frozen_predictor,
     require_frozen_for_execution,
@@ -55,6 +56,8 @@ from dpp_scheduler.vllm_adapter import (
 
 EVALUATION_CAMPAIGN_ID = "predictor_online_timing_aligned_n200_v1"
 EVALUATION_SMOKE_CAMPAIGN_ID = "predictor_online_timing_aligned_smoke_v1"
+OOD_CALIBRATION_CAMPAIGN_ID = "predictor_ood_calibration_v2"
+OOD_VALIDATION_CAMPAIGN_ID = "predictor_ood_validation_v2"
 
 
 def _implementation_hashes(workspace: Path) -> dict[str, str]:
@@ -80,7 +83,9 @@ def main() -> int:
     parser.add_argument("--source-seed", type=int, required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--recipe-seed", type=int, required=True)
-    parser.add_argument("--recipe-mode", choices=("formal", "smoke"), required=True)
+    parser.add_argument(
+        "--recipe-mode", choices=("formal", "smoke", "ood"), required=True
+    )
     parser.add_argument("--request-count", type=int, required=True)
     parser.add_argument("--dispatch-interval", type=float, default=0.002)
     parser.add_argument("--port", type=int, default=8010)
@@ -91,12 +96,14 @@ def main() -> int:
     args = parser.parse_args()
 
     runtime = load_active_runtime(args.config)
-    expected_campaign = (
-        EVALUATION_SMOKE_CAMPAIGN_ID
+    expected_campaigns = (
+        {EVALUATION_SMOKE_CAMPAIGN_ID}
         if args.recipe_mode == "smoke"
-        else EVALUATION_CAMPAIGN_ID
+        else {EVALUATION_CAMPAIGN_ID}
+        if args.recipe_mode == "formal"
+        else {OOD_CALIBRATION_CAMPAIGN_ID, OOD_VALIDATION_CAMPAIGN_ID}
     )
-    if args.campaign_id != expected_campaign:
+    if args.campaign_id not in expected_campaigns:
         raise ActiveConfigError("campaign ID does not match Predictor evaluation mode")
     for value, label in (
         (args.campaign_id, "campaign_id"),
@@ -147,8 +154,21 @@ def main() -> int:
     recipes = build_target_recipes(args.recipe_seed, mode=args.recipe_mode)
     predictor = load_frozen_predictor(runtime)
     command = build_predictor_evaluation_server_command(runtime, port=args.port)
+    runtime_consistency, runtime_consistency_sha256 = candidate_runtime_signature(
+        runtime
+    )
     preview = _resolved_preview(
-        runtime, trace_path, trace_manifest_path, output_dir, command, rows
+        runtime,
+        trace_path,
+        trace_manifest_path,
+        output_dir,
+        command,
+        rows,
+        scheduler_policy="predictor-shadow-evaluation",
+        source_request_count=len(source_rows),
+        diagnostic_iteration_log=False,
+        campaign_id=args.campaign_id,
+        comparison_scope="held_out_ood_predictor_evaluation",
     )
     preview.update(
         {
@@ -170,6 +190,8 @@ def main() -> int:
             "implementation_sha256": _implementation_hashes(runtime.workspace),
             "run_timeout_seconds": args.run_timeout,
             "request_timeout_seconds": args.request_timeout,
+            "runtime_consistency": runtime_consistency,
+            "runtime_consistency_sha256": runtime_consistency_sha256,
         }
     )
     if args.dry_run:

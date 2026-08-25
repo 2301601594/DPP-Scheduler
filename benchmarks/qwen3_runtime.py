@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
 import site
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +55,14 @@ class FrozenCandidateSettings:
     manifest_path: Path
     manifest_sha256: str
     runtime_signature_sha256: str
+
+
+@dataclass(frozen=True)
+class FrozenV2Artifacts:
+    reference_path: Path
+    reference_sha256: str
+    ood_calibration_path: Path
+    ood_calibration_sha256: str
 
 
 def load_frozen_safe_set_settings(runtime: ActiveRuntime) -> SafeSetSettings:
@@ -698,6 +708,215 @@ def load_frozen_candidate_settings(runtime: ActiveRuntime) -> FrozenCandidateSet
         manifest_path=runtime.config_path,
         manifest_sha256=runtime.config_sha256,
         runtime_signature_sha256=observed_signature,
+    )
+
+
+def _load_frozen_json_artifact(
+    runtime: ActiveRuntime,
+    *,
+    value: str | None,
+    expected_sha256: str | None,
+    label: str,
+) -> tuple[Path, str, dict[str, Any]]:
+    if not value or not expected_sha256 or not re.fullmatch(
+        r"[0-9a-f]{64}", expected_sha256
+    ):
+        raise ActiveConfigError(f"{label} path/SHA256 is incomplete")
+    path = resolve_under(runtime.workspace, value, label=label)
+    if not path.is_file():
+        raise ActiveConfigError(f"{label} is absent: {path}")
+    if path.lstat().st_uid != os.getuid():
+        raise ActiveConfigError(f"{label} is not user-owned: {path}")
+    observed_sha256 = sha256_file(path)
+    if observed_sha256 != expected_sha256:
+        raise ActiveConfigError(
+            f"{label} SHA256 mismatch: expected {expected_sha256}, "
+            f"got {observed_sha256}"
+        )
+    with path.open("r", encoding="utf-8") as stream:
+        payload = json.load(stream)
+    if not isinstance(payload, dict):
+        raise ActiveConfigError(f"{label} must contain a JSON object")
+    return path, observed_sha256, payload
+
+
+def validate_frozen_v2_artifacts(
+    runtime: ActiveRuntime,
+    *,
+    dpp_settings: DPPSettings,
+    predictor_settings: PredictorSettings,
+    predictor: FrozenPredictor,
+    execution_scope: str,
+) -> FrozenV2Artifacts:
+    """Validate both measured v2 artifacts against the current runtime.
+
+    Status strings are intentionally insufficient: live v2 requires owned
+    artifact files, exact configured hashes, matching values, and the same
+    conclusion-affecting runtime signature used during collection.
+    """
+    if not dpp_settings.live_v2_ready or not predictor_settings.live_v2_ready:
+        raise ActiveConfigError("v2 artifacts are not frozen")
+    if execution_scope not in {"development_nonformal", "formal"}:
+        raise ActiveConfigError("DPP execution scope is absent or invalid")
+    reference_development = dpp_settings.reference_parameter_status == (
+        "frozen_from_development_stock_n300_positive_frame_p50"
+    )
+    ood_development = predictor_settings.parameter_status == (
+        "frozen_from_development_held_out_ood_calibration"
+    )
+    if reference_development != ood_development:
+        raise ActiveConfigError("v2 artifact scopes disagree")
+    artifact_scope = "development_nonformal" if reference_development else "formal"
+    artifact_status = "frozen_development" if reference_development else "frozen"
+    if artifact_scope == "development_nonformal" and execution_scope != (
+        "development_nonformal"
+    ):
+        raise ActiveConfigError(
+            "development v2 artifacts cannot enable a formal benchmark"
+        )
+    runtime_payload, runtime_sha256 = candidate_runtime_signature(runtime)
+
+    reference_path, reference_sha256, reference = _load_frozen_json_artifact(
+        runtime,
+        value=dpp_settings.reference_artifact_path,
+        expected_sha256=dpp_settings.reference_artifact_sha256,
+        label="reference concurrency artifact",
+    )
+    if (
+        reference.get("schema_version") != 1
+        or reference.get("artifact_id")
+        != "qwen3_14b_dgx_spark_reference_concurrency_v2"
+        or reference.get("status") != artifact_status
+        or reference.get("scope") != artifact_scope
+        or reference.get("formal_benchmark_eligible") is not (
+            artifact_scope == "formal"
+        )
+        or reference.get("runtime_consistency_sha256") != runtime_sha256
+        or reference.get("runtime_consistency") != runtime_payload
+    ):
+        raise ActiveConfigError("reference concurrency artifact identity/runtime mismatch")
+    if (
+        reference.get("prefill_reference_concurrency")
+        != dpp_settings.prefill_reference_concurrency
+        or reference.get("decode_reference_concurrency")
+        != dpp_settings.decode_reference_concurrency
+    ):
+        raise ActiveConfigError("reference concurrency artifact values mismatch config")
+    if not isinstance(reference.get("sources"), list) or not reference["sources"]:
+        raise ActiveConfigError("reference concurrency provenance is empty")
+    for source in reference["sources"]:
+        if not isinstance(source, dict) or not all(
+            isinstance(source.get(field), str) and source.get(field)
+            for field in (
+                "run_id",
+                "profile_path",
+                "profile_sha256",
+                "run_manifest_path",
+                "run_manifest_sha256",
+            )
+        ):
+            raise ActiveConfigError("reference concurrency provenance is incomplete")
+
+    ood_path, ood_sha256, ood = _load_frozen_json_artifact(
+        runtime,
+        value=predictor_settings.calibration_artifact_path,
+        expected_sha256=predictor_settings.calibration_artifact_sha256,
+        label="OOD calibration artifact",
+    )
+    if (
+        ood.get("schema_version") != 1
+        or ood.get("artifact_id") != "qwen3_14b_dgx_spark_ood_uncertainty_v1"
+        or ood.get("status") != artifact_status
+        or ood.get("scope") != artifact_scope
+        or ood.get("formal_benchmark_eligible") is not (artifact_scope == "formal")
+        or ood.get("coverage_target") != 0.95
+        or ood.get("runtime_consistency_sha256") != runtime_sha256
+        or ood.get("runtime_consistency") != runtime_payload
+        or ood.get("predictor_artifact_manifest_sha256")
+        != predictor.artifact_manifest_sha256
+        or ood.get("predictor_version") != predictor.predictor_version
+    ):
+        raise ActiveConfigError("OOD calibration artifact identity/runtime mismatch")
+    kappa = ood.get("kappa_ood")
+    if (
+        isinstance(kappa, bool)
+        or not isinstance(kappa, (int, float))
+        or not math.isfinite(float(kappa))
+        or not math.isclose(
+            float(kappa),
+            predictor_settings.ood_uncertainty_coefficient,
+            rel_tol=0.0,
+            abs_tol=0.0,
+        )
+    ):
+        raise ActiveConfigError("OOD calibration artifact kappa mismatch config")
+    coverage = ood.get("validation_coverage")
+    by_kind = coverage.get("by_batch_kind") if isinstance(coverage, dict) else None
+    if not isinstance(by_kind, dict) or set(by_kind) != {
+        "prefill_only",
+        "decode_only",
+        "mixed",
+    }:
+        raise ActiveConfigError("OOD validation coverage is incomplete")
+    coverage_values = [coverage.get("overall")] + [
+        by_kind[kind] for kind in ("prefill_only", "decode_only", "mixed")
+    ]
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) < 0.95
+        for value in coverage_values
+    ):
+        raise ActiveConfigError("OOD validation coverage is below 95%")
+    sources = ood.get("sources")
+    if not isinstance(sources, dict) or not all(
+        isinstance(sources.get(role), list) and sources[role]
+        for role in ("calibration", "validation")
+    ):
+        raise ActiveConfigError("OOD calibration/validation provenance is incomplete")
+    role_run_ids: dict[str, set[str]] = {}
+    role_seeds: dict[str, set[int]] = {}
+    role_source_seeds: dict[str, set[int]] = {}
+    for role in ("calibration", "validation"):
+        role_run_ids[role] = set()
+        role_seeds[role] = set()
+        role_source_seeds[role] = set()
+        for source in sources[role]:
+            if not isinstance(source, dict) or not all(
+                isinstance(source.get(field), str) and source.get(field)
+                for field in (
+                    "run_id",
+                    "profile_path",
+                    "profile_sha256",
+                    "run_manifest_path",
+                    "run_manifest_sha256",
+                )
+            ):
+                raise ActiveConfigError(f"OOD {role} provenance is incomplete")
+            seed = source.get("recipe_seed")
+            if isinstance(seed, bool) or not isinstance(seed, int):
+                raise ActiveConfigError(f"OOD {role} recipe seed is invalid")
+            source_seed = source.get("source_seed")
+            if isinstance(source_seed, bool) or not isinstance(source_seed, int):
+                raise ActiveConfigError(f"OOD {role} source seed is invalid")
+            role_run_ids[role].add(source["run_id"])
+            role_seeds[role].add(seed)
+            role_source_seeds[role].add(source_seed)
+    if role_run_ids["calibration"].intersection(role_run_ids["validation"]):
+        raise ActiveConfigError("OOD calibration/validation run IDs overlap")
+    if role_seeds["calibration"].intersection(role_seeds["validation"]):
+        raise ActiveConfigError("OOD calibration/validation recipe seeds overlap")
+    if role_source_seeds["calibration"].intersection(
+        role_source_seeds["validation"]
+    ):
+        raise ActiveConfigError("OOD calibration/validation source seeds overlap")
+
+    return FrozenV2Artifacts(
+        reference_path=reference_path,
+        reference_sha256=reference_sha256,
+        ood_calibration_path=ood_path,
+        ood_calibration_sha256=ood_sha256,
     )
 
 

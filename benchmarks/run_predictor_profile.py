@@ -24,6 +24,7 @@ from benchmarks.predictor_profile import (
 from benchmarks.qwen3_runtime import (
     ActiveConfigError,
     build_stock_profile_server_command,
+    candidate_runtime_signature,
     load_active_runtime,
     require_frozen_for_execution,
     resolve_under,
@@ -121,12 +122,29 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="configs/dgx_spark_experiment.yaml")
     parser.add_argument("--campaign-id", required=True)
+    parser.add_argument(
+        "--source-campaign-id",
+        help="read immutable traces from another raw-results campaign",
+    )
     parser.add_argument("--trace-dir", required=True)
     parser.add_argument("--trace", required=True)
     parser.add_argument("--trace-manifest", default="manifest.json")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--qps", type=float, required=True)
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument(
+        "--request-limit",
+        type=int,
+        help="run an unchanged trace prefix as a schema/state smoke only",
+    )
+    parser.add_argument(
+        "--development-reference",
+        action="store_true",
+        help=(
+            "classify exactly one 300-request normal Stock prefix as a "
+            "development-only reference source"
+        ),
+    )
     parser.add_argument("--port", type=int, default=8010)
     parser.add_argument("--startup-timeout", type=float, default=600)
     parser.add_argument(
@@ -139,6 +157,11 @@ def main() -> int:
     runtime = load_active_runtime(args.config)
     if not RUN_ID_PATTERN.fullmatch(args.campaign_id):
         raise ActiveConfigError(f"invalid campaign_id: {args.campaign_id!r}")
+    source_campaign_id = args.source_campaign_id or args.campaign_id
+    if not RUN_ID_PATTERN.fullmatch(source_campaign_id):
+        raise ActiveConfigError(
+            f"invalid source_campaign_id: {source_campaign_id!r}"
+        )
     if not RUN_ID_PATTERN.fullmatch(args.run_id):
         raise ActiveConfigError(f"invalid run_id: {args.run_id!r}")
     if (
@@ -149,11 +172,20 @@ def main() -> int:
         or args.run_timeout <= 0
     ):
         raise ActiveConfigError("QPS and timeouts must be positive")
+    if args.development_reference and args.request_limit != 300:
+        raise ActiveConfigError(
+            "--development-reference requires exactly --request-limit 300"
+        )
 
     campaign_root = resolve_under(
         runtime.raw_results, args.campaign_id, label="profiling campaign"
     )
-    trace_root = resolve_under(campaign_root, args.trace_dir, label="profile traces")
+    source_campaign_root = resolve_under(
+        runtime.raw_results, source_campaign_id, label="source profiling campaign"
+    )
+    trace_root = resolve_under(
+        source_campaign_root, args.trace_dir, label="profile traces"
+    )
     trace_path = resolve_under(trace_root, args.trace, label="profile trace")
     trace_manifest_path = resolve_under(
         trace_root, args.trace_manifest, label="profile trace manifest"
@@ -162,15 +194,25 @@ def main() -> int:
         campaign_root, Path("runs") / args.run_id, label="profile run output"
     )
     rows = load_trace(trace_path, runtime)
+    source_request_count = len(rows)
     trace_manifest = verify_trace_manifest(trace_path, trace_manifest_path, runtime)
     _verify_trace_identity(
         trace_manifest,
         trace_name=trace_path.name,
         qps=args.qps,
         seed=args.seed,
-        request_count=len(rows),
+        request_count=source_request_count,
     )
+    if args.request_limit is not None:
+        if not 1 <= args.request_limit <= source_request_count:
+            raise ActiveConfigError(
+                f"request limit must be in [1, {source_request_count}]"
+            )
+        rows = rows[: args.request_limit]
     command = build_stock_profile_server_command(runtime, port=args.port)
+    runtime_consistency, runtime_consistency_sha256 = candidate_runtime_signature(
+        runtime
+    )
     preview = _resolved_preview(
         runtime,
         trace_path,
@@ -178,16 +220,30 @@ def main() -> int:
         output_dir,
         command,
         rows,
+        scheduler_policy="stock-profile",
+        source_request_count=source_request_count,
+        diagnostic_iteration_log=False,
+        campaign_id=args.campaign_id,
+        comparison_scope=(
+            "stock_profile_development_reference_n300"
+            if args.development_reference
+            else "stock_profile_schema_smoke"
+            if args.request_limit is not None
+            else "stock_profile_formal_reference"
+        ),
     )
     preview.update(
         {
             "profile_schema_version": PROFILE_SCHEMA_VERSION,
             "campaign_id": args.campaign_id,
+            "source_campaign_id": source_campaign_id,
             "run_id": args.run_id,
             "qps": args.qps,
             "seed": args.seed,
             "run_timeout_seconds": args.run_timeout,
             "request_timeout_seconds": args.request_timeout,
+            "runtime_consistency": runtime_consistency,
+            "runtime_consistency_sha256": runtime_consistency_sha256,
         }
     )
     if args.dry_run:
@@ -204,7 +260,19 @@ def main() -> int:
     startup_log = output_dir / "startup.log"
     manifest: dict[str, Any] = {
         "schema_version": PROFILE_SCHEMA_VERSION,
-        "kind": "qwen3_14b_stock_predictor_profile",
+        "kind": (
+            "qwen3_14b_stock_predictor_profile"
+            if args.development_reference or args.request_limit is None
+            else "qwen3_14b_stock_predictor_profile_smoke"
+        ),
+        "artifact_scope": (
+            "development_nonformal"
+            if args.development_reference
+            else "formal"
+            if args.request_limit is None
+            else "smoke"
+        ),
+        "formal_benchmark_eligible": args.request_limit is None,
         "campaign_id": args.campaign_id,
         "run_id": args.run_id,
         "qps": args.qps,
@@ -298,8 +366,17 @@ def main() -> int:
     finally:
         _stop_server(process)
         manifest["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
-        if startup_log.exists():
-            manifest["startup_log_sha256"] = sha256_file(startup_log)
+        for name in (
+            "startup.log",
+            "scheduled_batches.jsonl",
+            "iteration_profile.jsonl",
+            "per_request.jsonl",
+            "summary.json",
+            "profile_validation.json",
+        ):
+            path = output_dir / name
+            if path.exists():
+                manifest.setdefault("file_sha256", {})[name] = sha256_file(path)
         _atomic_json(manifest_path, manifest)
 
     print(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))

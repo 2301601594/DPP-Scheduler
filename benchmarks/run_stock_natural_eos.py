@@ -52,6 +52,7 @@ TRACE_FORBIDDEN_FIELDS = frozenset(
 RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 SCHEDULER_POLICIES = ("stock", "dpp")
 DPP_DIAGNOSTIC_ITERATION_LOG_ENV = "DPP_DIAGNOSTIC_ITERATION_LOG"
+DPP_EXECUTION_SCOPE_ENV = "DPP_EXECUTION_SCOPE"
 
 
 def _atomic_json(path: Path, payload: Any) -> None:
@@ -603,6 +604,14 @@ def main() -> int:
         campaign_id=args.campaign_id,
         comparison_scope=comparison_scope,
     )
+    execution_scope = (
+        "stock"
+        if args.policy == "stock"
+        else "development_nonformal"
+        if args.request_limit is not None
+        else "formal"
+    )
+    preview["runner_env_overrides"][DPP_EXECUTION_SCOPE_ENV] = execution_scope
     if args.dry_run:
         print(json.dumps(preview, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
@@ -619,6 +628,7 @@ def main() -> int:
     environment[DPP_DIAGNOSTIC_ITERATION_LOG_ENV] = (
         "1" if args.dpp_diagnostic_iteration_log else "0"
     )
+    environment[DPP_EXECUTION_SCOPE_ENV] = execution_scope
     manifest: dict[str, Any] = {
         "schema_version": 2,
         "kind": "qwen3_14b_scheduler_natural_output",

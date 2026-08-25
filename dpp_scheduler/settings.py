@@ -250,6 +250,8 @@ class PredictorSettings:
 
     ood_uncertainty_coefficient: float
     parameter_status: str = "provisional_pending_held_out_ood_calibration"
+    calibration_artifact_path: str | None = None
+    calibration_artifact_sha256: str | None = None
 
     def __post_init__(self) -> None:
         value = self.ood_uncertainty_coefficient
@@ -263,12 +265,25 @@ class PredictorSettings:
         if self.parameter_status not in {
             "provisional_pending_held_out_ood_calibration",
             "frozen_from_held_out_ood_calibration",
+            "frozen_from_development_held_out_ood_calibration",
         }:
             raise ValueError("unknown OOD uncertainty parameter status")
+        if self.parameter_status in {
+            "frozen_from_held_out_ood_calibration",
+            "frozen_from_development_held_out_ood_calibration",
+        } and (
+            not self.calibration_artifact_path
+            or not self.calibration_artifact_sha256
+            or len(self.calibration_artifact_sha256) != 64
+        ):
+            raise ValueError("frozen OOD uncertainty artifact path/hash is incomplete")
 
     @property
     def live_v2_ready(self) -> bool:
-        return self.parameter_status == "frozen_from_held_out_ood_calibration"
+        return self.parameter_status in {
+            "frozen_from_held_out_ood_calibration",
+            "frozen_from_development_held_out_ood_calibration",
+        }
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> PredictorSettings:
@@ -284,6 +299,12 @@ class PredictorSettings:
                 "ood_uncertainty_coefficient"
             ),
             parameter_status=str(extrapolation.get("parameter_status", "")),
+            calibration_artifact_path=extrapolation.get(
+                "calibration_artifact_path"
+            ),
+            calibration_artifact_sha256=extrapolation.get(
+                "calibration_artifact_sha256"
+            ),
         )
 
 
@@ -298,6 +319,8 @@ class DPPSettings:
     score_rel_tol: float = 1e-9
     score_abs_tol: float = 1e-12
     algorithm: str = "request_service_deficit_v2"
+    reference_artifact_path: str | None = None
+    reference_artifact_sha256: str | None = None
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -313,14 +336,27 @@ class DPPSettings:
         if self.reference_parameter_status not in {
             "provisional_pending_stock_profiling",
             "frozen_from_stock_positive_frame_p50",
+            "frozen_from_development_stock_n300_positive_frame_p50",
         }:
             raise ValueError("unknown reference concurrency parameter status")
+        if self.reference_parameter_status in {
+            "frozen_from_stock_positive_frame_p50",
+            "frozen_from_development_stock_n300_positive_frame_p50",
+        } and (
+            not self.reference_artifact_path
+            or not self.reference_artifact_sha256
+            or len(self.reference_artifact_sha256) != 64
+        ):
+            raise ValueError("frozen reference artifact path/hash is incomplete")
         if self.score_rel_tol != 1e-9 or self.score_abs_tol != 1e-12:
             raise ValueError("DPP score tie tolerance is fixed")
 
     @property
     def live_v2_ready(self) -> bool:
-        return self.reference_parameter_status == "frozen_from_stock_positive_frame_p50"
+        return self.reference_parameter_status in {
+            "frozen_from_stock_positive_frame_p50",
+            "frozen_from_development_stock_n300_positive_frame_p50",
+        }
 
     @classmethod
     def from_mapping(
@@ -356,4 +392,6 @@ class DPPSettings:
             score_rel_tol=float(tolerance.get("relative")),
             score_abs_tol=float(tolerance.get("absolute")),
             algorithm=str(value.get("algorithm", "")),
+            reference_artifact_path=reference.get("artifact_path"),
+            reference_artifact_sha256=reference.get("artifact_sha256"),
         )
