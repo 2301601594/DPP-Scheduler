@@ -1009,7 +1009,99 @@ def get_modular_scheduler_class() -> type:
             scheduler_output: Any,
             predictor_in_support: bool,
             scheduler_cpu_seconds: float,
+            candidate_scores: tuple[Any, ...] = (),
         ) -> None:
+            candidate_score_records: list[dict[str, Any]] | None = None
+            if self._dpp_diagnostic_iteration_log:
+                candidates_by_plan_id = {
+                    candidate.plan.plan_id: candidate
+                    for candidate in safe_result.safe_candidates
+                }
+                ranked_scores = sorted(
+                    candidate_scores,
+                    key=lambda score: (
+                        -score.score,
+                        score.predicted_misses,
+                        0
+                        if score.conservative_deadline_margin_seconds is None
+                        else 1,
+                        0.0
+                        if score.conservative_deadline_margin_seconds is None
+                        else -score.conservative_deadline_margin_seconds,
+                        score.plan_id,
+                    ),
+                )
+                rank_by_plan_id = {
+                    score.plan_id: rank
+                    for rank, score in enumerate(ranked_scores, start=1)
+                }
+                selected_scored_plan_id = (
+                    decision.selected_plan.plan_id
+                    if decision.reason == "DPP_MAX_SCORE"
+                    and decision.selected_plan is not None
+                    else None
+                )
+                candidate_score_records = []
+                for score in candidate_scores:
+                    candidate = candidates_by_plan_id[score.plan_id]
+                    prediction = candidate.prediction
+                    candidate_score_records.append(
+                        {
+                            "plan_id": score.plan_id,
+                            "template_id": candidate.plan.template_id,
+                            "prefill_items": list(candidate.plan.prefill_items),
+                            "decode_request_ids": list(candidate.plan.decode_items),
+                            "total_prefill_tokens": (
+                                candidate.plan.total_prefill_tokens
+                            ),
+                            "total_decode_tokens": (
+                                candidate.plan.total_decode_tokens
+                            ),
+                            "total_sequences": candidate.plan.total_sequences,
+                            "projected_kv_blocks": (
+                                candidate.plan.projected_kv_blocks
+                            ),
+                            "expected_duration_seconds": score.expected_duration,
+                            "conservative_duration_seconds": (
+                                prediction.conservative_duration
+                            ),
+                            "in_support": prediction.in_support,
+                            "ttft_success": prediction.ttft_success,
+                            "ttft_miss": prediction.ttft_miss,
+                            "tbt_success": prediction.tbt_success,
+                            "tbt_miss": prediction.tbt_miss,
+                            "service_utility": prediction.service_utility,
+                            "prefill_term": score.prefill_term,
+                            "ttft_term": score.ttft_term,
+                            "tbt_term": score.tbt_term,
+                            "utility_term": score.utility_term,
+                            "numerator": score.numerator,
+                            "score": score.score,
+                            "predicted_misses": score.predicted_misses,
+                            "predicted_violation_count": (
+                                candidate.predicted_violation_count
+                            ),
+                            "predicted_total_lateness_seconds": (
+                                candidate.predicted_total_lateness_seconds
+                            ),
+                            "conservative_deadline_margin_seconds": (
+                                score.conservative_deadline_margin_seconds
+                            ),
+                            "selection_rank": rank_by_plan_id[score.plan_id],
+                            "selected": (
+                                score.plan_id == selected_scored_plan_id
+                            ),
+                            "tie_break_key": {
+                                "score_desc": score.score,
+                                "predicted_misses_asc": score.predicted_misses,
+                                "deadline_margin_desc": (
+                                    score.conservative_deadline_margin_seconds
+                                ),
+                                "plan_id_asc": score.plan_id,
+                            },
+                        }
+                    )
+
             record = self._dpp_progress_watchdog.record_iteration(
                 workload_nonempty=bool(
                     snapshot.active_decode_requests
@@ -1029,6 +1121,12 @@ def get_modular_scheduler_class() -> type:
                     "tbt_debt": control.tbt_debt,
                     "predictor_in_support": predictor_in_support,
                     "safe_set_rejections": safe_result.rejected,
+                    "rejected_candidates_scoring_status": "not_scored",
+                    "candidate_scores": candidate_score_records,
+                    "selection_tie_break_order": (
+                        "score_desc,predicted_misses_asc,"
+                        "deadline_margin_desc,plan_id_asc"
+                    ),
                     "fallback_reason": (
                         fallback_result.reason if fallback_result else None
                     ),
@@ -1067,9 +1165,15 @@ def get_modular_scheduler_class() -> type:
             safe_result = self._dpp_safe_set.filter(snapshot, plans, predictions)
             if safe_result.snapshot_hash != snapshot.snapshot_hash:
                 raise RuntimeError("Safe-Set snapshot_hash mismatch")
-            decision = self._dpp_selector.select(
-                snapshot, control, safe_result.safe_candidates
-            )
+            candidate_scores = ()
+            if self._dpp_diagnostic_iteration_log:
+                decision, candidate_scores = self._dpp_selector.select_with_audit(
+                    snapshot, control, safe_result.safe_candidates
+                )
+            else:
+                decision = self._dpp_selector.select(
+                    snapshot, control, safe_result.safe_candidates
+                )
             fallback_result = None
             if decision.selected_plan is None:
                 fallback_result = resolve_fallback(
@@ -1127,6 +1231,7 @@ def get_modular_scheduler_class() -> type:
                     scheduler_cpu_seconds=(
                         time.perf_counter() - scheduler_cpu_started
                     ),
+                    candidate_scores=candidate_scores,
                 )
                 return scheduler_output
 
@@ -1169,6 +1274,7 @@ def get_modular_scheduler_class() -> type:
                 scheduler_output=scheduler_output,
                 predictor_in_support=predictor_in_support,
                 scheduler_cpu_seconds=time.perf_counter() - scheduler_cpu_started,
+                candidate_scores=candidate_scores,
             )
             return scheduler_output
 

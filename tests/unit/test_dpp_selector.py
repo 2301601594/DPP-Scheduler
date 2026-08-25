@@ -162,6 +162,41 @@ class DPPSelectorTests(unittest.TestCase):
             selector.select(state, control, (b, a)).selected_plan,
             a.plan,
         )
+    def test_audit_returns_all_scores_without_changing_decision(self) -> None:
+        state = snapshot()
+        control = ControlState(state.snapshot_hash, 2048, 64.0, 64.0)
+        items = (
+            candidate(state, "prefill", prefill_tokens=1024),
+            candidate(state, "decode", tbt_success=1, margin=1.0),
+        )
+        selector = DPPSelector(settings())
+
+        normal = selector.select(state, control, items)
+        audited, scores = selector.select_with_audit(state, control, items)
+
+        self.assertEqual(audited, normal)
+        self.assertEqual(
+            tuple(score.plan_id for score in scores),
+            ("prefill", "decode"),
+        )
+        self.assertTrue(all(math.isfinite(score.prefill_term) for score in scores))
+        self.assertTrue(all(math.isfinite(score.ttft_term) for score in scores))
+        self.assertTrue(all(math.isfinite(score.tbt_term) for score in scores))
+        self.assertTrue(all(math.isfinite(score.utility_term) for score in scores))
+        self.assertTrue(all(math.isfinite(score.numerator) for score in scores))
+        self.assertTrue(all(math.isfinite(score.expected_duration) for score in scores))
+        self.assertTrue(all(math.isfinite(score.score) for score in scores))
+
+    def test_empty_audit_matches_empty_selection(self) -> None:
+        state = snapshot()
+        control = ControlState(state.snapshot_hash, 0, 0.0, 0.0)
+        selector = DPPSelector(settings())
+
+        normal = selector.select(state, control, ())
+        audited, scores = selector.select_with_audit(state, control, ())
+
+        self.assertEqual(audited, normal)
+        self.assertEqual(scores, ())
 
     def test_invalid_duration_fails_closed(self) -> None:
         state = snapshot()
@@ -203,6 +238,8 @@ class DPPSelectorTests(unittest.TestCase):
         self.assertIn("DPPSelector(dpp_settings)", source)
         self.assertIn("_dpp_state_store.update_from_actual", source)
         self.assertIn("_dpp_diagnostic_iteration_log", source)
+        self.assertIn("select_with_audit", source)
+        self.assertIn('"candidate_scores"', source)
         self.assertIn("load_frozen_predictor(runtime)", source)
         self.assertIn('init_logger("vllm.dpp_scheduler")', source)
 

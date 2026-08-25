@@ -154,25 +154,30 @@ class DPPSelector:
             conservative_deadline_margin_seconds=margin,
         )
 
-    def select(
+    def _score_candidates(
         self,
         snapshot: StateSnapshot,
         control: ControlState,
         safe_candidates: tuple[SafeCandidate, ...],
-    ) -> Decision:
+    ) -> tuple[tuple[SafeCandidate, DPPScore], ...]:
         validate_snapshot_hash(control.snapshot_hash, snapshot.snapshot_hash)
-        if not safe_candidates:
+        return tuple(
+            (candidate, self.score_candidate(snapshot, control, candidate))
+            for candidate in safe_candidates
+        )
+
+    @staticmethod
+    def _decision_from_scored(
+        snapshot: StateSnapshot,
+        scored: tuple[tuple[SafeCandidate, DPPScore], ...],
+    ) -> Decision:
+        if not scored:
             return Decision(
                 frame_id=snapshot.frame_id,
                 snapshot_hash=snapshot.snapshot_hash,
                 selected_plan=None,
                 reason="NO_SAFE_DECISION",
             )
-
-        scored = tuple(
-            (candidate, self.score_candidate(snapshot, control, candidate))
-            for candidate in safe_candidates
-        )
         selected, _ = min(
             scored,
             key=lambda item: (
@@ -191,6 +196,28 @@ class DPPSelector:
             snapshot_hash=snapshot.snapshot_hash,
             selected_plan=selected.plan,
             reason="DPP_MAX_SCORE",
+        )
+
+    def select(
+        self,
+        snapshot: StateSnapshot,
+        control: ControlState,
+        safe_candidates: tuple[SafeCandidate, ...],
+    ) -> Decision:
+        scored = self._score_candidates(snapshot, control, safe_candidates)
+        return self._decision_from_scored(snapshot, scored)
+
+    def select_with_audit(
+        self,
+        snapshot: StateSnapshot,
+        control: ControlState,
+        safe_candidates: tuple[SafeCandidate, ...],
+    ) -> tuple[Decision, tuple[DPPScore, ...]]:
+        """Select once and expose the already-computed scores for diagnostics."""
+        scored = self._score_candidates(snapshot, control, safe_candidates)
+        return (
+            self._decision_from_scored(snapshot, scored),
+            tuple(score for _, score in scored),
         )
 
 
