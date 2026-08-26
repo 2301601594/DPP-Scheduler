@@ -61,8 +61,8 @@ class FrozenCandidateSettings:
 class FrozenV2Artifacts:
     reference_path: Path
     reference_sha256: str
-    ood_calibration_path: Path
-    ood_calibration_sha256: str
+    ood_calibration_path: Path | None
+    ood_calibration_sha256: str | None
 
 
 def load_frozen_safe_set_settings(runtime: ActiveRuntime) -> SafeSetSettings:
@@ -748,25 +748,39 @@ def validate_frozen_v2_artifacts(
     predictor: FrozenPredictor,
     execution_scope: str,
 ) -> FrozenV2Artifacts:
-    """Validate both measured v2 artifacts against the current runtime.
+    """Validate the measured reference and the selected Predictor input mode.
 
-    Status strings are intentionally insufficient: live v2 requires owned
-    artifact files, exact configured hashes, matching values, and the same
-    conclusion-affecting runtime signature used during collection.
+    Formal and calibrated modes require owned artifact files, exact configured
+    hashes, matching values, and the collection-time runtime signature. The
+    explicit uncalibrated default is accepted only for development-nonformal
+    execution and never fabricates an OOD artifact.
     """
     if not dpp_settings.live_v2_ready or not predictor_settings.live_v2_ready:
-        raise ActiveConfigError("v2 artifacts are not frozen")
+        raise ActiveConfigError("v2 inputs are not ready")
     if execution_scope not in {"development_nonformal", "formal"}:
         raise ActiveConfigError("DPP execution scope is absent or invalid")
     reference_development = dpp_settings.reference_parameter_status == (
         "frozen_from_development_stock_n300_positive_frame_p50"
     )
-    ood_development = predictor_settings.parameter_status == (
-        "frozen_from_development_held_out_ood_calibration"
-    )
-    if reference_development != ood_development:
-        raise ActiveConfigError("v2 artifact scopes disagree")
-    artifact_scope = "development_nonformal" if reference_development else "formal"
+    if predictor_settings.uses_development_default:
+        if execution_scope != "development_nonformal":
+            raise ActiveConfigError(
+                "development default Predictor inputs cannot enable a formal benchmark"
+            )
+        if not reference_development:
+            raise ActiveConfigError(
+                "development default Predictor requires development reference inputs"
+            )
+        artifact_scope = "development_nonformal"
+    else:
+        ood_development = predictor_settings.parameter_status == (
+            "frozen_from_development_held_out_ood_calibration"
+        )
+        if reference_development != ood_development:
+            raise ActiveConfigError("v2 artifact scopes disagree")
+        artifact_scope = (
+            "development_nonformal" if reference_development else "formal"
+        )
     artifact_status = "frozen_development" if reference_development else "frozen"
     if artifact_scope == "development_nonformal" and execution_scope != (
         "development_nonformal"
@@ -816,6 +830,14 @@ def validate_frozen_v2_artifacts(
             )
         ):
             raise ActiveConfigError("reference concurrency provenance is incomplete")
+
+    if predictor_settings.uses_development_default:
+        return FrozenV2Artifacts(
+            reference_path=reference_path,
+            reference_sha256=reference_sha256,
+            ood_calibration_path=None,
+            ood_calibration_sha256=None,
+        )
 
     ood_path, ood_sha256, ood = _load_frozen_json_artifact(
         runtime,

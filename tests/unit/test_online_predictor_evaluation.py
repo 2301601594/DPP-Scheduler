@@ -158,9 +158,13 @@ class OnlinePredictorEvaluationTests(unittest.TestCase):
 
         scheduler_cls = get_modular_scheduler_class()
         cases = {
-            "ALL_DECODE:P25:requested_106": "P25",
-            "ALL_DECODE:MAX:requested_321": "MAX",
-            "ALL_DECODE:FINISH:requested_197": "FINISH",
+            "ALL_DECODE:ZERO": "ZERO",
+            "ALL_DECODE:SLACK_BUDGET:M050:URGENCY": "M050",
+            "ALL_DECODE:SLACK_BUDGET:M075:COMPLETION_AWARE": "M075",
+            "ALL_DECODE:SLACK_BUDGET:M100:CONTINUATION": "M100",
+            "ALL_DECODE:SLACK_BUDGET:M125:URGENCY": "M125",
+            "ALL_DECODE:SLACK_BUDGET:M150:COMPLETION_AWARE": "M150",
+            "ALL_DECODE:P25:requested_106": "OTHER",
             "ZERO:IDLE_EMPTY_QUEUE": "OTHER",
             "ZERO:NO_SAFE_DECISION": "OTHER",
             "FALLBACK_DECODE_ONLY": "OTHER",
@@ -168,6 +172,20 @@ class OnlinePredictorEvaluationTests(unittest.TestCase):
         for template_id, expected in cases.items():
             self.assertEqual(
                 scheduler_cls._dpp_aggregate_bucket(template_id), expected
+            )
+
+        policy_cases = {
+            "ALL_DECODE:ZERO": "ZERO",
+            "ALL_DECODE:SLACK_BUDGET:M050:URGENCY": "URGENCY",
+            "ALL_DECODE:SLACK_BUDGET:M100:COMPLETION_AWARE": (
+                "COMPLETION_AWARE"
+            ),
+            "ALL_DECODE:SLACK_BUDGET:M150:CONTINUATION": "CONTINUATION",
+            "FALLBACK_DECODE_ONLY": "OTHER",
+        }
+        for template_id, expected in policy_cases.items():
+            self.assertEqual(
+                scheduler_cls._dpp_aggregate_policy(template_id), expected
             )
 
     def test_timing_incompatibility_suppresses_effectiveness_conclusion(self) -> None:

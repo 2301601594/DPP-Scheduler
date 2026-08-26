@@ -130,12 +130,9 @@ class CandidateGeneratorV3Tests(unittest.TestCase):
             budget_resolver=_StaticBudgetResolver(base=512),
         )
         plans = generator.generate(state)
-        # With a single (resource-clamped) budget, COMPLETION_AWARE and
-        # CONTINUATION both produce the same canonical plan; the dedup keeps
-        # the first one encountered, which by iteration order is the
-        # COMPLETION_AWARE plan. The key invariant is that some non-zero
-        # plan places the running request first, regardless of which priority
-        # policy wins the dedup race.
+        # CONTINUATION owns running-first behavior even when the relative-tier
+        # Completion-Aware policy chooses a different order. The key invariant
+        # is that at least one non-zero plan preserves continuation.
         nonzero = [plan for plan in plans if plan.total_prefill_tokens > 0]
         self.assertTrue(nonzero, "expected at least one non-zero Mixed plan")
         running_first = [
@@ -222,6 +219,16 @@ class SettingsTests(unittest.TestCase):
             "minimum_prefill_chunk_tokens": 6,
             "predictor_inversion_safety_margin_seconds": 0.020,
             "predictor_inversion_budget_grid": [0, 64, 128, 256, 384, 512, 768, 1024, 1536, 2048],
+            "completion_aware_tiering": "relative_urgency_tertiles",
+            "completion_aware_equal_score_policy": "same_tier_at_first_rank",
+            "completion_aware_order": [
+                "relative_urgency_tier",
+                "remaining_tokens",
+                "running_before_waiting",
+                "arrival_time",
+                "ordinal",
+                "request_id",
+            ],
             "parameters_frozen": True,
         }
         settings = SchedulerSettings.from_mapping(value)
@@ -234,6 +241,9 @@ class SettingsTests(unittest.TestCase):
         )
         self.assertEqual(
             settings.predictor_inversion_budget_grid[-1], 2048
+        )
+        self.assertEqual(
+            settings.completion_aware_tiering, "relative_urgency_tertiles"
         )
 
     def test_mapping_rejects_v2_field_names(self) -> None:

@@ -190,6 +190,32 @@ class V2ArtifactGateTests(unittest.TestCase):
                 execution_scope="development_nonformal",
             )
 
+            development_default = PredictorSettings(
+                0.0,
+                parameter_status=(
+                    "fixed_default_for_development_nonformal_comparison"
+                ),
+                development_default_acknowledged=True,
+            )
+            default_result = validate_frozen_v2_artifacts(
+                runtime,
+                dpp_settings=development_dpp,
+                predictor_settings=development_default,
+                predictor=predictor,
+                execution_scope="development_nonformal",
+            )
+            self.assertIsNone(default_result.ood_calibration_path)
+            with self.assertRaisesRegex(
+                ActiveConfigError, "cannot enable a formal benchmark"
+            ):
+                validate_frozen_v2_artifacts(
+                    runtime,
+                    dpp_settings=development_dpp,
+                    predictor_settings=development_default,
+                    predictor=predictor,
+                    execution_scope="formal",
+                )
+
             reference_path.write_text("{}", encoding="utf-8")
             with self.assertRaisesRegex(ActiveConfigError, "SHA256 mismatch"):
                 validate_frozen_v2_artifacts(

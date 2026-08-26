@@ -21,6 +21,8 @@ Commands:
   check                Check SSH, remote platform, tools, and repository commits.
   dry-run              Preview the local-to-remote source mirror.
   push                 Mirror source to ~/LLM using the repository filter.
+  dry-run-files FILE... Preview an additive sync of exact repository files.
+  push-files FILE...   Additively sync exact repository files (no deletion).
   verify               Check file contents and Git commits without modifying either side.
   run COMMAND [ARGS]   Run a short command from the remote project directory.
   pull-results         Pull active raw/processed/artifact trees append-only and verify them.
@@ -61,6 +63,50 @@ rsync_source() {
       --filter='merge .rsync-filter' \
       "${extra_args[@]}" \
       ./ "${DGX_REMOTE_HOST}:${DGX_REMOTE_PROJECT}/"
+  )
+}
+
+rsync_exact_files() {
+  local mode="$1"
+  shift
+  local relative_path
+  local -a extra_args
+  local -a files
+
+  if (( $# == 0 )); then
+    printf '%s requires at least one repository-relative file.\n' "${mode}" >&2
+    return 2
+  fi
+  files=()
+  for relative_path in "$@"; do
+    case "${relative_path}" in
+      /*|.|..|../*|*/../*|*/..|.git/*|vllm/.git/*|results/*|artifacts/*)
+        printf 'Refusing unsafe exact-sync path: %s\n' "${relative_path}" >&2
+        return 2
+        ;;
+    esac
+    if [[ ! -f "${REPO_ROOT}/${relative_path}" ]]; then
+      printf 'Exact-sync source is not a regular file: %s\n' "${relative_path}" >&2
+      return 2
+    fi
+    files+=("${relative_path}")
+  done
+  if [[ "${mode}" == "dry-run-files" ]]; then
+    extra_args=(--dry-run --itemize-changes)
+  else
+    extra_args=(--info=progress2)
+  fi
+
+  ensure_remote_project
+  (
+    cd -- "${REPO_ROOT}"
+    rsync -aR \
+      --checksum \
+      --no-times \
+      --partial \
+      --human-readable \
+      "${extra_args[@]}" \
+      "${files[@]}" "${DGX_REMOTE_HOST}:${DGX_REMOTE_PROJECT}/"
   )
 }
 
@@ -201,6 +247,11 @@ case "${command}" in
     ;;
   push)
     rsync_source push
+    ;;
+  dry-run-files|push-files)
+    mode="${command}"
+    shift
+    rsync_exact_files "${mode}" "$@"
     ;;
   verify)
     verify_mirror

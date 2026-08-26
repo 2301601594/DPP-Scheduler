@@ -58,12 +58,29 @@ def _urgency_score(request: PrefillRequest, t_now: float) -> float:
     return float(remaining) / slack
 
 
-def _tier_of(score: float) -> int:
-    if score >= 1.0:
-        return 0
-    if score >= 0.5:
-        return 1
-    return 2
+def _relative_urgency_tiers(scores: tuple[float, ...]) -> tuple[int, ...]:
+    """Split one frame into relative top/middle/bottom urgency thirds.
+
+    The raw urgency score has units of tokens/second, so fixed numeric
+    thresholds are not meaningful across workloads.  Tiers are instead based
+    on the score's descending empirical rank in the current Snapshot.  Equal
+    scores share the tier of their first rank and therefore are never split by
+    an unrelated stable tie key.
+    """
+    if not scores:
+        return ()
+    ordered = sorted(scores, reverse=True)
+    first_rank: dict[float, int] = {}
+    for rank, score in enumerate(ordered):
+        first_rank.setdefault(score, rank)
+    first_cut = math.ceil(len(scores) / 3)
+    second_cut = math.ceil(2 * len(scores) / 3)
+    return tuple(
+        0 if first_rank[score] < first_cut else (
+            1 if first_rank[score] < second_cut else 2
+        )
+        for score in scores
+    )
 
 
 def rank_prefill_continuation(snapshot: StateSnapshot) -> tuple[PrefillRequest, ...]:
@@ -100,19 +117,22 @@ def rank_prefill_urgency(snapshot: StateSnapshot) -> tuple[PrefillRequest, ...]:
 def rank_prefill_completion_aware(
     snapshot: StateSnapshot,
 ) -> tuple[PrefillRequest, ...]:
-    """Three-tier urgency, then smallest-remaining-first inside each tier."""
+    """Relative urgency tier, then smallest-remaining-first in each tier."""
     t_now = float(snapshot.timestamp)
+    requests = tuple(snapshot.waiting_prefill_requests)
+    scores = tuple(_urgency_score(item, t_now) for item in requests)
+    tiers = _relative_urgency_tiers(scores)
     scored = [
         (
-            _tier_of(_urgency_score(item, t_now)),
-            0 if item.is_running else 1,
+            tier,
             item.remaining_tokens,
+            0 if item.is_running else 1,
             item.arrival_time,
             item.ordinal,
             item.request_id,
             item,
         )
-        for item in snapshot.waiting_prefill_requests
+        for item, tier in zip(requests, tiers)
     ]
     scored.sort(
         key=lambda entry: (
@@ -306,6 +326,8 @@ class _GeneratorDiagnostics:
     raw_candidate_count: int
     deduplicated_candidate_count: int
     candidate_budget_values: tuple[int, ...]
+    multiplier_budgets: tuple[tuple[str, int], ...]
+    distinct_allocations_by_multiplier: tuple[tuple[str, int], ...]
 
 
 class CandidateGenerator:
@@ -378,6 +400,10 @@ class CandidateGenerator:
         )
         plans: list[BatchPlan] = [zero_plan]
         raw_count = 1
+        multiplier_budgets: tuple[tuple[str, int], ...] = ()
+        allocations_by_multiplier: dict[
+            str, set[tuple[tuple[str, int], ...]]
+        ] = {}
 
         resolution = self.budget_resolver.resolve(snapshot)
         if resolution.base_prefill_budget > 0:
@@ -386,6 +412,9 @@ class CandidateGenerator:
                 token_budget=snapshot.token_budget,
                 decode_count=len(decode_ids),
                 total_prefill_backlog=backlog,
+            )
+            multiplier_budgets = tuple(
+                (label, budget) for label, budget, _ in budgets if budget > 0
             )
             orders = build_prefill_orders(snapshot)
             for multiplier_label, budget, _multiplier in budgets:
@@ -397,6 +426,9 @@ class CandidateGenerator:
                     prefill_items = _fill_prefill(
                         snapshot, budget, order, self.settings
                     )
+                    allocations_by_multiplier.setdefault(
+                        multiplier_label, set()
+                    ).add(prefill_items)
                     template_id = (
                         f"ALL_DECODE:SLACK_BUDGET:{multiplier_label}:{policy_name}"
                     )
@@ -427,11 +459,19 @@ class CandidateGenerator:
             )
 
         candidate_budget_values = _budgets_from_plans(plans)
+        distinct_allocations_by_multiplier = tuple(
+            (label, len(allocations_by_multiplier.get(label, set())))
+            for label, _ in multiplier_budgets
+        )
         self._last_diagnostic = _GeneratorDiagnostics(
             resolution=resolution,
             raw_candidate_count=raw_count,
             deduplicated_candidate_count=len(deduplicated),
             candidate_budget_values=candidate_budget_values,
+            multiplier_budgets=multiplier_budgets,
+            distinct_allocations_by_multiplier=(
+                distinct_allocations_by_multiplier
+            ),
         )
         return tuple(deduplicated)
 

@@ -182,6 +182,15 @@ candidate_generator:
     - 1536
     - 2048
   prefill_priority_policies: [URGENCY, COMPLETION_AWARE, CONTINUATION]
+  completion_aware_tiering: relative_urgency_tertiles
+  completion_aware_equal_score_policy: same_tier_at_first_rank
+  completion_aware_order:
+    - relative_urgency_tier
+    - remaining_tokens
+    - running_before_waiting
+    - arrival_time
+    - ordinal
+    - request_id
   zero_candidate_always_emitted: true
   recovery_age_threshold_seconds: 0.25
   recovery_age_threshold_status: provisional_for_scheduler_integration
@@ -192,7 +201,7 @@ candidate_generator:
   formal_benchmark_eligible: false
   canonical_deduplication: true
   decode_order: [arrival_time, ordinal, request_id]
-  prefill_order_tiers: [critical, near_critical, normal]
+  prefill_order_tiers: [top_urgency_third, middle_urgency_third, bottom_urgency_third]
   stable_prefill_tie_key: [arrival_time, ordinal, request_id]
   kv_projection_side_effect_free: true
 
@@ -276,12 +285,14 @@ predictor:
     lower_bound_policy: clip_without_optimistic_downward_extrapolation
     centered_residual_p95: true
     ood_uncertainty_coefficient: 0.0
-    parameter_status: provisional_pending_held_out_ood_calibration
-    development_freeze_basis: >-
-      The previous OOD calibration is bound to the superseded global Mixed
-      Predictor and cannot freeze this segmented candidate. The coefficient is
-      retained only for shadow-evaluation schema compatibility.
-    live_v2_eligible: false
+    parameter_status: fixed_default_for_development_nonformal_comparison
+    development_default_acknowledged: true
+    development_default_basis: >-
+      User-directed uncalibrated default for immediate non-formal engineering
+      comparison. Kappa_ood is fixed to zero; this is not calibration evidence
+      and cannot enable a formal benchmark or scientific effectiveness claim.
+    development_nonformal_only: true
+    live_v2_eligible: true
 
 safe_set:
   parameter_status: provisional_for_scheduler_integration

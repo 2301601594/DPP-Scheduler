@@ -9,6 +9,7 @@ from benchmarks.qwen3_runtime import (
     REPOSITORY_ROOT,
     load_active_runtime,
     load_dpp_settings,
+    load_predictor_settings,
 )
 from dpp_scheduler.candidate_generator import project_kv_blocks, project_sequence_count
 from dpp_scheduler.contracts import (
@@ -394,10 +395,14 @@ class RequestDebtStateTests(unittest.TestCase):
 
 
 class V2ConfigTests(unittest.TestCase):
-    def test_active_config_is_explicitly_provisional_and_live_factory_gates(self) -> None:
+    def test_active_development_config_passes_live_factory_input_gate(self) -> None:
         runtime = load_active_runtime(REPOSITORY_ROOT / ACTIVE_CONFIG_RELATIVE)
         dpp = load_dpp_settings(runtime)
-        self.assertFalse(dpp.live_v2_ready)
+        predictor = load_predictor_settings(runtime)
+        self.assertTrue(dpp.live_v2_ready)
+        self.assertTrue(predictor.live_v2_ready)
+        self.assertTrue(predictor.uses_development_default)
+        self.assertEqual(predictor.ood_uncertainty_coefficient, 0.0)
         source = inspect.getsource(get_modular_scheduler_class)
         self.assertIn("live v2 is disabled", source)
         self.assertIn("DPPSelector(dpp_settings)", source)

@@ -13,7 +13,7 @@ Goals
   :class:`RidgeBudgetResolver` (status counts, P percentiles, support ratio).
 * Quantify the multiplier × priority-policy candidate layout produced by
   :class:`CandidateGenerator` (raw vs deduplicated counts, per-frame
-  candidate budgets).
+  multiplier budgets, canonical plans, and per-multiplier allocations).
 * Render a DPP choice distribution by attaching a deterministic selector
   that picks the highest ``-predicted_duration`` plan among deduped
   candidates.
@@ -22,6 +22,10 @@ Goals
 
 This harness is intentionally side-effect-free: it never modifies the
 trace, the Predictor artifact, or any on-disk state.
+
+The synthesized schedule is a policy-stress input, not a vLLM replay or
+performance measurement. Its explicit Prefill hold interval exists so priority
+policies can be exercised with multiple waiting requests.
 """
 
 from __future__ import annotations
@@ -54,10 +58,15 @@ from dpp_scheduler.contracts import (
 )
 from dpp_scheduler.predictor import RidgeDurationPredictor
 from dpp_scheduler.settings import SchedulerSettings
+from benchmarks.qwen3_runtime import (
+    load_active_runtime,
+    load_frozen_candidate_settings,
+)
 
 
 DEFAULT_TTFT_SLO_SECONDS = 2.0
 DEFAULT_TBT_SLO_SECONDS = 0.25
+DEFAULT_SYNTHETIC_PREFILL_HOLD_SECONDS = DEFAULT_TTFT_SLO_SECONDS
 ASSUMED_OUTPUT_TOKENS = 256
 ASSUMED_DECODE_TOKENS_PER_ITERATION = 1
 DEFAULT_TOKEN_BUDGET = 2048
@@ -127,15 +136,23 @@ def build_schedule(
     assumed_output_tokens: int,
     ttft_slo_seconds: float,
     tbt_slo_seconds: float,
-) -> list[tuple[float, list[_SynthRequest], list[_SynthRequest]]]:
+    synthetic_prefill_hold_seconds: float,
+) -> list[tuple[float, list[_SynthRequest], list[_DecodeShim]]]:
     """Synthesize one snapshot per request arrival.
 
     Returns a list of ``(timestamp, waiting, decode)`` tuples representing
     the schedule at each arrival moment, with all requests in the system
     classified as either waiting for prefill or actively decoding.
     """
+    if synthetic_prefill_hold_seconds <= 0:
+        raise ValueError("synthetic_prefill_hold_seconds must be positive")
+    if tbt_slo_seconds <= 0:
+        raise ValueError("tbt_slo_seconds must be positive")
+    if assumed_output_tokens <= 0:
+        raise ValueError("assumed_output_tokens must be positive")
+
     requests: list[_SynthRequest] = []
-    schedule: list[tuple[float, list[_SynthRequest], list[_SynthRequest]]] = []
+    schedule: list[tuple[float, list[_SynthRequest], list[_DecodeShim]]] = []
     for index, row in enumerate(trace):
         req = _SynthRequest(
             request_id=f"r{index:04d}",
@@ -145,32 +162,34 @@ def build_schedule(
             ttft_slo_seconds=ttft_slo_seconds,
         )
         requests.append(req)
-        schedule.append((req.arrival_time, [], []))
-    schedule.clear()
-    last_event = 0.0
     for index, req in enumerate(requests):
-        # At each request arrival, recompute who is still waiting vs. who is
-        # actively decoding. The simplified model assumes each request
-        # finishes prefill immediately upon arrival (so all old waiting
-        # requests move to decode), and each decode request emits one token
-        # per ``tbt_slo_seconds`` since its decode_started_at.
-        waiting: list[_SynthRequest] = [req]
-        decode: list[_SynthRequest] = []
-        for other in requests[:index]:
+        # At each arrival, retain every request inside the explicit synthetic
+        # Prefill hold window. This creates multi-request Prefill queues for
+        # policy-diversity stress without pretending to reproduce vLLM timing.
+        # Older requests emit one Decode token per TBT interval.
+        waiting: list[_SynthRequest] = []
+        decode: list[_DecodeShim] = []
+        for other in requests[: index + 1]:
+            decode_started = (
+                other.arrival_time + synthetic_prefill_hold_seconds
+            )
+            if req.arrival_time < decode_started:
+                waiting.append(other)
+                continue
             tokens_so_far = int(
-                (req.arrival_time - other.arrival_time) / tbt_slo_seconds
-            ) if req.arrival_time > other.arrival_time else 0
+                (req.arrival_time - decode_started) / tbt_slo_seconds
+            )
             if tokens_so_far >= assumed_output_tokens:
                 continue  # already finished
-            decode_started = other.arrival_time  # prefill done instantly
+            # This field is the next-token deadline, matching the production
+            # ObligationLedger, rather than an assumed full-output deadline.
             tbt_deadline = decode_started + (
-                assumed_output_tokens * tbt_slo_seconds
+                (tokens_so_far + 1) * tbt_slo_seconds
             )
             decode.append(
                 _DecodeShim(other, tbt_deadline, decode_started, tokens_so_far)
             )
         schedule.append((req.arrival_time, waiting, decode))
-        last_event = req.arrival_time
     return schedule
 
 
@@ -324,12 +343,14 @@ def run_harness(
     ttft_slo_seconds: float,
     tbt_slo_seconds: float,
     assumed_output_tokens: int,
+    synthetic_prefill_hold_seconds: float,
 ) -> dict[str, Any]:
     schedule = build_schedule(
         trace,
         assumed_output_tokens=assumed_output_tokens,
         ttft_slo_seconds=ttft_slo_seconds,
         tbt_slo_seconds=tbt_slo_seconds,
+        synthetic_prefill_hold_seconds=synthetic_prefill_hold_seconds,
     )
     resolver = RidgeBudgetResolver(predictor=predictor, settings=settings)
     generator = CandidateGenerator(settings, budget_resolver=resolver)
@@ -337,7 +358,11 @@ def run_harness(
     resolutions: list[BudgetResolution] = []
     raw_counts: list[int] = []
     dedup_counts: list[int] = []
-    distinct_budget_counts: list[int] = []
+    distinct_actual_prefill_total_counts: list[int] = []
+    distinct_multiplier_budget_counts: list[int] = []
+    distinct_canonical_plan_counts: list[int] = []
+    policy_diverse_multiplier_counts: list[int] = []
+    allocation_count_by_multiplier: Counter[int] = Counter()
     candidate_budget_samples: list[tuple[int, ...]] = []
     v2_budget_samples: list[list[int]] = []
     multiplier_selections: Counter[str] = Counter()
@@ -345,7 +370,7 @@ def run_harness(
     template_winners: Counter[str] = Counter()
     decode_count_distribution: list[int] = []
     backlog_distribution: list[int] = []
-    distinct_budget_count_histogram: Counter[int] = Counter()
+    distinct_actual_prefill_total_count_histogram: Counter[int] = Counter()
     skipped_empty = 0
 
     for index, (timestamp, waiting, decode) in enumerate(schedule):
@@ -379,8 +404,17 @@ def run_harness(
         raw_counts.append(diag.raw_candidate_count)
         dedup_counts.append(diag.deduplicated_candidate_count)
         budget_values = diag.candidate_budget_values
-        distinct_budget_counts.append(len(budget_values))
-        distinct_budget_count_histogram[len(budget_values)] += 1
+        distinct_actual_prefill_total_counts.append(len(budget_values))
+        distinct_actual_prefill_total_count_histogram[len(budget_values)] += 1
+        distinct_multiplier_budget_counts.append(len(diag.multiplier_budgets))
+        distinct_canonical_plan_counts.append(diag.deduplicated_candidate_count)
+        allocation_counts = tuple(
+            count for _, count in diag.distinct_allocations_by_multiplier
+        )
+        policy_diverse_multiplier_counts.append(
+            sum(count > 1 for count in allocation_counts)
+        )
+        allocation_count_by_multiplier.update(allocation_counts)
         candidate_budget_samples.append(budget_values)
         v2_budget_samples.append(v2_budgets(snapshot))
 
@@ -405,9 +439,23 @@ def run_harness(
         "resolution_summary": resolution_summary,
         "raw_candidate_count": summary_stats(raw_counts),
         "deduplicated_candidate_count": summary_stats(dedup_counts),
-        "distinct_budget_count_per_frame": summary_stats(distinct_budget_counts),
-        "distinct_budget_count_histogram": counter_to_dict(
-            distinct_budget_count_histogram
+        "distinct_actual_prefill_token_total_count_per_frame": summary_stats(
+            distinct_actual_prefill_total_counts
+        ),
+        "distinct_actual_prefill_token_total_count_histogram": counter_to_dict(
+            distinct_actual_prefill_total_count_histogram
+        ),
+        "distinct_multiplier_budget_count_per_frame": summary_stats(
+            distinct_multiplier_budget_counts
+        ),
+        "distinct_canonical_plan_count_per_frame": summary_stats(
+            distinct_canonical_plan_counts
+        ),
+        "policy_diverse_multiplier_count_per_frame": summary_stats(
+            policy_diverse_multiplier_counts
+        ),
+        "distinct_allocations_per_multiplier_histogram": counter_to_dict(
+            allocation_count_by_multiplier
         ),
         "candidate_budget_pool": counter_to_dict(
             Counter(_budget for sample in candidate_budget_samples for _budget in sample)
@@ -456,6 +504,11 @@ def counter_to_dict(counter: Counter) -> dict[str, Any]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/dgx_spark_experiment.yaml"),
+    )
+    parser.add_argument(
         "--trace",
         required=True,
         type=Path,
@@ -493,6 +546,15 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=ASSUMED_OUTPUT_TOKENS,
     )
+    parser.add_argument(
+        "--synthetic-prefill-hold-seconds",
+        type=float,
+        default=DEFAULT_SYNTHETIC_PREFILL_HOLD_SECONDS,
+        help=(
+            "Diagnostic-only time each request remains in the synthetic "
+            "Prefill queue; this is not a measured vLLM duration"
+        ),
+    )
     parser.add_argument("--output", type=Path, default=None)
     return parser.parse_args()
 
@@ -510,7 +572,8 @@ def main() -> int:
     predictor = RidgeDurationPredictor.from_artifact(
         args.predictor_artifact, ood_uncertainty_coefficient=0.0
     )
-    settings = SchedulerSettings.provisional()
+    runtime = load_active_runtime(args.config)
+    settings = load_frozen_candidate_settings(runtime).settings
 
     report = run_harness(
         trace,
@@ -524,11 +587,14 @@ def main() -> int:
         ttft_slo_seconds=args.ttft_slo_seconds,
         tbt_slo_seconds=args.tbt_slo_seconds,
         assumed_output_tokens=args.assumed_output_tokens,
+        synthetic_prefill_hold_seconds=args.synthetic_prefill_hold_seconds,
     )
     report["trace_path"] = str(args.trace)
     report["trace_request_count"] = len(trace)
     report["predictor_artifact"] = str(args.predictor_artifact)
     report["predictor_version"] = predictor.predictor_version
+    report["config_path"] = str(runtime.config_path)
+    report["config_sha256"] = runtime.config_sha256
     report["settings"] = {
         "prefill_budget_multipliers": list(settings.prefill_budget_multipliers),
         "maximum_seed_candidates": settings.maximum_seed_candidates,
@@ -538,6 +604,14 @@ def main() -> int:
         "predictor_inversion_budget_grid": list(
             settings.predictor_inversion_budget_grid
         ),
+        "minimum_prefill_chunk_tokens": settings.minimum_prefill_chunk_tokens,
+        "completion_aware_tiering": settings.completion_aware_tiering,
+        "completion_aware_equal_score_policy": (
+            settings.completion_aware_equal_score_policy
+        ),
+        "completion_aware_order": list(settings.completion_aware_order),
+        "synthetic_prefill_hold_seconds": args.synthetic_prefill_hold_seconds,
+        "synthetic_prefill_hold_status": "diagnostic_assumption_not_measurement",
     }
 
     if args.output is not None:

@@ -245,32 +245,58 @@ class PrefillOrderingTests(unittest.TestCase):
         self.assertEqual(tuple(item.request_id for item in ordered), ("A", "B", "C"))
 
     def test_completion_aware_ordering(self) -> None:
-        # All three requests land in the same u<0.5 tier because their
-        # remaining_tokens are tiny relative to their slack. The intra-tier
+        # Equal urgency scores stay in the same relative tier. The intra-tier
         # sort then picks smallest-remaining-first.
         prefill = (
-            PrefillRequest("A", 0.0, 800, 0, ttft_deadline=10.0 + 10.0),
-            PrefillRequest("B", 0.0, 100, 0, ttft_deadline=10.0 + 10.0),
-            PrefillRequest("C", 0.0, 300, 0, ttft_deadline=10.0 + 10.0),
+            PrefillRequest("A", 0.0, 800, 0, ttft_deadline=18.0),
+            PrefillRequest("B", 0.0, 100, 0, ttft_deadline=11.0),
+            PrefillRequest("C", 0.0, 300, 0, ttft_deadline=13.0),
         )
         state = _snapshot(prefill=prefill, timestamp=10.0)
         ordered = rank_prefill_completion_aware(state)
         self.assertEqual(tuple(item.request_id for item in ordered), ("B", "C", "A"))
 
     def test_completion_aware_tier_priority(self) -> None:
-        # A is critical (u=1600 tokens/sec), B is normal (u=0.01).
-        # Critical tier must come before normal regardless of remaining_tokens.
+        # Six distinct urgency scores produce two requests in each relative
+        # tier. A shorter request in a lower tier must not jump a higher tier.
+        prefill = (
+            PrefillRequest("c1", 0.0, 100, 0, ttft_deadline=11.0),
+            PrefillRequest("c2", 0.0, 9, 0, ttft_deadline=10.1),
+            PrefillRequest("n1", 0.0, 70, 0, ttft_deadline=11.0),
+            PrefillRequest("n2", 0.0, 6, 0, ttft_deadline=10.1),
+            PrefillRequest("b1", 0.0, 30, 0, ttft_deadline=11.0),
+            PrefillRequest("b2", 0.0, 2, 0, ttft_deadline=10.1),
+        )
+        state = _snapshot(prefill=prefill, timestamp=10.0)
+        ordered = rank_prefill_completion_aware(state)
+        self.assertEqual(
+            tuple(item.request_id for item in ordered),
+            ("c2", "c1", "n2", "n1", "b2", "b1"),
+        )
+
+    def test_completion_aware_prefers_short_waiting_before_long_running(self) -> None:
+        # Both requests have the same urgency and therefore the same tier.
+        # Completion-aware prioritizes the shorter request; running-first is
+        # intentionally owned by the CONTINUATION policy.
         prefill = (
             PrefillRequest(
-                "A", 0.0, 800, 0, ttft_deadline=10.5
+                "long-running",
+                0.0,
+                2100,
+                100,
+                ttft_deadline=30.0,
+                is_running=True,
             ),
             PrefillRequest(
-                "B", 0.0, 1, 0, ttft_deadline=10.0 + 100.0
+                "short-waiting", 1.0, 100, 0, ttft_deadline=11.0
             ),
         )
         state = _snapshot(prefill=prefill, timestamp=10.0)
         ordered = rank_prefill_completion_aware(state)
-        self.assertEqual(tuple(item.request_id for item in ordered), ("A", "B"))
+        self.assertEqual(
+            tuple(item.request_id for item in ordered),
+            ("short-waiting", "long-running"),
+        )
 
     def test_continuation_ordering(self) -> None:
         prefill = (
@@ -430,6 +456,25 @@ class CandidateGeneratorLayoutTests(unittest.TestCase):
         self.assertGreaterEqual(diag.raw_candidate_count, len(plans))
         self.assertEqual(diag.deduplicated_candidate_count, len(plans))
         self.assertIn(0, diag.candidate_budget_values)
+        self.assertTrue(diag.multiplier_budgets)
+        self.assertTrue(diag.distinct_allocations_by_multiplier)
+
+    def test_diagnostic_counts_policy_allocations_per_multiplier(self) -> None:
+        prefill = (
+            PrefillRequest("old", 0.0, 100, 0, ttft_deadline=20.0),
+            PrefillRequest("urgent", 1.0, 100, 0, ttft_deadline=10.1),
+            PrefillRequest("short", 2.0, 20, 0, ttft_deadline=11.0),
+        )
+        state = _snapshot(prefill=prefill, timestamp=10.0, token_budget=512)
+        generator = CandidateGenerator(
+            SchedulerSettings.provisional(),
+            budget_resolver=self._resolver_with_base(base=100),
+        )
+        generator.generate(state)
+        diag = generator.last_diagnostic
+        self.assertIsNotNone(diag)
+        counts = dict(diag.distinct_allocations_by_multiplier)
+        self.assertTrue(any(count > 1 for count in counts.values()))
 
 
 # ---------------------------------------------------------------------------

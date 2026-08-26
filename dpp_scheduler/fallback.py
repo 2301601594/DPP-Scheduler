@@ -6,7 +6,6 @@ from dpp_scheduler.candidate_generator import (
     highest_bindable_prefill,
     project_kv_blocks,
     project_sequence_count,
-    rank_decode_requests,
 )
 from dpp_scheduler.contracts import (
     BatchPlan,
@@ -75,7 +74,24 @@ class DeterministicFallback:
         )
 
     def _build_decode(self, snapshot: StateSnapshot) -> FallbackResult:
-        ordered = rank_decode_requests(snapshot)
+        # Fallback owns an EDF Decode-only policy independently of the normal
+        # V3 Candidate Generator's all-Decode stable arrival order.
+        ordered = tuple(
+            sorted(
+                snapshot.active_decode_requests,
+                key=lambda request: (
+                    request.tbt_deadline is None,
+                    (
+                        request.tbt_deadline
+                        if request.tbt_deadline is not None
+                        else float("inf")
+                    ),
+                    request.arrival_time,
+                    request.ordinal,
+                    request.request_id,
+                ),
+            )
+        )
         limit = min(len(ordered), snapshot.token_budget)
         if limit <= 0:
             return FallbackResult(

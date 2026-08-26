@@ -34,13 +34,19 @@ Safe-Set, and DPP values are versioned. The remaining formal-gate inputs are a
 Recovery-age rule and measured replacements for the explicitly
 integration-only G4/DPP values if they are to support formal benchmark claims.
 
+For the user-requested Candidate Generator V3 engineering comparison, the
+segmented Predictor temporarily uses the explicit uncalibrated default
+`kappa_ood=0`. This mode is limited in code and configuration to
+`development_nonformal`; it does not complete G3 or make the comparison formal
+evidence.
+
 ## Gate sequence
 
 | Gate | Work | Required evidence |
 | --- | --- | --- |
 | G0 | Freeze environment, model, runtime, source, and trace identity | exact manifests, remote smoke, startup log, final SchedulerConfig/KV facts |
 | G1 | Stock natural-EOS baseline and event telemetry | verified TTFT/TBT event semantics, frozen SLO/Goodput definitions, resource/load calibration |
-| G2 | Contracts, Snapshot, exact-plan Adapter, Candidate Generator | immutable same-hash structures; at most 12 deterministic plans; selected plan equals actual execution |
+| G2 | Contracts, Snapshot, exact-plan Adapter, Candidate Generator | immutable same-hash structures; at most 16 deterministic V3 plans; selected plan equals actual execution |
 | G3 | Same-configuration profiling and offline model selection | held-out expected error, conservative P95 coverage/underprediction, support/OOD report, CPU overhead |
 | G4 | Safe-Set, Rolling KV, and Fallback | physical/Predictor feasibility with risk metadata retained for every candidate, deterministic fallback/liveness-preemption/empty-idle audit |
 | G5 | DPP and SLO ledger freeze | complete equation, units, numeric ranges, obligation boundaries, one owner for fallback, deterministic tie-break |
@@ -82,33 +88,15 @@ observing DPP test results.
 
 ### G2: Exact BatchPlan path
 
-Implement public immutable contracts and `snapshot_hash` validation. Generate
-`{ZERO,FINISH,KNEE,BINDABLE_MAX}` × `{MANDATORY,CRITICAL,ALL}`, canonically
-deduplicate, and use a deterministic temporary selector. `CRITICAL` uses only
-Snapshot slack and a frozen Critical Horizon; Predictor and Safe-Set run only
-after complete BatchPlans exist. Adapter execution is atomic: request IDs and
-token counts may not be reselected after the decision.
-
-Freeze Candidate parameters with
-`benchmarks/freeze_candidate_parameters.py`: Horizon uses only odd-seed Stock
-Decode-only development rows and official iteration durations; knee uses the
-independent `candidate_knee_profile_isolated_v2` campaign. Each target cell is
-prepared in isolation, executed as one Exact BatchPlan, timed at the official
-iteration boundary, then aborted and required to restore an empty queue and
-the baseline free-KV count before the next cell. The frozen sequence budget
-makes 64-Decode mixed cells infeasible, so the largest common mixed count is
-48. Likewise, the 2048-token Prefill cap is sampled only with Decode=0 because
-adding Decode work would exceed the frozen 2048-token iteration budget. Only
-Decode=0 rows select the base knee; mixed rows validate sensitivity.
-The measured freeze artifact is append-only. Any sparse Horizon bucket, knee
-cell with fewer than 4/5 exact realizations, cleanup failure, or failed knee
-rule leaves that artifact ineligible. The retained v1 artifact therefore
-remains negative evidence. At the user's explicit direction, no replacement
-Knee profiling is run: Scheduler integration instead uses the versioned
-`candidate_parameter_integration_freeze_v1` artifact with measured
-`critical_horizon_seconds=0.220` and the existing `knee_tokens=768`. Runtime
-loading is hash/signature checked, but this user-directed integration freeze is
-explicitly ineligible for formal DPP benchmark claims.
+Implement public immutable contracts, `snapshot_hash` validation, and atomic
+exact-plan execution. The active Candidate Generator is the slack-centered
+multiplier V3 defined in `docs/Candidate-Generator-V3.md`: all active Decode is
+retained, Predictor inversion supplies the Prefill search center, and at most
+16 deterministic ZERO/multiplier/allocation-policy plans are canonically
+deduplicated. Predictor and Safe-Set evaluate the complete plans after
+generation. Request IDs and token counts may not be reselected after the
+decision. The retained earlier Horizon/Knee freeze artifacts remain historical
+negative or integration evidence and are not V3 decision inputs.
 
 ### G3: Predictor
 
@@ -128,6 +116,10 @@ matched the locked-vLLM official timing. Online calibration did not meet every
 effectiveness criterion: Decode-only and Mixed missed 95% conservative
 coverage, while Prefill-only slightly worsened expected MAE. This negative
 result is retained; the Predictor is accepted for modular integration.
+The later segmented Mixed candidate also missed its predeclared 95%
+conservative-coverage criterion. Its use with the explicit `kappa_ood=0`
+development default is therefore diagnostic only and does not supersede that
+negative result.
 
 ### G4: Safety
 

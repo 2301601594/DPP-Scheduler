@@ -27,6 +27,16 @@ class SchedulerSettings:
         2048,
     )
     stable_tie_key: str = "request_id"
+    completion_aware_tiering: str = "relative_urgency_tertiles"
+    completion_aware_equal_score_policy: str = "same_tier_at_first_rank"
+    completion_aware_order: tuple[str, ...] = (
+        "relative_urgency_tier",
+        "remaining_tokens",
+        "running_before_waiting",
+        "arrival_time",
+        "ordinal",
+        "request_id",
+    )
     allow_partial_prefill: bool = True
     minimum_prefill_chunk_tokens: int = 1
     frozen: bool = True
@@ -38,6 +48,24 @@ class SchedulerSettings:
             )
         if self.maximum_seed_candidates != 16:
             raise ValueError("maximum_seed_candidates is fixed at 16")
+        if self.completion_aware_tiering != "relative_urgency_tertiles":
+            raise ValueError(
+                "completion_aware_tiering must be relative_urgency_tertiles"
+            )
+        if self.completion_aware_equal_score_policy != "same_tier_at_first_rank":
+            raise ValueError(
+                "completion_aware_equal_score_policy must be "
+                "same_tier_at_first_rank"
+            )
+        if self.completion_aware_order != (
+            "relative_urgency_tier",
+            "remaining_tokens",
+            "running_before_waiting",
+            "arrival_time",
+            "ordinal",
+            "request_id",
+        ):
+            raise ValueError("completion_aware_order does not match the v3 contract")
         margin = self.predictor_inversion_safety_margin_seconds
         if (
             isinstance(margin, bool)
@@ -113,11 +141,32 @@ class SchedulerSettings:
                 "candidate_generator.predictor_inversion_budget_grid must be a list"
             )
         grid = tuple(int(item) for item in grid_raw)
+        tiering = value.get("completion_aware_tiering")
+        if not isinstance(tiering, str):
+            raise ValueError(
+                "candidate_generator.completion_aware_tiering must be a string"
+            )
+        equal_score_policy = value.get("completion_aware_equal_score_policy")
+        if not isinstance(equal_score_policy, str):
+            raise ValueError(
+                "candidate_generator.completion_aware_equal_score_policy "
+                "must be a string"
+            )
+        order_raw = value.get("completion_aware_order")
+        if not isinstance(order_raw, list) or not all(
+            isinstance(item, str) for item in order_raw
+        ):
+            raise ValueError(
+                "candidate_generator.completion_aware_order must be a list of strings"
+            )
         return cls(
             prefill_budget_multipliers=tuple(float(item) for item in multipliers),
             maximum_seed_candidates=maximum,
             predictor_inversion_safety_margin_seconds=float(margin),
             predictor_inversion_budget_grid=grid,
+            completion_aware_tiering=tiering,
+            completion_aware_equal_score_policy=equal_score_policy,
+            completion_aware_order=tuple(order_raw),
             minimum_prefill_chunk_tokens=minimum_prefill,
             frozen=frozen,
         )
@@ -314,6 +363,7 @@ class PredictorSettings:
     parameter_status: str = "provisional_pending_held_out_ood_calibration"
     calibration_artifact_path: str | None = None
     calibration_artifact_sha256: str | None = None
+    development_default_acknowledged: bool = False
 
     def __post_init__(self) -> None:
         value = self.ood_uncertainty_coefficient
@@ -328,6 +378,7 @@ class PredictorSettings:
             "provisional_pending_held_out_ood_calibration",
             "frozen_from_held_out_ood_calibration",
             "frozen_from_development_held_out_ood_calibration",
+            "fixed_default_for_development_nonformal_comparison",
         }:
             raise ValueError("unknown OOD uncertainty parameter status")
         if self.parameter_status in {
@@ -339,12 +390,34 @@ class PredictorSettings:
             or len(self.calibration_artifact_sha256) != 64
         ):
             raise ValueError("frozen OOD uncertainty artifact path/hash is incomplete")
+        if self.parameter_status == (
+            "fixed_default_for_development_nonformal_comparison"
+        ):
+            if value != 0.0:
+                raise ValueError("development default OOD coefficient must be zero")
+            if not self.development_default_acknowledged:
+                raise ValueError("development default OOD mode requires acknowledgement")
+            if self.calibration_artifact_path or self.calibration_artifact_sha256:
+                raise ValueError(
+                    "development default OOD mode must not claim a calibration artifact"
+                )
+        elif self.development_default_acknowledged:
+            raise ValueError(
+                "development default acknowledgement requires development default status"
+            )
+
+    @property
+    def uses_development_default(self) -> bool:
+        return self.parameter_status == (
+            "fixed_default_for_development_nonformal_comparison"
+        )
 
     @property
     def live_v2_ready(self) -> bool:
         return self.parameter_status in {
             "frozen_from_held_out_ood_calibration",
             "frozen_from_development_held_out_ood_calibration",
+            "fixed_default_for_development_nonformal_comparison",
         }
 
     @classmethod
@@ -366,6 +439,9 @@ class PredictorSettings:
             ),
             calibration_artifact_sha256=extrapolation.get(
                 "calibration_artifact_sha256"
+            ),
+            development_default_acknowledged=(
+                extrapolation.get("development_default_acknowledged") is True
             ),
         )
 

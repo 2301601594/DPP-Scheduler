@@ -1,5 +1,36 @@
 # Active research decisions
 
+## 2026-08-26: permit an uncalibrated Predictor default for one development comparison
+
+- At the user's direction, the active segmented Predictor uses
+  `kappa_ood=0` without OOD calibration so the Candidate Generator V3 can be
+  exercised immediately against Stock.
+- The status is `fixed_default_for_development_nonformal_comparison`, not
+  frozen or calibrated. The mode requires an explicit acknowledgement in the
+  active config, carries no OOD artifact, and is accepted only when
+  `DPP_EXECUTION_SCOPE=development_nonformal`.
+- Formal execution remains fail-closed. Results produced in this mode are
+  single-seed engineering diagnostics and cannot establish Predictor
+  effectiveness, G3/G7 completion, or a formal Scheduler claim.
+
+## 2026-08-26: use relative urgency tertiles in Candidate Generator V3
+
+- `COMPLETION_AWARE` no longer compares the dimensional
+  `remaining_tokens / TTFT_slack_seconds` score with fixed `0.5/1.0`
+  thresholds. The score remains valid for relative ordering, and the current
+  Snapshot is split by descending empirical rank into top, middle, and bottom
+  urgency thirds.
+- Tier boundaries are `ceil(n/3)` and `ceil(2n/3)`. Equal scores stay together
+  in the tier of their first descending rank.
+- Within a tier, smaller remaining Prefill work precedes running status, then
+  arrival time, ordinal, and request ID. Strong running-first behavior remains
+  the responsibility of `CONTINUATION`.
+- Candidate diagnostics separately report multiplier-budget diversity,
+  canonical-plan diversity, and per-multiplier allocation diversity. Synthetic
+  diagnostics use next-token TBT deadlines and an explicit non-measured
+  Prefill hold interval; they do not establish real-vLLM workload behavior.
+- The complete active contract is indexed in `docs/Candidate-Generator-V3.md`.
+
 ## 2026-08-21: adopt the Qwen3-14B modular BatchPlan DPP design
 
 - The authoritative Scheduler design is

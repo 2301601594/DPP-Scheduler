@@ -1,0 +1,159 @@
+{
+  "baseline": {
+    "artifact_manifest_sha256": "50bf60d3e09c1c8ff65982af251d0e1d6377a4c0f95de80c905f05f01cbaa8ad",
+    "metrics_on_common_support": {
+      "base_mae_seconds": 0.017013519074316853,
+      "conservative_coverage": 0.9252336448598131,
+      "mae_seconds": 0.01747811832278049,
+      "mape": 0.08273127240423404,
+      "mean_error_seconds": -0.0003942139322145806,
+      "median_absolute_percentage_error": 0.06391579062721026,
+      "p95_absolute_percentage_error": 0.20621067556164713,
+      "rmse_seconds": 0.021396377215194204,
+      "rows": 214,
+      "underprediction_rate": 0.5560747663551402
+    },
+    "predictor_version": "qwen3-14b-ridge-mixed-decode-three-segment-online-v2"
+  },
+  "by_decode_segment": {
+    "decode_17_64": {
+      "baseline": {
+        "base_mae_seconds": 0.020391873263317352,
+        "conservative_coverage": 0.8409090909090909,
+        "mae_seconds": 0.020856790461406396,
+        "mape": 0.06449907328542752,
+        "mean_error_seconds": -0.0032313367898324976,
+        "median_absolute_percentage_error": 0.05354809187578348,
+        "p95_absolute_percentage_error": 0.18888812337079477,
+        "rmse_seconds": 0.025004142341146868,
+        "rows": 88,
+        "underprediction_rate": 0.5454545454545454
+      },
+      "candidate": {
+        "base_mae_seconds": 0.02011646578339032,
+        "conservative_coverage": 0.875,
+        "mae_seconds": 0.020463883407013328,
+        "mape": 0.06318466532414892,
+        "mean_error_seconds": -0.0027058568747439964,
+        "median_absolute_percentage_error": 0.05046719221615416,
+        "p95_absolute_percentage_error": 0.19273535648469903,
+        "rmse_seconds": 0.024583835778385302,
+        "rows": 88,
+        "underprediction_rate": 0.5340909090909091
+      }
+    },
+    "decode_1_4": {
+      "baseline": {
+        "base_mae_seconds": 0.01538894978332024,
+        "conservative_coverage": 1.0,
+        "mae_seconds": 0.015514478268399032,
+        "mape": 0.10682199966044698,
+        "mean_error_seconds": 0.005352410136309418,
+        "median_absolute_percentage_error": 0.09176019064161416,
+        "p95_absolute_percentage_error": 0.20621067556164713,
+        "rmse_seconds": 0.018628029125855313,
+        "rows": 53,
+        "underprediction_rate": 0.5471698113207547
+      },
+      "candidate": {
+        "base_mae_seconds": 0.014670150800540644,
+        "conservative_coverage": 1.0,
+        "mae_seconds": 0.014374330834248506,
+        "mape": 0.0970205040622652,
+        "mean_error_seconds": 0.0067641741709697,
+        "median_absolute_percentage_error": 0.063358315363908,
+        "p95_absolute_percentage_error": 0.21494667083511002,
+        "rmse_seconds": 0.01838654462721727,
+        "rows": 53,
+        "underprediction_rate": 0.49056603773584906
+      }
+    },
+    "decode_5_16": {
+      "baseline": {
+        "base_mae_seconds": 0.014120464331724751,
+        "conservative_coverage": 0.9726027397260274,
+        "mae_seconds": 0.01483085496227553,
+        "mape": 0.08721928579979141,
+        "mean_error_seconds": -0.0011463271399049266,
+        "median_absolute_percentage_error": 0.06369692189296473,
+        "p95_absolute_percentage_error": 0.2145307667084726,
+        "rmse_seconds": 0.018342573176622003,
+        "rows": 73,
+        "underprediction_rate": 0.5753424657534246
+      },
+      "candidate": {
+        "base_mae_seconds": 0.014598428040001454,
+        "conservative_coverage": 0.958904109589041,
+        "mae_seconds": 0.015205608334249743,
+        "mape": 0.09243045631629032,
+        "mean_error_seconds": -0.001970404182346636,
+        "median_absolute_percentage_error": 0.07317121841932192,
+        "p95_absolute_percentage_error": 0.24252876482247165,
+        "rmse_seconds": 0.01875897309259102,
+        "rows": 73,
+        "underprediction_rate": 0.5616438356164384
+      }
+    }
+  },
+  "candidate": {
+    "artifact_manifest_sha256": "33c1ba92add0faaabe67600f02eac24260485727cffdbdee55b69b25aa8dedc3",
+    "metrics_on_common_support": {
+      "base_mae_seconds": 0.016885290786388358,
+      "conservative_coverage": 0.9345794392523364,
+      "mae_seconds": 0.01716201253473166,
+      "mape": 0.08154093726595492,
+      "mean_error_seconds": -0.00010959663190365417,
+      "median_absolute_percentage_error": 0.05838117402364237,
+      "p95_absolute_percentage_error": 0.21425937301481698,
+      "rmse_seconds": 0.0212671257910236,
+      "rows": 214,
+      "underprediction_rate": 0.5327102803738317
+    },
+    "predictor_version": "qwen3-14b-ridge-mixed-decode-three-segment-cross-online-v3"
+  },
+  "common_support_rows": 214,
+  "diagnostic_decode48_prefill_at_most64": {
+    "baseline": {
+      "base_mae_seconds": 0.023065801826869767,
+      "conservative_coverage": 0.6470588235294118,
+      "mae_seconds": 0.02393265053035624,
+      "mape": 0.07784408103456976,
+      "mean_error_seconds": -0.018160024892377117,
+      "median_absolute_percentage_error": 0.07210504391088934,
+      "p95_absolute_percentage_error": 0.19668981461096902,
+      "rmse_seconds": 0.026539653963099916,
+      "rows": 34,
+      "underprediction_rate": 0.8529411764705882
+    },
+    "candidate": {
+      "base_mae_seconds": 0.022823000059561824,
+      "conservative_coverage": 0.7352941176470589,
+      "mae_seconds": 0.023450435514681896,
+      "mape": 0.07620088098631465,
+      "mean_error_seconds": -0.017503787874056636,
+      "median_absolute_percentage_error": 0.06915958112733009,
+      "p95_absolute_percentage_error": 0.19673088655145574,
+      "rmse_seconds": 0.026089647583828805,
+      "rows": 34,
+      "underprediction_rate": 0.8529411764705882
+    },
+    "rows": 34
+  },
+  "interpretation_constraint": "A fresh unused seed is required before adoption or an independent claim.",
+  "mixed_rows": 236,
+  "no_new_remote_benchmark": true,
+  "relative_change_candidate_vs_baseline": {
+    "base_mae_seconds": -0.0075368468667992294,
+    "mae_seconds": -0.01808580204179233,
+    "mape": -0.014387970880745282,
+    "p95_absolute_percentage_error": 0.039031429538009865,
+    "rmse_seconds": -0.006040808818738697
+  },
+  "run_id": "mixed_decode_three_segment_n200_source_3002_recipe_5001",
+  "schema_version": 1,
+  "support": {
+    "baseline_out_of_support_rows": 22,
+    "candidate_out_of_support_rows": 22
+  },
+  "validation_role": "post_hoc_development_replay_existing_n200_data_used_to_motivate_features"
+}

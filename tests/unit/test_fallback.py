@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import unittest
 
 from benchmarks.qwen3_runtime import (
@@ -263,18 +262,36 @@ class FallbackIntegrationTests(unittest.TestCase):
         runtime = load_active_runtime(REPOSITORY_ROOT / ACTIVE_CONFIG_RELATIVE)
         candidate = load_frozen_candidate_settings(runtime)
         fallback = load_fallback_settings(runtime)
-        self.assertEqual(candidate.settings.critical_horizon_seconds, 0.22)
-        self.assertEqual(candidate.settings.prefill_knee_tokens, 768)
+        self.assertEqual(
+            candidate.settings.prefill_budget_multipliers,
+            (0.50, 0.75, 1.00, 1.25, 1.50),
+        )
+        self.assertEqual(candidate.settings.maximum_seed_candidates, 16)
+        self.assertEqual(
+            candidate.settings.completion_aware_tiering,
+            "relative_urgency_tertiles",
+        )
         self.assertEqual(fallback.minimum_prefill_chunk_tokens, 6)
 
     def test_live_scheduler_factory_wires_fallback(self) -> None:
-        source = inspect.getsource(get_modular_scheduler_class)
+        scheduler_cls = get_modular_scheduler_class()
+        self.assertEqual(scheduler_cls.__name__, "ModularDPPScheduler")
+        source = (REPOSITORY_ROOT / "dpp_scheduler/vllm_adapter.py").read_text(
+            encoding="utf-8"
+        )
+        update_source = source[source.index("        def update_from_output(") :]
         self.assertIn("resolve_fallback", source)
         self.assertIn("_dpp_fallback", source)
-        self.assertIn("skip_predictor_update", source)
+        self.assertIn("skip_predictor_update", update_source)
         self.assertLess(
-            source.index('if pending["skip_predictor_update"]'),
-            source.index('actual_duration = pending["actual_duration_seconds"]'),
+            update_source.index(
+                'actual_duration = pending["actual_duration_seconds"]'
+            ),
+            update_source.index('if pending["skip_predictor_update"]'),
+        )
+        self.assertLess(
+            update_source.index('if pending["skip_predictor_update"]'),
+            update_source.index("self._dpp_predictor.observe_actual"),
         )
 
 
