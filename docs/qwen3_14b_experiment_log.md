@@ -131,8 +131,8 @@
   `gpu_memory_utilization=0.90`, did not honor the recorded generation seed,
   and recorded dispatch timing after completion. Its scripts, draft traces,
   are removed from current tooling and none of its latency observations are
-  active evidence. Its ignored raw outputs remain preserved as invalid
-  historical evidence and are excluded from all active inputs.
+  active evidence. Its ignored raw outputs were removed during the explicit
+  2026-08-25 results cleanup and are excluded from all active inputs.
 
 ## 2026-08-22 — Shared runtime parameters fixed at 0.84 GPU utilization
 
@@ -227,3 +227,42 @@
   - 0.30
 - Updated `configs/dgx_spark_experiment.yaml` and
   `docs/experiment_plan.md`.
+
+## 2026-08-25 — conservative local results cleanup
+
+- Added `results/README.md` to separate active raw evidence, reproducible
+  derived datasets, and reviewed processed summaries.
+- Removed the retired `shared_scan*` raw namespaces. These records used the
+  rejected 0.90 GPU-memory setting, incorrect dispatch timing, or an unfrozen
+  seed and were already excluded from every active input.
+- Removed the superseded `g0_config_probe`, `g0_stock_capture_20260822`, and
+  `g0_stock_capture_final` local namespaces. The authoritative 0.84 capture
+  remains `g0_stock_capture_084` and is unchanged.
+- Removed the reproducible
+  `dpp_v2_phase_a_tie_analysis_v1/phase_a_report.json` and
+  `dpp_v2_phase_a1_tiebreak_analysis_v1/phase_a1_frame_changes.jsonl`; their
+  source diagnostic run and analysis scripts remain available. The compact
+  reviewed Phase A.1 report remains version controlled.
+- No Predictor source run, training/split dataset, valid or failed Scheduler
+  run, negative result, current DPP v2/v2.1 source evidence, trace manifest, or
+  frozen artifact was deleted. No remote result was changed.
+
+## 2026-08-25 — reject and repair mis-scoped 300-request DPP pair
+
+- Campaign
+  `20260825T140656Z_scheduler_pair_n300_qps0p25_seed1001` completed its Stock
+  run, but the DPP EngineCore failed before serving requests. The runner marked
+  a complete development-trace run as `formal`, so the development-only v2
+  artifact gate correctly rejected startup.
+- Fixed `benchmarks/run_stock_natural_eos.py` to derive DPP execution scope from
+  both trace scope and request truncation. A development trace is always
+  `development_nonformal`; only a complete active-frozen-trace run requests
+  formal artifacts. The artifact validator was not weakened.
+- The failed DPP record and completed Stock record remain append-only, but the
+  campaign is invalid for comparison. A repaired DPP run cannot be paired with
+  the old Stock run because the root source/dirty identity changed; both
+  policies must be rerun under one new timestamped campaign.
+- Remote regression test `test_qwen3_runner.py` passed 12/12. An exact DPP
+  retry dry-run resolved 300 requests, QPS 0.25, seed 1001, and
+  `DPP_EXECUTION_SCOPE=development_nonformal` without enabling detailed
+  iteration logging.

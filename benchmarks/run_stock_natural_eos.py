@@ -56,6 +56,27 @@ DPP_DIAGNOSTIC_AGGREGATE_PATH_ENV = "DPP_DIAGNOSTIC_AGGREGATE_PATH"
 DPP_EXECUTION_SCOPE_ENV = "DPP_EXECUTION_SCOPE"
 
 
+def resolve_execution_scope(
+    *, policy: str, comparison_scope: str, diagnostic_prefix: bool
+) -> str:
+    """Derive the live Scheduler gate from trace and request scope.
+
+    A complete run over a development-only trace is still non-formal. Request
+    truncation also makes a DPP run diagnostic-only, even when its source trace
+    is frozen. Only a complete DPP run over the active frozen trace may request
+    formal artifacts.
+    """
+    if policy == "stock":
+        return "stock"
+    if policy != "dpp":
+        raise ValueError(f"unsupported Scheduler policy: {policy!r}")
+    if comparison_scope not in {"active_frozen_trace", "development_nonformal"}:
+        raise ValueError(f"unsupported comparison scope: {comparison_scope!r}")
+    if diagnostic_prefix or comparison_scope == "development_nonformal":
+        return "development_nonformal"
+    return "formal"
+
+
 def _atomic_json(path: Path, payload: Any) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     with temporary.open("w", encoding="utf-8") as stream:
@@ -605,12 +626,10 @@ def main() -> int:
         campaign_id=args.campaign_id,
         comparison_scope=comparison_scope,
     )
-    execution_scope = (
-        "stock"
-        if args.policy == "stock"
-        else "development_nonformal"
-        if args.request_limit is not None
-        else "formal"
+    execution_scope = resolve_execution_scope(
+        policy=args.policy,
+        comparison_scope=comparison_scope,
+        diagnostic_prefix=args.request_limit is not None,
     )
     preview["runner_env_overrides"][DPP_EXECUTION_SCOPE_ENV] = execution_scope
     if args.policy == "dpp":

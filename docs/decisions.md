@@ -161,3 +161,15 @@ No implementation may resolve these differences implicitly.
 - Downloading or transferring Qwen3-14B is a separate bulk operation requiring
   an immutable revision, source/size/storage review, and user confirmation of
   operator approval. This documentation migration does not authorize it.
+
+## 2026-08-25: remove only explicitly obsolete local result residue
+
+- Local result cleanup is limited to the retired `shared_scan*` namespaces,
+  superseded pre-0.84 G0 captures, and reproducible large Phase A intermediate
+  outputs.
+- The authoritative `g0_stock_capture_084` record, Predictor datasets and
+  source runs, Scheduler runs including failures and negative outcomes, current
+  raw DPP diagnostics, frozen artifacts, and all remote copies remain
+  unchanged.
+- Future cleanup follows `results/README.md`: size, failure, or a negative
+  conclusion alone is never a deletion criterion.

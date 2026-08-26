@@ -20,6 +20,7 @@ from benchmarks.run_stock_natural_eos import (
     _token_count,
     build_request_payload,
     load_trace,
+    resolve_execution_scope,
     verify_trace_manifest,
 )
 from dpp_scheduler import contracts
@@ -57,6 +58,42 @@ class Qwen3RuntimeTests(unittest.TestCase):
         self.assertEqual(dpp[: len(stock)], stock)
         self.assertEqual(
             dpp[len(stock) :], ["--scheduler-cls", MODULAR_DPP_SCHEDULER_CLASS]
+        )
+
+    def test_dpp_development_trace_cannot_request_formal_artifacts(self) -> None:
+        self.assertEqual(
+            resolve_execution_scope(
+                policy="dpp",
+                comparison_scope="development_nonformal",
+                diagnostic_prefix=False,
+            ),
+            "development_nonformal",
+        )
+
+    def test_only_complete_frozen_trace_dpp_run_is_formal(self) -> None:
+        self.assertEqual(
+            resolve_execution_scope(
+                policy="dpp",
+                comparison_scope="active_frozen_trace",
+                diagnostic_prefix=False,
+            ),
+            "formal",
+        )
+        self.assertEqual(
+            resolve_execution_scope(
+                policy="dpp",
+                comparison_scope="active_frozen_trace",
+                diagnostic_prefix=True,
+            ),
+            "development_nonformal",
+        )
+        self.assertEqual(
+            resolve_execution_scope(
+                policy="stock",
+                comparison_scope="active_frozen_trace",
+                diagnostic_prefix=False,
+            ),
+            "stock",
         )
 
     def test_engine_core_setup_links_scheduler_and_config_loader(self) -> None:
