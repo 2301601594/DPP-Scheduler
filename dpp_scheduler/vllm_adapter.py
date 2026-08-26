@@ -986,6 +986,7 @@ def get_modular_scheduler_class() -> type:
     from vllm.logger import init_logger
     from vllm.v1.core.sched.scheduler import Scheduler
 
+    from dpp_scheduler.budget_resolver import RidgeBudgetResolver
     from dpp_scheduler.candidate_generator import CandidateGenerator
     from dpp_scheduler.consequence_estimator import ConsequenceEstimator
     from dpp_scheduler.dpp_selector import DPPSelector
@@ -1074,18 +1075,27 @@ def get_modular_scheduler_class() -> type:
                 obligation_ledger=self._dpp_obligation_ledger,
                 critical_horizon_seconds=None,
             )
-            self._dpp_generator = CandidateGenerator(candidate.settings)
-            self._dpp_consequence_estimator = ConsequenceEstimator()
-            self._dpp_safe_set = ResourceAndRiskSafeSet(safe_set_settings)
-            self._dpp_fallback = DeterministicFallback(fallback_settings)
-            self._dpp_selector = DPPSelector(dpp_settings)
-            self._dpp_state_store = InMemoryStateStore(settings=dpp_settings)
+            # Predictor must be constructed before the Candidate Generator so
+            # the slack-centered BudgetResolver can be injected.
             self._dpp_predictor = RidgeDurationPredictor.from_artifact(
                 predictor.artifact_root,
                 ood_uncertainty_coefficient=(
                     predictor_settings.ood_uncertainty_coefficient
                 ),
             )
+            self._dpp_budget_resolver = RidgeBudgetResolver(
+                predictor=self._dpp_predictor,
+                settings=candidate.settings,
+            )
+            self._dpp_generator = CandidateGenerator(
+                candidate.settings,
+                budget_resolver=self._dpp_budget_resolver,
+            )
+            self._dpp_consequence_estimator = ConsequenceEstimator()
+            self._dpp_safe_set = ResourceAndRiskSafeSet(safe_set_settings)
+            self._dpp_fallback = DeterministicFallback(fallback_settings)
+            self._dpp_selector = DPPSelector(dpp_settings)
+            self._dpp_state_store = InMemoryStateStore(settings=dpp_settings)
             if (
                 diagnostics_settings.performance_logging_enable_env
                 != DPP_DIAGNOSTIC_ITERATION_LOG_ENV
@@ -1409,6 +1419,37 @@ def get_modular_scheduler_class() -> type:
                 "skip_predictor_update": skip_predictor_update,
             }
 
+        def _dpp_candidate_generator_diagnostic(self) -> dict[str, Any]:
+            """Surface Candidate Generator slack-centered summary in the log.
+
+            Reads ``self._dpp_generator.last_diagnostic`` and emits the new
+            v3 fields. Returns an empty dict when no generator diagnostic is
+            available (e.g. generator has not yet produced any plans).
+            """
+            diagnostic = getattr(self._dpp_generator, "last_diagnostic", None)
+            if diagnostic is None:
+                return {
+                    "base_prefill_budget": None,
+                    "budget_resolution_status": None,
+                    "target_duration_seconds": None,
+                    "candidate_count_before_dedup": None,
+                    "candidate_count_after_dedup": None,
+                    "candidate_budget_values": (),
+                }
+            resolution = diagnostic.resolution
+            return {
+                "base_prefill_budget": int(resolution.base_prefill_budget),
+                "budget_resolution_status": resolution.resolution_status,
+                "target_duration_seconds": resolution.target_duration_seconds,
+                "candidate_count_before_dedup": int(diagnostic.raw_candidate_count),
+                "candidate_count_after_dedup": int(
+                    diagnostic.deduplicated_candidate_count
+                ),
+                "candidate_budget_values": tuple(
+                    int(value) for value in diagnostic.candidate_budget_values
+                ),
+            }
+
         def _dpp_record_schedule_diagnostic(
             self,
             *,
@@ -1631,6 +1672,7 @@ def get_modular_scheduler_class() -> type:
                         fallback_result.reason if fallback_result else None
                     ),
                     "scheduler_cpu_seconds": scheduler_cpu_seconds,
+                    **self._dpp_candidate_generator_diagnostic(),
                 },
             )
             if record["watchdog_triggered"]:

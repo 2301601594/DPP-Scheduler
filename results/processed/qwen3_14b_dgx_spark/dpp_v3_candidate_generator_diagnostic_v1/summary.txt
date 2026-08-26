@@ -1,0 +1,41 @@
+  frames_simulated: 200
+  frames_with_workload: 200
+  frames_skipped_empty: 0
+  trace_request_count: 200
+  predictor_artifact: predictors/qwen3_14b/ridge_mixed_decode_three_segment_cross_online_v3
+  predictor_version: qwen3-14b-ridge-mixed-decode-three-segment-cross-online-v3
+
+  resolution_summary:
+    frames: 200
+    inverted_ok: 170
+    inverted_ood: 18
+    no_decode_no_backlog: 0
+    no_decode_use_max: 1
+    no_feasible: 11
+    p_max: 2048
+    p_min: 0
+    p_p50: 2048
+    p_p95: 2048
+    predictor_invalid: 0
+    support_ratio_mean: 0.9899497487437185
+
+  raw_candidate_count: {'count': 200, 'max': 16, 'mean': 5.44, 'p50': 4, 'p95': 16}
+  deduplicated_candidate_count: {'count': 200, 'max': 6, 'mean': 2.48, 'p50': 2, 'p95': 6}
+  decode_count_distribution: {'count': 200, 'max': 31, 'mean': 16.395, 'p50': 16, 'p95': 27}
+  backlog_distribution: {'count': 200, 'max': 4530, 'mean': 765.87, 'p50': 426, 'p95': 2843}
+
+  candidate_budget_pool (top 5):
+    {'count': 200, 'key': 0}
+    {'count': 37, 'key': 1024}
+    {'count': 27, 'key': 1536}
+    {'count': 8, 'key': 192}
+    {'count': 6, 'key': 384}
+  v2_legacy_budget_pool (top 5):
+    {'count': 200, 'key': 0}
+    {'count': 9, 'key': 508}
+    {'count': 8, 'key': 36}
+    {'count': 6, 'key': 73}
+    {'count': 6, 'key': 147}
+
+  multiplier_selections: {'items': [{'count': 168, 'key': 'ZERO'}, {'count': 32, 'key': 'M050'}], 'total': 200}
+  policy_selections: {'items': [{'count': 168, 'key': 'ZERO'}, {'count': 32, 'key': 'URGENCY'}], 'total': 200}

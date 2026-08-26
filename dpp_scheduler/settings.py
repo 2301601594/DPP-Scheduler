@@ -9,23 +9,55 @@ from typing import Any, Mapping
 
 @dataclass(frozen=True)
 class SchedulerSettings:
-    """Deterministic one-dimensional Prefill-budget candidate settings."""
+    """Deterministic slack-centered Prefill multiplier candidate settings."""
 
-    prefill_budget_fractions: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0)
-    include_finish_boundary: bool = True
-    maximum_seed_candidates: int = 6
+    prefill_budget_multipliers: tuple[float, ...] = (0.50, 0.75, 1.00, 1.25, 1.50)
+    maximum_seed_candidates: int = 16
+    predictor_inversion_safety_margin_seconds: float = 0.020
+    predictor_inversion_budget_grid: tuple[int, ...] = (
+        0,
+        64,
+        128,
+        256,
+        384,
+        512,
+        768,
+        1024,
+        1536,
+        2048,
+    )
     stable_tie_key: str = "request_id"
     allow_partial_prefill: bool = True
     minimum_prefill_chunk_tokens: int = 1
     frozen: bool = True
 
     def __post_init__(self) -> None:
-        if self.prefill_budget_fractions != (0.0, 0.25, 0.5, 0.75, 1.0):
-            raise ValueError("Prefill budget fractions are fixed at 0/25/50/75/100%")
-        if not self.include_finish_boundary:
-            raise ValueError("FINISH boundary must be enabled")
-        if self.maximum_seed_candidates != 6:
-            raise ValueError("maximum_seed_candidates is fixed at 6")
+        if self.prefill_budget_multipliers != (0.50, 0.75, 1.00, 1.25, 1.50):
+            raise ValueError(
+                "Prefill budget multipliers are fixed at 0.50/0.75/1.00/1.25/1.50"
+            )
+        if self.maximum_seed_candidates != 16:
+            raise ValueError("maximum_seed_candidates is fixed at 16")
+        margin = self.predictor_inversion_safety_margin_seconds
+        if (
+            isinstance(margin, bool)
+            or not isinstance(margin, (int, float))
+            or not math.isfinite(margin)
+            or margin <= 0
+        ):
+            raise ValueError(
+                "predictor_inversion_safety_margin_seconds must be finite and positive"
+            )
+        grid = self.predictor_inversion_budget_grid
+        if (
+            isinstance(grid, bool)
+            or not isinstance(grid, tuple)
+            or not all(isinstance(item, int) and item >= 0 for item in grid)
+            or list(grid) != sorted(grid)
+        ):
+            raise ValueError(
+                "predictor_inversion_budget_grid must be a non-decreasing tuple of non-negative ints"
+            )
         if self.minimum_prefill_chunk_tokens <= 0:
             raise ValueError("minimum_prefill_chunk_tokens must be positive")
 
@@ -38,13 +70,21 @@ class SchedulerSettings:
         """Load the frozen decision values from the active config section."""
         if not isinstance(value, Mapping):
             raise ValueError("candidate_generator settings must be a mapping")
-        fractions = value.get("prefill_budget_fractions")
-        if not isinstance(fractions, list):
-            raise ValueError("candidate_generator.prefill_budget_fractions must be a list")
+        if "prefill_budget_fractions" in value or "include_finish_boundary" in value:
+            raise ValueError(
+                "candidate_generator v2 fields (prefill_budget_fractions, "
+                "include_finish_boundary) are no longer accepted; use "
+                "prefill_budget_multipliers and prefill_priority_policies"
+            )
+        multipliers = value.get("prefill_budget_multipliers")
+        if not isinstance(multipliers, list):
+            raise ValueError(
+                "candidate_generator.prefill_budget_multipliers must be a list"
+            )
         frozen = value.get("parameters_frozen")
         if not isinstance(frozen, bool):
             raise ValueError("candidate_generator.parameters_frozen must be boolean")
-        maximum = value.get("maximum_seed_candidates", 6)
+        maximum = value.get("maximum_seed_candidates", 16)
         if isinstance(maximum, bool) or not isinstance(maximum, int):
             raise ValueError("maximum_seed_candidates must be an integer")
         minimum_prefill = value.get("minimum_prefill_chunk_tokens", 1)
@@ -52,10 +92,32 @@ class SchedulerSettings:
             minimum_prefill, int
         ):
             raise ValueError("minimum_prefill_chunk_tokens must be an integer")
+        margin = value.get(
+            "predictor_inversion_safety_margin_seconds", 0.020
+        )
+        if (
+            isinstance(margin, bool)
+            or not isinstance(margin, (int, float))
+            or not math.isfinite(margin)
+            or margin <= 0
+        ):
+            raise ValueError(
+                "predictor_inversion_safety_margin_seconds must be finite and positive"
+            )
+        grid_raw = value.get(
+            "predictor_inversion_budget_grid",
+            list((0, 64, 128, 256, 384, 512, 768, 1024, 1536, 2048)),
+        )
+        if not isinstance(grid_raw, list):
+            raise ValueError(
+                "candidate_generator.predictor_inversion_budget_grid must be a list"
+            )
+        grid = tuple(int(item) for item in grid_raw)
         return cls(
-            prefill_budget_fractions=tuple(float(item) for item in fractions),
-            include_finish_boundary=value.get("include_finish_boundary") is True,
+            prefill_budget_multipliers=tuple(float(item) for item in multipliers),
             maximum_seed_candidates=maximum,
+            predictor_inversion_safety_margin_seconds=float(margin),
+            predictor_inversion_budget_grid=grid,
             minimum_prefill_chunk_tokens=minimum_prefill,
             frozen=frozen,
         )

@@ -163,13 +163,26 @@ contracts:
     engine_core_output_created_by_locked_scheduler_update_from_output
 
 candidate_generator:
-  algorithm: all_decode_prefill_budget_v2
-  prefill_budget_fractions: [0.0, 0.25, 0.5, 0.75, 1.0]
-  prefill_fraction_rounding: floor
-  include_finish_boundary: true
-  maximum_seed_candidates: 6
+  algorithm: slack_centered_multiplier_v3
+  prefill_budget_multipliers: [0.50, 0.75, 1.00, 1.25, 1.50]
+  prefill_multiplier_rounding: floor
+  maximum_seed_candidates: 16
   minimum_prefill_chunk_tokens: 6
   all_active_decode_required: true
+  predictor_inversion_safety_margin_seconds: 0.020
+  predictor_inversion_budget_grid:
+    - 0
+    - 64
+    - 128
+    - 256
+    - 384
+    - 512
+    - 768
+    - 1024
+    - 1536
+    - 2048
+  prefill_priority_policies: [URGENCY, COMPLETION_AWARE, CONTINUATION]
+  zero_candidate_always_emitted: true
   recovery_age_threshold_seconds: 0.25
   recovery_age_threshold_status: provisional_for_scheduler_integration
   recovery_age_threshold_source: >-
@@ -179,9 +192,7 @@ candidate_generator:
   formal_benchmark_eligible: false
   canonical_deduplication: true
   decode_order: [arrival_time, ordinal, request_id]
-  prefill_order:
-    - partial_or_running_prefill
-    - fcfs
+  prefill_order_tiers: [critical, near_critical, normal]
   stable_prefill_tie_key: [arrival_time, ordinal, request_id]
   kv_projection_side_effect_free: true
 
