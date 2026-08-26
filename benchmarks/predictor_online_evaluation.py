@@ -10,7 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks.predictor_profile import parse_iteration_durations
-from dpp_scheduler.predictor import BATCH_KINDS, ONLINE_PREDICTOR_VERSION
+from dpp_scheduler.predictor import (
+    BATCH_KINDS,
+    SUPPORTED_ONLINE_PREDICTOR_VERSIONS,
+)
 from dpp_scheduler.targeted_profile import build_target_recipes
 from dpp_scheduler.vllm_adapter import VLLM_OFFICIAL_ITERATION_TIMING
 
@@ -58,7 +61,7 @@ def load_evaluation_rows(
                 raise ValueError("Predictor evaluation schema version mismatch")
             if row.get("run_id") != expected_run_id:
                 raise ValueError("Predictor evaluation run_id mismatch")
-            if row.get("predictor_version") != ONLINE_PREDICTOR_VERSION:
+            if row.get("predictor_version") not in SUPPORTED_ONLINE_PREDICTOR_VERSIONS:
                 raise ValueError("Predictor evaluation version mismatch")
             if int(row.get("recipe_seed", -1)) != recipe_seed:
                 raise ValueError("Predictor evaluation recipe seed mismatch")
@@ -149,6 +152,9 @@ def load_evaluation_rows(
     rows.sort(key=lambda row: int(row["iteration_index"]))
     if [int(row["iteration_index"]) for row in rows] != list(range(len(rows))):
         raise ValueError("Predictor evaluation indices are not contiguous")
+    versions = {str(row["predictor_version"]) for row in rows}
+    if len(versions) != 1:
+        raise ValueError("Predictor evaluation mixes Predictor versions")
 
     recipes = build_target_recipes(recipe_seed, mode=recipe_mode)
     observed = [str(row.get("recipe_id")) for row in rows if row["sample_role"] == "target"]
@@ -272,7 +278,7 @@ def analyze_evaluation(
         "schema_version": 2,
         "valid": True,
         "run_id": expected_run_id,
-        "predictor_version": ONLINE_PREDICTOR_VERSION,
+        "predictor_version": str(rows[0]["predictor_version"]),
         "iteration_count": len(rows),
         "sample_roles": dict(sorted(Counter(row["sample_role"] for row in rows).items())),
         "timing": {

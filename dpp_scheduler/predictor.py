@@ -22,6 +22,18 @@ ACTIVE_FEATURES = {
     "prefill_only": ("x_1", "x_2", "x_3", "x_6", "x_7", "x_8"),
 }
 ONLINE_PREDICTOR_VERSION = "qwen3-14b-ridge-three-scenario-online-v1"
+SEGMENTED_ONLINE_PREDICTOR_VERSION = (
+    "qwen3-14b-ridge-mixed-decode-three-segment-online-v2"
+)
+SUPPORTED_ONLINE_PREDICTOR_VERSIONS = (
+    ONLINE_PREDICTOR_VERSION,
+    SEGMENTED_ONLINE_PREDICTOR_VERSION,
+)
+MIXED_DECODE_SEGMENTS = (
+    ("decode_1_4", 1, 4),
+    ("decode_5_16", 5, 16),
+    ("decode_17_64", 17, 64),
+)
 
 
 def _sha256_file(path: Path) -> str:
@@ -222,6 +234,93 @@ class _RidgeModel:
 
 
 @dataclass(frozen=True)
+class _DecodeSegmentedRidgeModel:
+    segments: tuple[tuple[str, int, int, _RidgeModel], ...]
+
+    def base_prediction(
+        self, features: dict[str, float]
+    ) -> tuple[float, bool, float]:
+        decode_count = _finite(features["x_4"], label="x_4")
+        if not decode_count.is_integer():
+            raise ValueError("Mixed Decode count must be an integer")
+        count = int(decode_count)
+        for _, minimum, maximum, model in self.segments:
+            if minimum <= count <= maximum:
+                return model.base_prediction(features)
+        raise ValueError("Mixed Decode count is outside segmented model coverage")
+
+
+def _parse_ridge_model(model: dict[str, Any], *, kind: str) -> _RidgeModel:
+    names = tuple(model.get("active_features", ()))
+    if names != ACTIVE_FEATURES[kind]:
+        raise ValueError(f"active feature schema mismatch for {kind}")
+    coefficients = model.get("coefficients_for_standardized_features", {})
+    standardization = model.get("standardization", {})
+    support_payload = model.get("support_domain_train_marginal_box", {})
+    if not all(
+        isinstance(mapping, dict) and set(mapping) == set(names)
+        for mapping in (coefficients, standardization, support_payload)
+    ):
+        raise ValueError(f"model field coverage mismatch for {kind}")
+    scales = tuple(
+        _finite(standardization[name]["scale"], label=f"{kind}.{name}.scale")
+        for name in names
+    )
+    if any(value <= 0 for value in scales):
+        raise ValueError("Predictor feature scales must be positive")
+    support = tuple(
+        (
+            _finite(support_payload[name]["min"], label="support min"),
+            _finite(support_payload[name]["max"], label="support max"),
+        )
+        for name in names
+    )
+    if any(lower > upper for lower, upper in support):
+        raise ValueError("Predictor support range is reversed")
+    return _RidgeModel(
+        names=names,
+        intercept=_finite(model["intercept_seconds"], label="intercept"),
+        coefficients=tuple(
+            _finite(coefficients[name], label=f"{kind}.{name}.coefficient")
+            for name in names
+        ),
+        means=tuple(
+            _finite(standardization[name]["mean"], label=f"{kind}.{name}.mean")
+            for name in names
+        ),
+        scales=scales,
+        support=support,
+    )
+
+
+def _parse_segmented_mixed_model(model: dict[str, Any]) -> _DecodeSegmentedRidgeModel:
+    if (
+        model.get("dispatch") != "decode_count_segments"
+        or model.get("dispatch_feature") != "x_4"
+    ):
+        raise ValueError("Mixed segmented dispatch contract mismatch")
+    payload = model.get("segments")
+    if not isinstance(payload, list) or len(payload) != len(MIXED_DECODE_SEGMENTS):
+        raise ValueError("Mixed segmented model must contain exactly three segments")
+    segments: list[tuple[str, int, int, _RidgeModel]] = []
+    for item, expected in zip(payload, MIXED_DECODE_SEGMENTS):
+        if not isinstance(item, dict):
+            raise ValueError("Mixed segment must be an object")
+        identity = (
+            item.get("segment_id"),
+            item.get("minimum_decode_count_inclusive"),
+            item.get("maximum_decode_count_inclusive"),
+        )
+        if identity != expected:
+            raise ValueError("Mixed segment boundaries or order mismatch")
+        nested = item.get("model")
+        if not isinstance(nested, dict):
+            raise ValueError("Mixed segment Ridge model is missing")
+        segments.append((*expected, _parse_ridge_model(nested, kind="mixed")))
+    return _DecodeSegmentedRidgeModel(tuple(segments))
+
+
+@dataclass(frozen=True)
 class _CalibrationSettings:
     window_size: int
     minimum_samples: int
@@ -278,7 +377,7 @@ class RidgeDurationPredictor(DurationPredictor):
         self,
         *,
         predictor_version: str,
-        models: dict[str, _RidgeModel],
+        models: dict[str, _RidgeModel | _DecodeSegmentedRidgeModel],
         calibrator: OnlineResidualCalibrator,
         ood_uncertainty_coefficient: float = 0.05,
     ) -> None:
@@ -304,7 +403,8 @@ class RidgeDurationPredictor(DurationPredictor):
         if (
             manifest.get("schema_version") != 1
             or manifest.get("status") != "complete"
-            or manifest.get("predictor_version") != ONLINE_PREDICTOR_VERSION
+            or manifest.get("predictor_version")
+            not in SUPPORTED_ONLINE_PREDICTOR_VERSIONS
         ):
             raise ValueError("online Predictor artifact identity/status mismatch")
         record = manifest.get("files", {}).get("predictor")
@@ -318,12 +418,12 @@ class RidgeDurationPredictor(DurationPredictor):
         payload = _load_json(predictor_path)
         if (
             payload.get("schema_version") != 1
-            or payload.get("predictor_version") != ONLINE_PREDICTOR_VERSION
+            or payload.get("predictor_version") != manifest.get("predictor_version")
             or payload.get("model_family") != "ridge_regression"
         ):
             raise ValueError("online Predictor payload identity mismatch")
 
-        models: dict[str, _RidgeModel] = {}
+        models: dict[str, _RidgeModel | _DecodeSegmentedRidgeModel] = {}
         calibration: dict[str, _CalibrationSettings] = {}
         if set(payload.get("models", {})) != set(BATCH_KINDS):
             raise ValueError("online Predictor models do not cover all batch kinds")
@@ -341,46 +441,14 @@ class RidgeDurationPredictor(DurationPredictor):
 
         for kind in BATCH_KINDS:
             model = payload["models"][kind]
-            names = tuple(model.get("active_features", ()))
-            if names != ACTIVE_FEATURES[kind]:
-                raise ValueError(f"active feature schema mismatch for {kind}")
-            coefficients = model.get("coefficients_for_standardized_features", {})
-            standardization = model.get("standardization", {})
-            support_payload = model.get("support_domain_train_marginal_box", {})
-            if not all(
-                set(mapping) == set(names)
-                for mapping in (coefficients, standardization, support_payload)
+            if not isinstance(model, dict):
+                raise ValueError(f"Predictor model is invalid for {kind}")
+            if kind == "mixed" and payload.get("predictor_version") == (
+                SEGMENTED_ONLINE_PREDICTOR_VERSION
             ):
-                raise ValueError(f"model field coverage mismatch for {kind}")
-            scales = tuple(
-                _finite(standardization[name]["scale"], label=f"{kind}.{name}.scale")
-                for name in names
-            )
-            if any(value <= 0 for value in scales):
-                raise ValueError("Predictor feature scales must be positive")
-            support = tuple(
-                (
-                    _finite(support_payload[name]["min"], label="support min"),
-                    _finite(support_payload[name]["max"], label="support max"),
-                )
-                for name in names
-            )
-            if any(lower > upper for lower, upper in support):
-                raise ValueError("Predictor support range is reversed")
-            models[kind] = _RidgeModel(
-                names=names,
-                intercept=_finite(model["intercept_seconds"], label="intercept"),
-                coefficients=tuple(
-                    _finite(coefficients[name], label=f"{kind}.{name}.coefficient")
-                    for name in names
-                ),
-                means=tuple(
-                    _finite(standardization[name]["mean"], label=f"{kind}.{name}.mean")
-                    for name in names
-                ),
-                scales=scales,
-                support=support,
-            )
+                models[kind] = _parse_segmented_mixed_model(model)
+            else:
+                models[kind] = _parse_ridge_model(model, kind=kind)
 
             item = by_kind[kind]
             window_size = int(item["window_size"])
@@ -400,7 +468,7 @@ class RidgeDurationPredictor(DurationPredictor):
             )
 
         return cls(
-            predictor_version=ONLINE_PREDICTOR_VERSION,
+            predictor_version=str(payload["predictor_version"]),
             models=models,
             calibrator=OnlineResidualCalibrator(calibration),
             ood_uncertainty_coefficient=ood_uncertainty_coefficient,

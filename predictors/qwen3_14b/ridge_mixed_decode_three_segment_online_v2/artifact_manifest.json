@@ -1,0 +1,15 @@
+{
+  "files": {
+    "predictor": {
+      "file": "predictor.json",
+      "sha256": "d38d390cfe502b0795d02e51c3fc72208734a8845d177e5e02448a9a490312d1"
+    },
+    "training_report": {
+      "file": "training_report.json",
+      "sha256": "d5a8fb4d1c58ca8bd9cc9c6a85dd93e558f3c0c49909fe862f9891177fd534b7"
+    }
+  },
+  "predictor_version": "qwen3-14b-ridge-mixed-decode-three-segment-online-v2",
+  "schema_version": 1,
+  "status": "complete"
+}

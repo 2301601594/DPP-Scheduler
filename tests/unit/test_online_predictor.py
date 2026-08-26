@@ -10,13 +10,17 @@ from dpp_scheduler.contracts import BatchPlan, DecodeRequest, PrefillRequest, St
 from dpp_scheduler.predictor import (
     ACTIVE_FEATURES,
     BATCH_KINDS,
+    MIXED_DECODE_SEGMENTS,
     ONLINE_PREDICTOR_VERSION,
+    SEGMENTED_ONLINE_PREDICTOR_VERSION,
     RidgeDurationPredictor,
     build_plan_features,
 )
 
 
-def _snapshot(frame: int = 1, *, decode_context: int = 20) -> StateSnapshot:
+def _snapshot(
+    frame: int = 1, *, decode_context: int = 20, decode_count: int = 1
+) -> StateSnapshot:
     return StateSnapshot.create(
         frame_id=frame,
         timestamp=float(frame),
@@ -24,7 +28,10 @@ def _snapshot(frame: int = 1, *, decode_context: int = 20) -> StateSnapshot:
             PrefillRequest("p1", 0.0, 100, 10, is_running=True),
             PrefillRequest("p2", 0.1, 100, 0),
         ),
-        active_decode_requests=(DecodeRequest("d1", 0.0, decode_context),),
+        active_decode_requests=tuple(
+            DecodeRequest(f"d{index}", 0.0, decode_context)
+            for index in range(1, decode_count + 1)
+        ),
         active_ttft_obligations=(),
         active_tbt_obligations=(),
         recovery_requests=(),
@@ -38,7 +45,11 @@ def _snapshot(frame: int = 1, *, decode_context: int = 20) -> StateSnapshot:
 
 def _plan(snapshot: StateSnapshot, kind: str) -> BatchPlan:
     prefills = () if kind == "decode_only" else (("p1", 4), ("p2", 6))
-    decodes = () if kind == "prefill_only" else ("d1",)
+    decodes = (
+        ()
+        if kind == "prefill_only"
+        else tuple(request.request_id for request in snapshot.active_decode_requests)
+    )
     return BatchPlan(
         plan_id=f"plan-{snapshot.frame_id}-{kind}",
         snapshot_hash=snapshot.snapshot_hash,
@@ -47,13 +58,15 @@ def _plan(snapshot: StateSnapshot, kind: str) -> BatchPlan:
         decode_items=decodes,
         total_prefill_tokens=sum(tokens for _, tokens in prefills),
         total_decode_tokens=len(decodes),
-        total_sequences=3,
+        total_sequences=len(prefills) + len(decodes),
         projected_kv_blocks=2,
         mandatory_request_ids=(),
     )
 
 
-def _artifact(root: Path, *, support_max: float = 1e9) -> Path:
+def _artifact(
+    root: Path, *, support_max: float = 1e9, segmented_mixed: bool = False
+) -> Path:
     models = {}
     calibration = {}
     for kind in BATCH_KINDS:
@@ -78,9 +91,34 @@ def _artifact(root: Path, *, support_max: float = 1e9) -> Path:
             "cold_start_mean_seconds": 0.0,
             "cold_start_centered_p95_seconds": 0.02,
         }
+    version = (
+        SEGMENTED_ONLINE_PREDICTOR_VERSION
+        if segmented_mixed
+        else ONLINE_PREDICTOR_VERSION
+    )
+    if segmented_mixed:
+        base_model = models["mixed"]
+        models["mixed"] = {
+            "dispatch": "decode_count_segments",
+            "dispatch_feature": "x_4",
+            "segments": [
+                {
+                    "segment_id": segment_id,
+                    "minimum_decode_count_inclusive": minimum,
+                    "maximum_decode_count_inclusive": maximum,
+                    "model": {
+                        **base_model,
+                        "intercept_seconds": 0.1 * (index + 1),
+                    },
+                }
+                for index, (segment_id, minimum, maximum) in enumerate(
+                    MIXED_DECODE_SEGMENTS
+                )
+            ],
+        }
     payload = {
         "schema_version": 1,
-        "predictor_version": ONLINE_PREDICTOR_VERSION,
+        "predictor_version": version,
         "model_family": "ridge_regression",
         "models": models,
         "residual_calibration": {
@@ -98,7 +136,7 @@ def _artifact(root: Path, *, support_max: float = 1e9) -> Path:
         json.dumps(
             {
                 "schema_version": 1,
-                "predictor_version": ONLINE_PREDICTOR_VERSION,
+                "predictor_version": version,
                 "status": "complete",
                 "files": {
                     "predictor": {"file": "predictor.json", "sha256": digest}
@@ -209,6 +247,48 @@ class OnlinePredictorTests(unittest.TestCase):
             root = _artifact(Path(directory) / "artifact")
             (root / "predictor.json").write_text("{}", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "hash mismatch"):
+                RidgeDurationPredictor.from_artifact(root)
+
+    def test_segmented_mixed_model_dispatches_on_decode_count(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            predictor = RidgeDurationPredictor.from_artifact(
+                _artifact(Path(directory) / "artifact", segmented_mixed=True)
+            )
+            for frame, decode_count, expected in (
+                (1, 4, 0.1),
+                (2, 5, 0.2),
+                (3, 16, 0.2),
+                (4, 17, 0.3),
+                (5, 64, 0.3),
+            ):
+                snapshot = _snapshot(frame, decode_count=decode_count)
+                audit = predictor.predict_with_audit(
+                    snapshot, _plan(snapshot, "mixed")
+                )
+                self.assertTrue(audit.prediction.in_support)
+                self.assertAlmostEqual(audit.base_duration_seconds, expected)
+
+    def test_segmented_mixed_model_rejects_boundary_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = _artifact(
+                Path(directory) / "artifact", segmented_mixed=True
+            )
+            payload = json.loads((root / "predictor.json").read_text(encoding="utf-8"))
+            payload["models"]["mixed"]["segments"][1][
+                "minimum_decode_count_inclusive"
+            ] = 6
+            encoded = json.dumps(payload)
+            (root / "predictor.json").write_text(encoded, encoding="utf-8")
+            manifest = json.loads(
+                (root / "artifact_manifest.json").read_text(encoding="utf-8")
+            )
+            manifest["files"]["predictor"]["sha256"] = hashlib.sha256(
+                encoded.encode("utf-8")
+            ).hexdigest()
+            (root / "artifact_manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "boundaries or order"):
                 RidgeDurationPredictor.from_artifact(root)
 
 

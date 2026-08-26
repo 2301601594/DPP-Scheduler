@@ -58,6 +58,12 @@ EVALUATION_CAMPAIGN_ID = "predictor_online_timing_aligned_n200_v1"
 EVALUATION_SMOKE_CAMPAIGN_ID = "predictor_online_timing_aligned_smoke_v1"
 OOD_CALIBRATION_CAMPAIGN_ID = "predictor_ood_calibration_v2"
 OOD_VALIDATION_CAMPAIGN_ID = "predictor_ood_validation_v2"
+SEGMENTED_EVALUATION_CAMPAIGN_ID = (
+    "predictor_mixed_decode_three_segment_independent_n200_v1"
+)
+SEGMENTED_EVALUATION_SMOKE_CAMPAIGN_ID = (
+    "predictor_mixed_decode_three_segment_independent_smoke_v1"
+)
 
 
 def _implementation_hashes(workspace: Path) -> dict[str, str]:
@@ -97,9 +103,9 @@ def main() -> int:
 
     runtime = load_active_runtime(args.config)
     expected_campaigns = (
-        {EVALUATION_SMOKE_CAMPAIGN_ID}
+        {EVALUATION_SMOKE_CAMPAIGN_ID, SEGMENTED_EVALUATION_SMOKE_CAMPAIGN_ID}
         if args.recipe_mode == "smoke"
-        else {EVALUATION_CAMPAIGN_ID}
+        else {EVALUATION_CAMPAIGN_ID, SEGMENTED_EVALUATION_CAMPAIGN_ID}
         if args.recipe_mode == "formal"
         else {OOD_CALIBRATION_CAMPAIGN_ID, OOD_VALIDATION_CAMPAIGN_ID}
     )

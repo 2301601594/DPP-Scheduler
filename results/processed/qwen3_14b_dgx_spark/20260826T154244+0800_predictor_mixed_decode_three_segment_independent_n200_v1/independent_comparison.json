@@ -1,0 +1,122 @@
+{
+  "accepted": false,
+  "by_decode_segment": {
+    "decode_17_64": {
+      "candidate": {
+        "conservative_coverage": 0.8409090909090909,
+        "mae_seconds": 0.0208567904614064,
+        "mape": 0.06449907328542753,
+        "mean_error_seconds": -0.0032313367898325037,
+        "median_absolute_percentage_error": 0.05354809187578348,
+        "p95_absolute_percentage_error": 0.18888812337079477,
+        "rmse_seconds": 0.02500414234114687,
+        "rows": 88,
+        "underprediction_rate": 0.5454545454545454
+      },
+      "legacy": {
+        "conservative_coverage": 1.0,
+        "mae_seconds": 0.027183676578989267,
+        "mape": 0.08717890666455343,
+        "mean_error_seconds": 0.023018222689478583,
+        "median_absolute_percentage_error": 0.056771635066423486,
+        "p95_absolute_percentage_error": 0.30963797363657225,
+        "rmse_seconds": 0.033049137416350884,
+        "rows": 88,
+        "underprediction_rate": 0.17045454545454544
+      }
+    },
+    "decode_1_4": {
+      "candidate": {
+        "conservative_coverage": 1.0,
+        "mae_seconds": 0.015514478268399032,
+        "mape": 0.10682199966044698,
+        "mean_error_seconds": 0.00535241013630942,
+        "median_absolute_percentage_error": 0.09176019064161416,
+        "p95_absolute_percentage_error": 0.20621067556164713,
+        "rmse_seconds": 0.018628029125855313,
+        "rows": 53,
+        "underprediction_rate": 0.5471698113207547
+      },
+      "legacy": {
+        "conservative_coverage": 0.7358490566037735,
+        "mae_seconds": 0.05188253797877352,
+        "mape": 0.39349880199481585,
+        "mean_error_seconds": -0.05131789180916887,
+        "median_absolute_percentage_error": 0.47035118806029963,
+        "p95_absolute_percentage_error": 0.6613988265413542,
+        "rmse_seconds": 0.05896364352722977,
+        "rows": 53,
+        "underprediction_rate": 0.9433962264150944
+      }
+    },
+    "decode_5_16": {
+      "candidate": {
+        "conservative_coverage": 0.9726027397260274,
+        "mae_seconds": 0.014830854962275526,
+        "mape": 0.08721928579979141,
+        "mean_error_seconds": -0.0011463271399049266,
+        "median_absolute_percentage_error": 0.06369692189296473,
+        "p95_absolute_percentage_error": 0.2145307667084726,
+        "rmse_seconds": 0.018342573176622003,
+        "rows": 73,
+        "underprediction_rate": 0.5753424657534246
+      },
+      "legacy": {
+        "conservative_coverage": 0.958904109589041,
+        "mae_seconds": 0.04445880574530171,
+        "mape": 0.2524831759973845,
+        "mean_error_seconds": 0.009138902046699702,
+        "median_absolute_percentage_error": 0.25478036945021504,
+        "p95_absolute_percentage_error": 0.45424268065238715,
+        "rmse_seconds": 0.04994184002127048,
+        "rows": 73,
+        "underprediction_rate": 0.4520547945205479
+      }
+    }
+  },
+  "candidate": {
+    "conservative_coverage": 0.9252336448598131,
+    "mae_seconds": 0.01747811832278049,
+    "mape": 0.08273127240423404,
+    "mean_error_seconds": -0.0003942139322145825,
+    "median_absolute_percentage_error": 0.06391579062721026,
+    "p95_absolute_percentage_error": 0.20621067556164713,
+    "rmse_seconds": 0.021396377215194207,
+    "rows": 214,
+    "underprediction_rate": 0.5560747663551402
+  },
+  "candidate_out_of_support_rows": 22,
+  "common_support_rows": 214,
+  "legacy_global_mixed": {
+    "conservative_coverage": 0.9205607476635514,
+    "mae_seconds": 0.039193602202023725,
+    "mape": 0.2194320193458645,
+    "mean_error_seconds": -0.00012665803646147905,
+    "median_absolute_percentage_error": 0.17283348675823196,
+    "p95_absolute_percentage_error": 0.6034473240723184,
+    "rmse_seconds": 0.046486807411394764,
+    "rows": 214,
+    "underprediction_rate": 0.45794392523364486
+  },
+  "legacy_out_of_support_rows": 4,
+  "mixed_rows": 236,
+  "predeclared_acceptance_criteria": {
+    "all_three_segments_observed": true,
+    "candidate_conservative_coverage_at_least_0p95": false,
+    "candidate_mae_lower_than_legacy": true,
+    "candidate_mape_lower_than_legacy": true,
+    "candidate_p95_ape_lower_than_legacy": true
+  },
+  "recipe_seed": 5001,
+  "relative_change_candidate_vs_legacy": {
+    "mae": -0.5540568526289216,
+    "mape": -0.6229753859493286,
+    "p95_absolute_percentage_error": -0.6582789129462866,
+    "rmse": -0.5397322723016345
+  },
+  "run_id": "mixed_decode_three_segment_n200_source_3002_recipe_5001",
+  "schema_version": 1,
+  "single_seed_diagnostic": true,
+  "source_seed": 3002,
+  "validation_role": "fresh_independent_data_not_used_for_design_or_training"
+}

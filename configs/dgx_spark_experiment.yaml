@@ -225,6 +225,13 @@ predictor:
     decode_only_alpha: 10.0
     mixed_alpha: 10.0
     prefill_only_alpha: 0.000001
+  mixed_model_structure:
+    dispatch_feature: x_4_decode_count
+    segments:
+      - {name: decode_1_4, minimum_inclusive: 1, maximum_inclusive: 4}
+      - {name: decode_5_16, minimum_inclusive: 5, maximum_inclusive: 16}
+      - {name: decode_17_64, minimum_inclusive: 17, maximum_inclusive: 64}
+    residual_calibration_scope: one_shared_mixed_window
   random_seed: null
   online_model_weight_updates: forbidden
   residual_definition: actual_duration_seconds_minus_base_duration_seconds
@@ -246,28 +253,24 @@ predictor:
     prefill_only: 128
   insufficient_window_fallback: offline_oof_same_batch_kind
   support_domain: artifact_train_marginal_box
-  artifact_path: predictors/qwen3_14b/ridge_three_scenario_online_v1
-  artifact_manifest_sha256: 04b804baa856983e353b4bef877b0730fba7c08609d20724fa3f46f451999930
-  artifact_sha256: c109695d09b9576912f46127bafd7591dce412d01c32457f84de8291b06e2184
-  predictor_version: qwen3-14b-ridge-three-scenario-online-v1
+  artifact_path: predictors/qwen3_14b/ridge_mixed_decode_three_segment_online_v2
+  artifact_manifest_sha256: 50bf60d3e09c1c8ff65982af251d0e1d6377a4c0f95de80c905f05f01cbaa8ad
+  artifact_sha256: d38d390cfe502b0795d02e51c3fc72208734a8845d177e5e02448a9a490312d1
+  predictor_version: qwen3-14b-ridge-mixed-decode-three-segment-online-v2
   validation_status: >-
-    accepted_for_modular_integration_after_timing_aligned_n200_shadow_validation
+    independent_n200_error_improved_but_rejected_for_conservative_coverage
   extrapolation:
     allow_extrapolation: true
     strategy: clipped_monotonic_ridge
     lower_bound_policy: clip_without_optimistic_downward_extrapolation
     centered_residual_p95: true
     ood_uncertainty_coefficient: 0.0
-    parameter_status: frozen_from_development_held_out_ood_calibration
+    parameter_status: provisional_pending_held_out_ood_calibration
     development_freeze_basis: >-
-      Measured higher-Q95 calibration by Prefill-only, Decode-only, and Mixed
-      batch kind from one independent n=150 calibration run, with a separate
-      n=150 validation run. This development freeze is not formal-benchmark
-      eligible; the measured Q95 is zero and was not supplied as a default.
-    calibration_artifact_path: >-
-      artifacts/qwen3_14b_dgx_spark/dpp_v2/ood_uncertainty_dev_n150x2.json
-    calibration_artifact_sha256: a2d3ffb85b6290013b1c628287ceafdfa63ef348b3a731f2514ac13236fc0859
-    live_v2_eligible: true
+      The previous OOD calibration is bound to the superseded global Mixed
+      Predictor and cannot freeze this segmented candidate. The coefficient is
+      retained only for shadow-evaluation schema compatibility.
+    live_v2_eligible: false
 
 safe_set:
   parameter_status: provisional_for_scheduler_integration
