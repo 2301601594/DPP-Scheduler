@@ -25,6 +25,10 @@ KNEE_CAMPAIGN_ID = "candidate_knee_profile_n500_v1"
 KNEE_SMOKE_CAMPAIGN_ID = "candidate_knee_profile_smoke_n10_v1"
 ISOLATED_KNEE_CAMPAIGN_ID = "candidate_knee_profile_isolated_v2"
 ISOLATED_KNEE_SMOKE_CAMPAIGN_ID = "candidate_knee_profile_isolated_smoke_v4"
+TIME_TO_BUDGET_ACTUAL_CAMPAIGN_ID = "time_to_budget_actual_validation_v3"
+TIME_TO_BUDGET_ACTUAL_SMOKE_CAMPAIGN_ID = (
+    "time_to_budget_actual_validation_smoke_v2"
+)
 TARGET_PROFILE_SCHEMA_VERSION = 1
 TARGET_REQUEST_COUNT = 500
 TARGET_RECIPE_REPEATS = 3
@@ -44,6 +48,8 @@ ISOLATED_KNEE_DECODE_COUNTS = (0, 8, 16, 32, 48)
 ISOLATED_KNEE_PREFILL_COUNTS = (1, 4, 8)
 ISOLATED_PARTIAL_SETUP_TOKENS = 16
 ISOLATED_PROFILE_TOKEN_BUDGET = 2048
+TIME_TO_BUDGET_BUDGETS = (0, 64, 128, 256, 384, 512)
+TIME_TO_BUDGET_REPEATS = 2
 ISOLATED_KNEE_TARGET_COUNT = (
     sum(
         prefill + decode <= ISOLATED_PROFILE_TOKEN_BUDGET
@@ -93,9 +99,11 @@ class TargetRecipe:
     decode_context: str
     repeat_index: int = 0
     strict_shape: bool = False
+    prefill_backlog_token_cap: int | None = None
+    source_family_index: int | None = None
 
     def as_dict(self) -> dict[str, int | str]:
-        return {
+        result: dict[str, int | str] = {
             "recipe_id": self.recipe_id,
             "batch_kind": self.batch_kind,
             "prefill_token_cap": self.prefill_token_cap,
@@ -107,10 +115,76 @@ class TargetRecipe:
             "repeat_index": self.repeat_index,
             "strict_shape": self.strict_shape,
         }
+        if self.prefill_backlog_token_cap is not None:
+            result["prefill_backlog_token_cap"] = self.prefill_backlog_token_cap
+        if self.source_family_index is not None:
+            result["source_family_index"] = self.source_family_index
+        return result
 
 
 def build_target_recipes(seed: int, *, mode: str = "formal") -> tuple[TargetRecipe, ...]:
     """Build a deterministic, shuffled recipe list for one independent run."""
+    if mode == "time_to_budget_validation_smoke":
+        del seed
+        return (
+            TargetRecipe(
+                recipe_id="ttb-smoke-f00-b0064",
+                batch_kind="prefill_only",
+                prefill_token_cap=64,
+                prefill_request_cap=4,
+                decode_request_cap=0,
+                prefill_state="partial",
+                prefill_distribution="balanced",
+                decode_context="none",
+                strict_shape=True,
+                prefill_backlog_token_cap=1024,
+                source_family_index=0,
+            ),
+        )
+    if mode == "time_to_budget_validation":
+        del seed
+        families = (
+            (4, 0, "partial", "balanced"),
+            (1, 1, "fresh", "balanced"),
+            (4, 4, "partial", "skewed"),
+            (1, 5, "partial", "balanced"),
+            (4, 12, "fresh", "skewed"),
+            (4, 16, "partial", "balanced"),
+            (1, 17, "fresh", "balanced"),
+            (4, 32, "partial", "skewed"),
+            (4, 48, "fresh", "balanced"),
+            (4, 60, "partial", "skewed"),
+        )
+        recipes: list[TargetRecipe] = []
+        for repeat in range(TIME_TO_BUDGET_REPEATS):
+            for family, (prefill_count, decode_count, state, distribution) in enumerate(families):
+                for budget in TIME_TO_BUDGET_BUDGETS:
+                    if decode_count == 0 and budget == 0:
+                        continue
+                    kind = (
+                        "prefill_only"
+                        if decode_count == 0
+                        else "decode_only"
+                        if budget == 0
+                        else "mixed"
+                    )
+                    recipes.append(
+                        TargetRecipe(
+                            recipe_id=f"ttb-r{repeat}-f{family:02d}-b{budget:04d}",
+                            batch_kind=kind,
+                            prefill_token_cap=budget,
+                            prefill_request_cap=prefill_count,
+                            decode_request_cap=decode_count,
+                            prefill_state=state,
+                            prefill_distribution=distribution,
+                            decode_context="none" if decode_count == 0 else "measured",
+                            repeat_index=repeat,
+                            strict_shape=True,
+                            prefill_backlog_token_cap=1024,
+                            source_family_index=family,
+                        )
+                    )
+        return tuple(recipes)
     if mode in {"smoke", "knee_smoke"}:
         recipes = [
             TargetRecipe("smoke-p-000", "prefill_only", 16, 1, 0, "fresh", "balanced", "none"),
@@ -651,7 +725,11 @@ def isolated_prefill_allocations(recipe: TargetRecipe) -> tuple[int, ...]:
     """Allocate the requested Prefill cap exactly, independent of live state."""
     count = recipe.prefill_request_cap
     total = recipe.prefill_token_cap
-    if count <= 0 or total < count:
+    if count <= 0:
+        raise ValueError("isolated Prefill request count must be positive")
+    if total == 0:
+        return (0,) * count
+    if total < count:
         raise ValueError("isolated Prefill shape cannot allocate every request")
     if recipe.prefill_distribution == "balanced" or count == 1:
         base, extra = divmod(total, count)
@@ -670,6 +748,25 @@ def isolated_prefill_allocations(recipe: TargetRecipe) -> tuple[int, ...]:
         for index in range(1, count):
             allocations[index] += base + ((index - 1) < extra)
     return tuple(allocations)
+
+
+def isolated_prefill_backlog_allocations(recipe: TargetRecipe) -> tuple[int, ...]:
+    """Allocate stable Prefill backlog independently of the scheduled cap."""
+    if recipe.prefill_backlog_token_cap is None:
+        return isolated_prefill_allocations(recipe)
+    backlog_recipe = TargetRecipe(
+        recipe_id=recipe.recipe_id,
+        batch_kind=recipe.batch_kind,
+        prefill_token_cap=recipe.prefill_backlog_token_cap,
+        prefill_request_cap=recipe.prefill_request_cap,
+        decode_request_cap=recipe.decode_request_cap,
+        prefill_state=recipe.prefill_state,
+        prefill_distribution=recipe.prefill_distribution,
+        decode_context=recipe.decode_context,
+        repeat_index=recipe.repeat_index,
+        strict_shape=recipe.strict_shape,
+    )
+    return isolated_prefill_allocations(backlog_recipe)
 
 
 def build_isolated_target_plan(
@@ -713,7 +810,8 @@ def build_isolated_target_plan(
             raise ValueError(f"invalid isolated prefill state: {recipe.prefill_state}")
         if tokens > request.remaining_tokens:
             raise RuntimeError("isolated target Prefill allocation exceeds prompt")
-        prefill_items.append((request_id, tokens))
+        if tokens > 0:
+            prefill_items.append((request_id, tokens))
 
     total_sequences = project_sequence_count(snapshot, tuple(prefill_items))
     total_tokens = recipe.prefill_token_cap + recipe.decode_request_cap
@@ -746,8 +844,13 @@ def build_isolated_target_plan(
         projected_kv_blocks=projected_kv,
         mandatory_request_ids=(),
     )
+    realized_kind = (
+        "mixed" if prefill_items and decode_ids
+        else "prefill_only" if prefill_items
+        else "decode_only"
+    )
     realized = {
-        "batch_kind": recipe.batch_kind,
+        "batch_kind": realized_kind,
         "prefill_requests": len(prefill_items),
         "prefill_tokens": recipe.prefill_token_cap,
         "fresh_prefill_requests": (
@@ -807,21 +910,41 @@ def build_isolated_setup_plan(
     if remaining_budget < 0:
         raise RuntimeError("isolated partial setup exceeds token budget")
     if decode_prefills and remaining_budget > 0:
+        # Accumulate per-request grants so each request_id appears in items
+        # at most once. The multi-pass fairness loop previously re-read
+        # ``request.remaining_tokens`` from the snapshot on every pass and
+        # could (1) append the same request_id more than once, which the
+        # Adapter validator rejects, and (2) over-allocate tokens for a
+        # request whose prompt is shorter than the per-pass share.
+        cumulative_grants: dict[str, int] = {}
         remaining = remaining_budget
         active = list(decode_prefills)
         while remaining > 0 and active:
             share = max(1, (remaining + len(active) - 1) // len(active))
             next_active: list[PrefillRequest] = []
             for request in active:
-                grant = min(request.remaining_tokens, share, remaining)
+                already = cumulative_grants.get(request.request_id, 0)
+                room = request.remaining_tokens - already
+                if room <= 0:
+                    continue
+                grant = min(room, share, remaining)
                 if grant > 0:
-                    items.append((request.request_id, grant))
+                    cumulative_grants[request.request_id] = already + grant
                     remaining -= grant
-                if grant < request.remaining_tokens:
+                if (already + grant) < request.remaining_tokens:
                     next_active.append(request)
                 if remaining == 0:
                     break
             active = next_active
+
+        # Emit one ``(request_id, grant)`` item per decode candidate, in
+        # the same order the candidates were admitted. This preserves the
+        # original sequence for the Adapter's new-vs-running classification
+        # while guaranteeing the validator's uniqueness invariant.
+        for request in decode_prefills:
+            grant = cumulative_grants.get(request.request_id)
+            if grant:
+                items.append((request.request_id, grant))
 
     if not items:
         if set(decode_ids) != set(decodes):

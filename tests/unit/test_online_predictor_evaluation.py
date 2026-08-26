@@ -20,12 +20,53 @@ from dpp_scheduler.vllm_adapter import (
     VLLM_ALIGNED_ITERATION_TIMING,
     VLLM_OFFICIAL_ITERATION_TIMING,
     _build_iteration_timing_bridge,
+    _classify_isolated_scheduler_update,
     build_shadow_plan,
 )
 from tests.unit.test_online_predictor import _snapshot
 
 
 class OnlinePredictorEvaluationTests(unittest.TestCase):
+    def test_isolated_update_accepts_only_registered_empty_admission_wait(self) -> None:
+        output = SimpleNamespace(
+            total_num_scheduled_tokens=0,
+            num_scheduled_tokens={},
+        )
+        self.assertEqual(
+            _classify_isolated_scheduler_update(None, output, output),
+            "admission_wait",
+        )
+        with self.assertRaisesRegex(RuntimeError, "does not match"):
+            _classify_isolated_scheduler_update(None, None, output)
+
+    def test_isolated_update_rejects_nonempty_admission_wait(self) -> None:
+        output = SimpleNamespace(
+            total_num_scheduled_tokens=1,
+            num_scheduled_tokens={"request": 1},
+        )
+        with self.assertRaisesRegex(RuntimeError, "not empty"):
+            _classify_isolated_scheduler_update(None, output, output)
+
+    def test_isolated_update_matches_exact_pending_plan(self) -> None:
+        output = SimpleNamespace(
+            total_num_scheduled_tokens=1,
+            num_scheduled_tokens={"request": 1},
+        )
+        pending = {"scheduler_output": output}
+        self.assertEqual(
+            _classify_isolated_scheduler_update(pending, None, output),
+            "planned",
+        )
+        with self.assertRaisesRegex(RuntimeError, "does not match"):
+            _classify_isolated_scheduler_update(
+                pending,
+                None,
+                SimpleNamespace(
+                    total_num_scheduled_tokens=1,
+                    num_scheduled_tokens={"request": 1},
+                ),
+            )
+
     def test_iteration_bridge_prefers_exact_official_duration(self) -> None:
         callbacks = []
 

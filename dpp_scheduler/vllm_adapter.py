@@ -62,6 +62,29 @@ STOCK_PROFILE_SCHEMA_VERSION = 2
 STOCK_CONCURRENCY_SEMANTICS = "dpp_stage_queues_v2"
 
 
+def _classify_isolated_scheduler_update(
+    pending: dict[str, Any] | None,
+    admission_wait_output: Any | None,
+    scheduler_output: Any,
+) -> str:
+    """Validate which explicitly registered isolated iteration completed."""
+    if pending is not None:
+        if (
+            admission_wait_output is not None
+            or pending.get("scheduler_output") is not scheduler_output
+        ):
+            raise RuntimeError("isolated update does not match pending iteration")
+        return "planned"
+
+    if admission_wait_output is not scheduler_output:
+        raise RuntimeError("isolated update does not match pending iteration")
+    if int(getattr(scheduler_output, "total_num_scheduled_tokens", -1)) != 0:
+        raise RuntimeError("isolated admission-wait update is not empty")
+    if getattr(scheduler_output, "num_scheduled_tokens", None):
+        raise RuntimeError("isolated admission-wait update contains scheduled requests")
+    return "admission_wait"
+
+
 def _build_iteration_timing_bridge(original: Callable[..., Any]) -> Callable[..., Any]:
     @contextmanager
     def capture_iteration_details(core: Any, scheduler_output: Any):
@@ -2385,6 +2408,7 @@ def get_isolated_profiling_scheduler_class() -> type:
             )
             self._isolated_adapter = VllmAdapter(self)
             self._isolated_pending: dict[str, Any] | None = None
+            self._isolated_admission_wait_output: Any | None = None
             self._isolated_admission_closed = False
             self._isolated_baseline_free_blocks = int(
                 self.kv_cache_manager.block_pool.get_num_free_blocks()
@@ -2461,7 +2485,10 @@ def get_isolated_profiling_scheduler_class() -> type:
             pending["timing_source"] = timing_source
 
         def schedule(self, throttle_prefills: bool = False) -> Any:
-            if self._isolated_pending is not None:
+            if (
+                self._isolated_pending is not None
+                or self._isolated_admission_wait_output is not None
+            ):
                 raise RuntimeError("isolated scheduler has overlapping iterations")
             recipe = self._isolated_planner.current
             if recipe is None:
@@ -2482,8 +2509,18 @@ def get_isolated_profiling_scheduler_class() -> type:
             if not self._isolated_admission_closed:
                 if not admission_complete:
                     if not observed:
-                        return super().schedule(throttle_prefills)
-                    return SchedulerOutput.make_empty()
+                        output = super().schedule(throttle_prefills)
+                    else:
+                        output = SchedulerOutput.make_empty()
+                    if (
+                        int(output.total_num_scheduled_tokens) != 0
+                        or output.num_scheduled_tokens
+                    ):
+                        raise RuntimeError(
+                            "isolated admission wait unexpectedly scheduled requests"
+                        )
+                    self._isolated_admission_wait_output = output
+                    return output
                 self._isolated_admission_closed = True
                 self._event(
                     "admission_closed",
@@ -2525,9 +2562,16 @@ def get_isolated_profiling_scheduler_class() -> type:
 
         def update_from_output(self, scheduler_output: Any, model_runner_output: Any) -> Any:
             pending = self._isolated_pending
+            update_kind = _classify_isolated_scheduler_update(
+                pending,
+                self._isolated_admission_wait_output,
+                scheduler_output,
+            )
             result = super().update_from_output(scheduler_output, model_runner_output)
-            if pending is None or pending["scheduler_output"] is not scheduler_output:
-                raise RuntimeError("isolated update does not match pending iteration")
+            if update_kind == "admission_wait":
+                self._isolated_admission_wait_output = None
+                return result
+            assert pending is not None
             if pending["actual_duration_seconds"] is None:
                 raise RuntimeError("isolated iteration has no official duration")
             self._isolated_pending = None

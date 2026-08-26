@@ -16,6 +16,7 @@ from dpp_scheduler.contracts import BatchPlan, Prediction, StateSnapshot
 
 BATCH_KINDS = ("decode_only", "mixed", "prefill_only")
 FEATURE_NAMES = tuple(f"x_{index}" for index in range(1, 9))
+MIXED_CROSS_FEATURE_NAMES = (*FEATURE_NAMES, "x_9", "x_10")
 ACTIVE_FEATURES = {
     "decode_only": ("x_4", "x_5"),
     "mixed": FEATURE_NAMES,
@@ -25,9 +26,13 @@ ONLINE_PREDICTOR_VERSION = "qwen3-14b-ridge-three-scenario-online-v1"
 SEGMENTED_ONLINE_PREDICTOR_VERSION = (
     "qwen3-14b-ridge-mixed-decode-three-segment-online-v2"
 )
+CROSS_FEATURE_SEGMENTED_ONLINE_PREDICTOR_VERSION = (
+    "qwen3-14b-ridge-mixed-decode-three-segment-cross-online-v3"
+)
 SUPPORTED_ONLINE_PREDICTOR_VERSIONS = (
     ONLINE_PREDICTOR_VERSION,
     SEGMENTED_ONLINE_PREDICTOR_VERSION,
+    CROSS_FEATURE_SEGMENTED_ONLINE_PREDICTOR_VERSION,
 )
 MIXED_DECODE_SEGMENTS = (
     ("decode_1_4", 1, 4),
@@ -81,7 +86,7 @@ def classify_batch(plan: BatchPlan) -> str | None:
 def build_plan_features(
     snapshot: StateSnapshot, plan: BatchPlan
 ) -> tuple[str, dict[str, float]]:
-    """Build the frozen x1-x8 schema from current, length-blind state."""
+    """Build the frozen base schema and Mixed-only interaction features."""
     plan.validate_snapshot(snapshot)
     kind = classify_batch(plan)
     if kind is None:
@@ -135,6 +140,9 @@ def build_plan_features(
         "x_7": max((tokens for _, tokens in prefill_work), default=0.0),
         "x_8": float(len(prefill_work)),
     }
+    if kind == "mixed":
+        features["x_9"] = features["x_6"] * features["x_4"]
+        features["x_10"] = features["x_6"] * features["x_5"]
     if not all(math.isfinite(value) and value >= 0 for value in features.values()):
         raise ValueError("Predictor feature is negative or non-finite")
     return kind, features
@@ -250,9 +258,15 @@ class _DecodeSegmentedRidgeModel:
         raise ValueError("Mixed Decode count is outside segmented model coverage")
 
 
-def _parse_ridge_model(model: dict[str, Any], *, kind: str) -> _RidgeModel:
+def _parse_ridge_model(
+    model: dict[str, Any],
+    *,
+    kind: str,
+    expected_features: tuple[str, ...] | None = None,
+) -> _RidgeModel:
     names = tuple(model.get("active_features", ()))
-    if names != ACTIVE_FEATURES[kind]:
+    expected = ACTIVE_FEATURES[kind] if expected_features is None else expected_features
+    if names != expected:
         raise ValueError(f"active feature schema mismatch for {kind}")
     coefficients = model.get("coefficients_for_standardized_features", {})
     standardization = model.get("standardization", {})
@@ -293,7 +307,9 @@ def _parse_ridge_model(model: dict[str, Any], *, kind: str) -> _RidgeModel:
     )
 
 
-def _parse_segmented_mixed_model(model: dict[str, Any]) -> _DecodeSegmentedRidgeModel:
+def _parse_segmented_mixed_model(
+    model: dict[str, Any], *, expected_features: tuple[str, ...]
+) -> _DecodeSegmentedRidgeModel:
     if (
         model.get("dispatch") != "decode_count_segments"
         or model.get("dispatch_feature") != "x_4"
@@ -316,7 +332,14 @@ def _parse_segmented_mixed_model(model: dict[str, Any]) -> _DecodeSegmentedRidge
         nested = item.get("model")
         if not isinstance(nested, dict):
             raise ValueError("Mixed segment Ridge model is missing")
-        segments.append((*expected, _parse_ridge_model(nested, kind="mixed")))
+        segments.append(
+            (
+                *expected,
+                _parse_ridge_model(
+                    nested, kind="mixed", expected_features=expected_features
+                ),
+            )
+        )
     return _DecodeSegmentedRidgeModel(tuple(segments))
 
 
@@ -443,10 +466,19 @@ class RidgeDurationPredictor(DurationPredictor):
             model = payload["models"][kind]
             if not isinstance(model, dict):
                 raise ValueError(f"Predictor model is invalid for {kind}")
-            if kind == "mixed" and payload.get("predictor_version") == (
-                SEGMENTED_ONLINE_PREDICTOR_VERSION
-            ):
-                models[kind] = _parse_segmented_mixed_model(model)
+            if kind == "mixed" and payload.get("predictor_version") in {
+                SEGMENTED_ONLINE_PREDICTOR_VERSION,
+                CROSS_FEATURE_SEGMENTED_ONLINE_PREDICTOR_VERSION,
+            }:
+                mixed_features = (
+                    MIXED_CROSS_FEATURE_NAMES
+                    if payload.get("predictor_version")
+                    == CROSS_FEATURE_SEGMENTED_ONLINE_PREDICTOR_VERSION
+                    else ACTIVE_FEATURES["mixed"]
+                )
+                models[kind] = _parse_segmented_mixed_model(
+                    model, expected_features=mixed_features
+                )
             else:
                 models[kind] = _parse_ridge_model(model, kind=kind)
 

@@ -13,7 +13,7 @@ from dpp_scheduler.targeted_profile import (
     TargetRecipe,
     build_target_recipes,
     isolated_client_request_ids,
-    isolated_prefill_allocations,
+    isolated_prefill_backlog_allocations,
 )
 from dpp_scheduler.vllm_adapter import VLLM_OFFICIAL_ITERATION_TIMING
 
@@ -54,7 +54,12 @@ def build_isolated_request_rows(
 ) -> list[dict[str, Any]]:
     """Construct only the requests needed by one target batch."""
     prefill_ids, decode_ids = isolated_client_request_ids(recipe)
-    allocations = isolated_prefill_allocations(recipe)
+    allocations = isolated_prefill_backlog_allocations(recipe)
+    source_offset = (
+        recipe.source_family_index
+        if recipe.source_family_index is not None
+        else recipe_ordinal
+    )
     rows: list[dict[str, Any]] = []
     for index, (request_id, allocation) in enumerate(zip(prefill_ids, allocations)):
         setup = (
@@ -67,7 +72,7 @@ def build_isolated_request_rows(
             source_rows,
             minimum_tokens=minimum,
             anchor_tokens=minimum,
-            offset=recipe_ordinal + index,
+            offset=source_offset + index,
         )
         row = dict(source)
         row.update(
@@ -75,7 +80,7 @@ def build_isolated_request_rows(
                 "request_id": request_id,
                 "arrival_time_s": 0.0,
                 "generation_seed": (
-                    int(source["generation_seed"]) + recipe_ordinal * 97 + index
+                    int(source["generation_seed"]) + source_offset * 97 + index
                 ),
                 "profile_recipe_id": recipe.recipe_id,
                 "profile_request_role": "prefill",
@@ -83,15 +88,18 @@ def build_isolated_request_rows(
         )
         rows.append(row)
 
-    anchor = DECODE_CONTEXT_ANCHORS[
-        recipe.repeat_index % len(DECODE_CONTEXT_ANCHORS)
-    ]
+    anchor_index = (
+        recipe.source_family_index
+        if recipe.source_family_index is not None
+        else recipe.repeat_index
+    )
+    anchor = DECODE_CONTEXT_ANCHORS[anchor_index % len(DECODE_CONTEXT_ANCHORS)]
     for index, request_id in enumerate(decode_ids):
         source = _pick_source(
             source_rows,
             minimum_tokens=1,
             anchor_tokens=anchor,
-            offset=recipe_ordinal * 53 + index,
+            offset=source_offset * 53 + index,
         )
         row = dict(source)
         row.update(
@@ -99,7 +107,7 @@ def build_isolated_request_rows(
                 "request_id": request_id,
                 "arrival_time_s": 0.0,
                 "generation_seed": (
-                    int(source["generation_seed"]) + recipe_ordinal * 97
+                    int(source["generation_seed"]) + source_offset * 97
                     + len(prefill_ids) + index
                 ),
                 "profile_recipe_id": recipe.recipe_id,
@@ -181,8 +189,9 @@ def validate_isolated_profile(
         prefills = [item for item in selected if item.get("phase") == "prefill"]
         decodes = [item for item in selected if item.get("phase") == "decode"]
         prefill_tokens = sum(int(item["scheduled_tokens"]) for item in prefills)
+        scheduled_prefill_count = 0 if recipe.prefill_token_cap == 0 else recipe.prefill_request_cap
         if (
-            len(prefills) != recipe.prefill_request_cap
+            len(prefills) != scheduled_prefill_count
             or prefill_tokens != recipe.prefill_token_cap
             or len(decodes) != recipe.decode_request_cap
             or any(int(item["scheduled_tokens"]) != 1 for item in decodes)

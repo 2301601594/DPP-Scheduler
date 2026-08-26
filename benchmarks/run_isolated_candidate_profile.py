@@ -41,6 +41,8 @@ from benchmarks.targeted_predictor_profile import validate_reused_stock_trace
 from dpp_scheduler.targeted_profile import (
     ISOLATED_KNEE_CAMPAIGN_ID,
     ISOLATED_KNEE_SMOKE_CAMPAIGN_ID,
+    TIME_TO_BUDGET_ACTUAL_CAMPAIGN_ID,
+    TIME_TO_BUDGET_ACTUAL_SMOKE_CAMPAIGN_ID,
     build_target_recipes,
 )
 from dpp_scheduler.vllm_adapter import (
@@ -73,6 +75,41 @@ async def _wait_for_terminal_event(
                     return event, offset
         await asyncio.sleep(0.01)
     raise TimeoutError(f"isolated batch timed out: {recipe_id}")
+
+
+async def _settle_isolated_request_tasks(
+    tasks: list[asyncio.Task[dict[str, Any]]],
+    rows: list[dict[str, Any]],
+    *,
+    event: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Close client streams after the scheduler's audited batch cleanup."""
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+    results: list[dict[str, Any]] = []
+    for row, outcome in zip(rows, outcomes, strict=True):
+        if isinstance(outcome, dict):
+            result = outcome
+            result["isolated_client_outcome"] = "completed_before_cleanup"
+        elif isinstance(outcome, asyncio.CancelledError):
+            result = {
+                "request_id": row["request_id"],
+                "completed": False,
+                "error": None,
+                "isolated_client_outcome": "cancelled_after_scheduler_cleanup",
+            }
+        elif isinstance(outcome, BaseException):
+            raise RuntimeError(
+                "isolated client request failed before audited cleanup: "
+                f"{type(outcome).__name__}: {outcome}"
+            ) from outcome
+        else:
+            raise RuntimeError("isolated client task returned an invalid result")
+        result["isolated_terminal_event"] = event["event"]
+        results.append(result)
+    return results
 
 
 async def _run_matrix(
@@ -124,8 +161,10 @@ async def _run_matrix(
                     recipe_id=recipe.recipe_id,
                     timeout=batch_timeout,
                 )
-                results = await asyncio.wait_for(
-                    asyncio.gather(*tasks), timeout=min(60.0, batch_timeout)
+                results = await _settle_isolated_request_tasks(
+                    tasks,
+                    rows,
+                    event=event,
                 )
                 for row, result in zip(rows, results):
                     result["profile_recipe_id"] = recipe.recipe_id
@@ -166,7 +205,12 @@ def main() -> int:
     parser.add_argument("--recipe-seed", type=int, required=True)
     parser.add_argument(
         "--recipe-mode",
-        choices=("isolated_knee", "isolated_knee_smoke"),
+        choices=(
+            "isolated_knee",
+            "isolated_knee_smoke",
+            "time_to_budget_validation",
+            "time_to_budget_validation_smoke",
+        ),
         default="isolated_knee",
     )
     parser.add_argument("--port", type=int, default=8010)
@@ -182,11 +226,12 @@ def main() -> int:
         for value in (args.campaign_id, args.source_campaign_id, args.run_id)
     ):
         raise ActiveConfigError("invalid campaign/source/run identifier")
-    expected_campaign = (
-        ISOLATED_KNEE_SMOKE_CAMPAIGN_ID
-        if args.recipe_mode == "isolated_knee_smoke"
-        else ISOLATED_KNEE_CAMPAIGN_ID
-    )
+    expected_campaign = {
+        "isolated_knee_smoke": ISOLATED_KNEE_SMOKE_CAMPAIGN_ID,
+        "isolated_knee": ISOLATED_KNEE_CAMPAIGN_ID,
+        "time_to_budget_validation": TIME_TO_BUDGET_ACTUAL_CAMPAIGN_ID,
+        "time_to_budget_validation_smoke": TIME_TO_BUDGET_ACTUAL_SMOKE_CAMPAIGN_ID,
+    }[args.recipe_mode]
     if args.campaign_id != expected_campaign:
         raise ActiveConfigError("isolated recipe mode/campaign mismatch")
     if (

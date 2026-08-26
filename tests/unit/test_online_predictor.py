@@ -10,6 +10,8 @@ from dpp_scheduler.contracts import BatchPlan, DecodeRequest, PrefillRequest, St
 from dpp_scheduler.predictor import (
     ACTIVE_FEATURES,
     BATCH_KINDS,
+    CROSS_FEATURE_SEGMENTED_ONLINE_PREDICTOR_VERSION,
+    MIXED_CROSS_FEATURE_NAMES,
     MIXED_DECODE_SEGMENTS,
     ONLINE_PREDICTOR_VERSION,
     SEGMENTED_ONLINE_PREDICTOR_VERSION,
@@ -65,18 +67,33 @@ def _plan(snapshot: StateSnapshot, kind: str) -> BatchPlan:
 
 
 def _artifact(
-    root: Path, *, support_max: float = 1e9, segmented_mixed: bool = False
+    root: Path,
+    *,
+    support_max: float = 1e9,
+    segmented_mixed: bool = False,
+    cross_feature_mixed: bool = False,
 ) -> Path:
     models = {}
     calibration = {}
     for kind in BATCH_KINDS:
-        names = ACTIVE_FEATURES[kind]
+        names = (
+            MIXED_CROSS_FEATURE_NAMES
+            if kind == "mixed" and cross_feature_mixed
+            else ACTIVE_FEATURES[kind]
+        )
         models[kind] = {
             "active_features": list(names),
             "alpha": 1.0,
             "intercept_seconds": 0.1,
             "coefficients_for_standardized_features": {
-                name: 0.0 for name in names
+                name: (
+                    0.001
+                    if name == "x_9"
+                    else 0.0001
+                    if name == "x_10"
+                    else 0.0
+                )
+                for name in names
             },
             "standardization": {
                 name: {"mean": 0.0, "scale": 1.0} for name in names
@@ -92,7 +109,9 @@ def _artifact(
             "cold_start_centered_p95_seconds": 0.02,
         }
     version = (
-        SEGMENTED_ONLINE_PREDICTOR_VERSION
+        CROSS_FEATURE_SEGMENTED_ONLINE_PREDICTOR_VERSION
+        if cross_feature_mixed
+        else SEGMENTED_ONLINE_PREDICTOR_VERSION
         if segmented_mixed
         else ONLINE_PREDICTOR_VERSION
     )
@@ -164,6 +183,8 @@ class OnlinePredictorTests(unittest.TestCase):
                 "x_6": 10.0,
                 "x_7": 6.0,
                 "x_8": 2.0,
+                "x_9": 10.0,
+                "x_10": 200.0,
             },
         )
         self.assertEqual(
@@ -267,6 +288,24 @@ class OnlinePredictorTests(unittest.TestCase):
                 )
                 self.assertTrue(audit.prediction.in_support)
                 self.assertAlmostEqual(audit.base_duration_seconds, expected)
+
+    def test_cross_feature_segmented_model_uses_both_interactions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            predictor = RidgeDurationPredictor.from_artifact(
+                _artifact(
+                    Path(directory) / "artifact",
+                    segmented_mixed=True,
+                    cross_feature_mixed=True,
+                )
+            )
+            snapshot = _snapshot(1, decode_context=20, decode_count=4)
+            audit = predictor.predict_with_audit(snapshot, _plan(snapshot, "mixed"))
+            # x9=10*4=40 and x10=10*(20*4)=800.
+            self.assertAlmostEqual(audit.base_duration_seconds, 0.22)
+            self.assertEqual(
+                predictor.predictor_version,
+                CROSS_FEATURE_SEGMENTED_ONLINE_PREDICTOR_VERSION,
+            )
 
     def test_segmented_mixed_model_rejects_boundary_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

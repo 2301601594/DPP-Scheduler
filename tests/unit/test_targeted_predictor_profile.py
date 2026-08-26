@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import unittest
@@ -8,16 +9,25 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from benchmarks.run_targeted_predictor_profile import _prepare_controlled_rows
+from benchmarks.run_isolated_candidate_profile import (
+    _settle_isolated_request_tasks,
+)
 from benchmarks.targeted_predictor_profile import (
     validate_reused_stock_trace,
     validate_target_rows,
 )
 from dpp_scheduler.contracts import DecodeRequest, PrefillRequest, StateSnapshot
 from dpp_scheduler.targeted_profile import (
+    ISOLATED_PARTIAL_SETUP_TOKENS,
     TARGET_CAMPAIGN_MATRIX,
+    TIME_TO_BUDGET_BUDGETS,
     TargetRecipe,
+    build_isolated_setup_plan,
+    build_isolated_target_plan,
     build_target_plan,
     build_target_recipes,
+    isolated_prefill_allocations,
+    isolated_prefill_backlog_allocations,
 )
 
 
@@ -46,6 +56,38 @@ def make_snapshot(
 
 
 class TargetRecipeTests(unittest.TestCase):
+    def test_isolated_runner_cancels_client_after_audited_cleanup(self) -> None:
+        async def exercise() -> tuple[list[dict[str, object]], bool]:
+            async def pending_request() -> dict[str, object]:
+                await asyncio.Future()
+                raise AssertionError("unreachable")
+
+            task = asyncio.create_task(pending_request())
+            await asyncio.sleep(0)
+            results = await _settle_isolated_request_tasks(
+                [task],
+                [{"request_id": "request-0"}],
+                event={"event": "batch_complete"},
+            )
+            return results, task.cancelled()
+
+        results, cancelled = asyncio.run(exercise())
+        self.assertTrue(cancelled)
+        self.assertEqual(
+            results,
+            [
+                {
+                    "request_id": "request-0",
+                    "completed": False,
+                    "error": None,
+                    "isolated_client_outcome": (
+                        "cancelled_after_scheduler_cleanup"
+                    ),
+                    "isolated_terminal_event": "batch_complete",
+                }
+            ],
+        )
+
     def test_knee_trace_reuse_allows_only_stale_whole_config_hash(self) -> None:
         runtime = SimpleNamespace(
             model_revision="model-revision",
@@ -170,6 +212,136 @@ class TargetRecipeTests(unittest.TestCase):
         self.assertTrue(all(recipe.strict_shape for recipe in recipes))
         self.assertEqual(recipes, build_target_recipes(7001, mode="ood"))
         self.assertNotEqual(recipes, build_target_recipes(8001, mode="ood"))
+
+    def test_time_to_budget_matrix_keeps_backlog_when_budget_is_zero(self) -> None:
+        recipes = build_target_recipes(6001, mode="time_to_budget_validation")
+        self.assertEqual(len(recipes), 118)
+        self.assertEqual(
+            {recipe.prefill_token_cap for recipe in recipes},
+            set(TIME_TO_BUDGET_BUDGETS),
+        )
+        zero = next(recipe for recipe in recipes if recipe.prefill_token_cap == 0)
+        self.assertGreater(zero.prefill_request_cap, 0)
+        self.assertGreater(zero.decode_request_cap, 0)
+        self.assertEqual(
+            isolated_prefill_allocations(zero),
+            (0,) * zero.prefill_request_cap,
+        )
+        self.assertEqual(sum(isolated_prefill_backlog_allocations(zero)), 1024)
+
+        prefills = tuple(
+            PrefillRequest(
+                f"cmpl-{zero.recipe_id}-p{index:02d}-0",
+                float(index),
+                1024,
+                0,
+                ordinal=index,
+            )
+            for index in range(zero.prefill_request_cap)
+        )
+        decodes = tuple(
+            DecodeRequest(
+                f"cmpl-{zero.recipe_id}-d{index:02d}-0",
+                float(index),
+                256,
+                ordinal=index,
+            )
+            for index in range(zero.decode_request_cap)
+        )
+        plan, realized = build_isolated_target_plan(
+            make_snapshot(prefill=prefills, decode=decodes), zero
+        )
+        self.assertEqual(plan.prefill_items, ())
+        self.assertEqual(len(plan.decode_items), zero.decode_request_cap)
+        self.assertEqual(realized["batch_kind"], "decode_only")
+
+    def test_time_to_budget_smoke_reproduces_multi_request_admission(self) -> None:
+        recipes = build_target_recipes(
+            6001,
+            mode="time_to_budget_validation_smoke",
+        )
+        self.assertEqual(len(recipes), 1)
+        recipe = recipes[0]
+        self.assertEqual(recipe.prefill_request_cap, 4)
+        self.assertEqual(recipe.prefill_token_cap, 64)
+        self.assertEqual(recipe.prefill_backlog_token_cap, 1024)
+        self.assertTrue(recipe.strict_shape)
+
+    def test_isolated_setup_plan_dedups_decode_candidates_across_passes(self) -> None:
+        """Regression for the ``ttb-r0-f03-b0000`` EngineCore crash.
+
+        A decode candidate whose prompt exceeds the first-pass ``share`` must
+        appear in ``prefill_items`` exactly once with the cumulative grant,
+        not once per pass. The Adapter validator rejects duplicate Prefill
+        IDs and vLLM would also over-allocate KV for the same request.
+        """
+        snapshot = make_snapshot(
+            prefill=(
+                PrefillRequest(
+                    "cmpl-ttb-r0-f03-b0000-p00-0-aaaaaaaa",
+                    0.0,
+                    1073,
+                    0,
+                    ordinal=0,
+                ),
+            )
+            + tuple(
+                PrefillRequest(
+                    (
+                        "cmpl-ttb-r0-f03-b0000-d00-0-bbbbbbbb",
+                        "cmpl-ttb-r0-f03-b0000-d01-0-cccccccc",
+                        "cmpl-ttb-r0-f03-b0000-d02-0-dddddddd",
+                        "cmpl-ttb-r0-f03-b0000-d03-0-eeeeeeee",
+                        "cmpl-ttb-r0-f03-b0000-d04-0-ffffffff",
+                    )[index],
+                    0.0,
+                    prompt_tokens,
+                    0,
+                    ordinal=index + 1,
+                )
+                for index, prompt_tokens in enumerate((230, 230, 229, 539, 228))
+            ),
+        )
+        recipe = TargetRecipe(
+            "ttb-r0-f03-b0000",
+            "decode_only",
+            0,
+            1,
+            5,
+            "partial",
+            "balanced",
+            "measured",
+            0,
+            True,
+            1024,
+            3,
+        )
+        plan = build_isolated_setup_plan(snapshot, recipe)
+        self.assertIsNotNone(plan)
+        assert plan is not None
+
+        items = plan.prefill_items
+        request_ids = [request_id for request_id, _ in items]
+        self.assertEqual(
+            len(set(request_ids)),
+            len(request_ids),
+            f"duplicate prefill request id in setup plan: {items!r}",
+        )
+
+        grants = dict(items)
+        self.assertEqual(
+            grants["cmpl-ttb-r0-f03-b0000-p00-0-aaaaaaaa"],
+            ISOLATED_PARTIAL_SETUP_TOKENS,
+        )
+        self.assertEqual(
+            grants["cmpl-ttb-r0-f03-b0000-d03-0-eeeeeeee"],
+            539,
+            "d03 (539-token prompt) must be fully prefilled in one entry",
+        )
+        self.assertEqual(
+            plan.total_prefill_tokens,
+            ISOLATED_PARTIAL_SETUP_TOKENS + 230 + 230 + 229 + 539 + 228,
+        )
 
     def test_decode_only_target_uses_only_running_decode(self) -> None:
         snapshot = make_snapshot(
