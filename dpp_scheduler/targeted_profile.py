@@ -25,7 +25,7 @@ KNEE_CAMPAIGN_ID = "candidate_knee_profile_n500_v1"
 KNEE_SMOKE_CAMPAIGN_ID = "candidate_knee_profile_smoke_n10_v1"
 ISOLATED_KNEE_CAMPAIGN_ID = "candidate_knee_profile_isolated_v2"
 ISOLATED_KNEE_SMOKE_CAMPAIGN_ID = "candidate_knee_profile_isolated_smoke_v4"
-TIME_TO_BUDGET_ACTUAL_CAMPAIGN_ID = "time_to_budget_actual_validation_v3"
+TIME_TO_BUDGET_ACTUAL_CAMPAIGN_ID = "time_to_budget_actual_validation_v4"
 TIME_TO_BUDGET_ACTUAL_SMOKE_CAMPAIGN_ID = (
     "time_to_budget_actual_validation_smoke_v2"
 )

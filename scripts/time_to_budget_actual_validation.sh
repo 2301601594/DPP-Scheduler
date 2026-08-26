@@ -92,7 +92,7 @@ resource_preflight() {
 
 validate_run() {
   "${PYTHON}" -c \
-    'from pathlib import Path; from benchmarks.isolated_candidate_profile import validate_isolated_run_directory; print(validate_isolated_run_directory(Path("results/raw/qwen3_14b_dgx_spark/time_to_budget_actual_validation_v3/runs/time_to_budget_actual_seed6001_attempt03"), expected_run_id="time_to_budget_actual_seed6001_attempt03", recipe_seed=6001, recipe_mode="time_to_budget_validation"))'
+    "from pathlib import Path; from benchmarks.isolated_candidate_profile import validate_isolated_run_directory; print(validate_isolated_run_directory(Path('results/raw/qwen3_14b_dgx_spark/${CAMPAIGN_ID}/runs/${RUN_ID}'), expected_run_id='${RUN_ID}', recipe_seed=6001, recipe_mode='time_to_budget_validation'))"
 }
 
 require_python
@@ -163,7 +163,7 @@ case "${command}" in
     fi
     if [[ -f "${RUN_ROOT}/run_manifest.json" ]]; then
       "${PYTHON}" -c \
-        'import json; from pathlib import Path; p=Path("results/raw/qwen3_14b_dgx_spark/time_to_budget_actual_validation_v3/runs/time_to_budget_actual_seed6001_attempt03/run_manifest.json"); d=json.loads(p.read_text()); print("run_status=" + str(d.get("status"))); print("error=" + str(d.get("error"))) if d.get("error") else None'
+        "import json; from pathlib import Path; p=Path('results/raw/qwen3_14b_dgx_spark/${CAMPAIGN_ID}/runs/${RUN_ID}/run_manifest.json'); d=json.loads(p.read_text()); print('run_status=' + str(d.get('status'))); print('error=' + str(d.get('error'))) if d.get('error') else None"
     else
       printf 'run_status=not_started\n'
     fi
