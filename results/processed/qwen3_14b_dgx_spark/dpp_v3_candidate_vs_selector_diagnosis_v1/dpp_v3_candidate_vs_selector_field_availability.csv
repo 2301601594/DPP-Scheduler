@@ -1,0 +1,52 @@
+requested_section,requested_field_or_statistic,availability,retained_source_field,blocking_reason
+3,frame_id,absent,,iteration log disabled; no per-frame row written
+3,prefill_backlog (tokens per frame),absent,,only prefill_backlog_frame_count (a scalar count of frames) survives
+3,decode_count,absent,,not aggregated per frame
+3,base_prefill_budget_P,absent,,computed inside BudgetResolver; surfaced only via iteration log
+3,target_duration,absent,,computed inside BudgetResolver; surfaced only via iteration log
+3,resolution_status,absent,,collect_resolution_summary output never reaches the aggregate
+3,multiplier_budgets,absent,,CandidateGenerator.last_diagnostic surfaced only via iteration log
+3,raw_candidate_count,absent,,CandidateGenerator.last_diagnostic surfaced only via iteration log
+3,deduplicated_candidate_count,absent,,CandidateGenerator.last_diagnostic surfaced only via iteration log
+3,safe_candidate_count,absent,,Safe-Set size never aggregated
+3,selected_template,aggregated_only,selection_histogram,order-free histogram over 7752 frames
+3,priority_policy,aggregated_only,policy_selection_histogram,order-free histogram over 7752 frames
+3,prefill_items,absent,,per-plan allocation surfaced only via iteration log
+3,actual_prefill_tokens,reduced_stats_only,selected_prefill_tokens,count/mean/p50/p95/max only
+3,predicted_duration,absent,,per-candidate Prediction surfaced only via iteration log
+3,conservative_duration,absent,,per-candidate Prediction surfaced only via iteration log
+3,dpp_candidate_score,absent,,candidate_scores surfaced only via iteration log
+4.1,distinct actual prefill token totals per frame,not_computable,,requires per-frame candidate budget list
+4.2,distinct canonical BatchPlan count per frame,not_computable,,requires per-frame (prefill_items decode_items) pairs
+4.3,same-budget policy diversity,not_computable,,requires per-multiplier allocation sets
+4.3,frames with 1/2/3 distinct policy allocations,not_computable,,requires per-multiplier allocation sets
+5,mixed candidate light/near-light/medium/heavy classification,not_computable,,no per-candidate predicted or conservative duration retained
+6,class A ZERO-only,not_computable,,requires per-frame non-ZERO safe candidate presence
+6,class B only-heavy-mixed,not_computable,,requires per-candidate predicted duration
+6,class C medium-only,not_computable,,requires per-candidate predicted duration
+6,class D light-available-but-ZERO-selected,not_computable,,requires per-candidate predicted duration AND selection join; this is the discriminating class
+6,class E light-selected,not_computable,,requires per-candidate predicted duration
+6,class F heavy-selected-despite-lighter-option,not_computable,,requires per-candidate predicted duration
+7,P(ZERO selected),computed,selection_histogram,94.7626 pct = 7346/7752
+7,P(ZERO | prefill backlog),derived,selection_histogram + prefill_backlog_frame_count + executed plan composition,90.3823 pct = 3806/4211 with +/-1 frame uncertainty
+7,P(ZERO | backlog AND active decode),derived,mixed_iteration_count + actual_duration_seconds.mixed.count,90.4253 pct = 3806/4209 with +/-1 frame uncertainty
+7,P(ZERO | backlog AND non-ZERO safe candidate exists),not_computable,,per-frame candidate availability never recorded; bounded only to [0 3806] of the ZERO-selected backlog frames
+7,P(ZERO | mixed safe candidate with tau_hat <= 300ms exists),not_computable,,no per-candidate predicted duration retained
+7,P(ZERO | mixed safe candidate with tau_hat <= 250ms exists),not_computable,,no per-candidate predicted duration retained
+8,base P vs P_max ratio distribution,not_computable,,neither P nor per-frame backlog nor token_budget minus decode_count retained
+8,count and share of frames with P > P_max,not_computable,,same as above
+9,multiplier collapse 5 -> 1/2/3/4/5 distinct budgets,not_computable,,requires per-frame multiplier_budgets before and after clamp
+9,collapse cause attribution,not_computable,,clamp cause is not recorded even when the iteration log is enabled
+10,selected count per M050..M150 bucket,computed,selection_histogram,"M050 250, M075 36, M100 86, M125 11, M150 22"
+10,requested prefill budget per bucket,not_computable,,not aggregated per bucket
+10,actual prefill tokens per bucket,not_computable,,selected_prefill_tokens is pooled across all buckets
+10,predicted duration per bucket,not_computable,,no predicted duration retained anywhere in the aggregate
+10,actual duration per bucket,partial,actual_duration_seconds.mixed + m150_audit.duration,pooled mixed distribution plus an M150-only audit; M075/M100/M125 not separable
+10,prediction error per bucket,not_computable,,no predicted duration retained
+11,ZERO streak count and percentiles,not_computable,,aggregate is order-free; no frame_id or timestamp survives
+11,per-streak TTFT/TBT debt at start and end,not_computable,,no per-frame debt series retained
+11,light mixed candidate existence during streak,not_computable,,no per-frame candidate list retained
+12,ZERO score vs best light mixed score,not_computable,,no per-candidate DPP score retained
+12,score difference distribution,not_computable,,no per-candidate DPP score retained
+12,TTFT/TBT/Prefill debt contribution decomposition,not_computable,,score decomposition surfaced only via iteration log
+13,representative frames (10 requested),not_computable,,zero per-frame rows survive; any listing would be fabricated

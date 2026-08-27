@@ -1,0 +1,2277 @@
+{
+  "backlog_distribution": {
+    "count": 200,
+    "max": 6770,
+    "mean": 1114.76,
+    "p50": 699,
+    "p95": 3901
+  },
+  "candidate_budget_pool": {
+    "items": [
+      {
+        "count": 200,
+        "key": 0
+      },
+      {
+        "count": 1,
+        "key": 213
+      },
+      {
+        "count": 1,
+        "key": 320
+      },
+      {
+        "count": 1,
+        "key": 427
+      },
+      {
+        "count": 1,
+        "key": 523
+      },
+      {
+        "count": 1,
+        "key": 785
+      },
+      {
+        "count": 1,
+        "key": 1047
+      },
+      {
+        "count": 1,
+        "key": 32
+      },
+      {
+        "count": 1,
+        "key": 48
+      },
+      {
+        "count": 1,
+        "key": 64
+      },
+      {
+        "count": 1,
+        "key": 80
+      },
+      {
+        "count": 1,
+        "key": 96
+      }
+    ],
+    "total": 211
+  },
+  "config_path": "/home/dongj/LLM/configs/dgx_spark_experiment.yaml",
+  "config_sha256": "9589b53c7e90c4206b84931e1e5016d1ca94d6757827e0e0e3e415f6c24e793a",
+  "decode_count_distribution": {
+    "count": 200,
+    "max": 30,
+    "mean": 16.285,
+    "p50": 16,
+    "p95": 27
+  },
+  "deduplicated_candidate_count": {
+    "count": 200,
+    "max": 6,
+    "mean": 1.055,
+    "p50": 1,
+    "p95": 1
+  },
+  "distinct_actual_prefill_token_total_count_histogram": {
+    "items": [
+      {
+        "count": 197,
+        "key": 1
+      },
+      {
+        "count": 2,
+        "key": 4
+      },
+      {
+        "count": 1,
+        "key": 6
+      }
+    ],
+    "total": 200
+  },
+  "distinct_actual_prefill_token_total_count_per_frame": {
+    "count": 200,
+    "max": 6,
+    "mean": 1.055,
+    "p50": 1,
+    "p95": 1
+  },
+  "distinct_allocations_per_multiplier_histogram": {
+    "items": [
+      {
+        "count": 11,
+        "key": 1
+      }
+    ],
+    "total": 11
+  },
+  "distinct_canonical_plan_count_per_frame": {
+    "count": 200,
+    "max": 6,
+    "mean": 1.055,
+    "p50": 1,
+    "p95": 1
+  },
+  "distinct_multiplier_budget_count_per_frame": {
+    "count": 200,
+    "max": 5,
+    "mean": 0.055,
+    "p50": 0,
+    "p95": 0
+  },
+  "frames_simulated": 200,
+  "frames_skipped_empty": 0,
+  "frames_with_workload": 200,
+  "multiplier_selections": {
+    "items": [
+      {
+        "count": 197,
+        "key": "ZERO"
+      },
+      {
+        "count": 3,
+        "key": "M050"
+      }
+    ],
+    "total": 200
+  },
+  "policy_diverse_multiplier_count_per_frame": {
+    "count": 200,
+    "max": 0,
+    "mean": 0.0,
+    "p50": 0,
+    "p95": 0
+  },
+  "policy_selections": {
+    "items": [
+      {
+        "count": 197,
+        "key": "ZERO"
+      },
+      {
+        "count": 3,
+        "key": "URGENCY"
+      }
+    ],
+    "total": 200
+  },
+  "predictor_artifact": "predictors/qwen3_14b/ridge_mixed_decode_three_segment_cross_online_v3",
+  "predictor_version": "qwen3-14b-ridge-mixed-decode-three-segment-cross-online-v3",
+  "raw_candidate_count": {
+    "count": 200,
+    "max": 16,
+    "mean": 1.165,
+    "p50": 1,
+    "p95": 1
+  },
+  "resolution_summary": {
+    "frames": 200,
+    "inverted_ok": 1,
+    "inverted_ood": 0,
+    "no_decode_no_backlog": 0,
+    "no_decode_use_max": 2,
+    "no_feasible": 197,
+    "p_max": 1047,
+    "p_min": 0,
+    "p_p50": 0,
+    "p_p95": 0,
+    "predictor_invalid": 0,
+    "support_ratio_mean": 0.996969696969697
+  },
+  "settings": {
+    "completion_aware_equal_score_policy": "same_tier_at_first_rank",
+    "completion_aware_order": [
+      "relative_urgency_tier",
+      "remaining_tokens",
+      "running_before_waiting",
+      "arrival_time",
+      "ordinal",
+      "request_id"
+    ],
+    "completion_aware_tiering": "relative_urgency_tertiles",
+    "maximum_seed_candidates": 16,
+    "minimum_prefill_chunk_tokens": 6,
+    "predictor_inversion_budget_grid": [
+      0,
+      64,
+      128,
+      256,
+      384,
+      512,
+      768,
+      1024,
+      1536,
+      2048
+    ],
+    "predictor_inversion_safety_margin_seconds": 0.02,
+    "prefill_budget_multipliers": [
+      0.5,
+      0.75,
+      1.0,
+      1.25,
+      1.5
+    ],
+    "synthetic_prefill_hold_seconds": 2.0,
+    "synthetic_prefill_hold_status": "diagnostic_assumption_not_measurement"
+  },
+  "template_winners_top": [
+    {
+      "count": 197,
+      "key": "ALL_DECODE:ZERO"
+    },
+    {
+      "count": 3,
+      "key": "ALL_DECODE:SLACK_BUDGET:M050:URGENCY"
+    }
+  ],
+  "trace_path": "traces/qwen3_14b/qps_0.25_seed_1001_cap2048.jsonl",
+  "trace_request_count": 200,
+  "v2_legacy_budget_pool": {
+    "items": [
+      {
+        "count": 200,
+        "key": 0
+      },
+      {
+        "count": 12,
+        "key": 507
+      },
+      {
+        "count": 11,
+        "key": 508
+      },
+      {
+        "count": 7,
+        "key": 1016
+      },
+      {
+        "count": 7,
+        "key": 1524
+      },
+      {
+        "count": 6,
+        "key": 509
+      },
+      {
+        "count": 6,
+        "key": 1015
+      },
+      {
+        "count": 6,
+        "key": 1523
+      },
+      {
+        "count": 6,
+        "key": 2031
+      },
+      {
+        "count": 6,
+        "key": 1014
+      },
+      {
+        "count": 6,
+        "key": 1521
+      },
+      {
+        "count": 6,
+        "key": 110
+      },
+      {
+        "count": 6,
+        "key": 36
+      },
+      {
+        "count": 6,
+        "key": 147
+      },
+      {
+        "count": 5,
+        "key": 41
+      },
+      {
+        "count": 5,
+        "key": 130
+      },
+      {
+        "count": 5,
+        "key": 1520
+      },
+      {
+        "count": 5,
+        "key": 73
+      },
+      {
+        "count": 4,
+        "key": 168
+      },
+      {
+        "count": 4,
+        "key": 182
+      },
+      {
+        "count": 4,
+        "key": 273
+      },
+      {
+        "count": 4,
+        "key": 1017
+      },
+      {
+        "count": 4,
+        "key": 2033
+      },
+      {
+        "count": 4,
+        "key": 2029
+      },
+      {
+        "count": 4,
+        "key": 83
+      },
+      {
+        "count": 4,
+        "key": 134
+      },
+      {
+        "count": 4,
+        "key": 146
+      },
+      {
+        "count": 4,
+        "key": 506
+      },
+      {
+        "count": 4,
+        "key": 1013
+      },
+      {
+        "count": 4,
+        "key": 2027
+      },
+      {
+        "count": 3,
+        "key": 213
+      },
+      {
+        "count": 3,
+        "key": 261
+      },
+      {
+        "count": 3,
+        "key": 56
+      },
+      {
+        "count": 3,
+        "key": 139
+      },
+      {
+        "count": 3,
+        "key": 1019
+      },
+      {
+        "count": 3,
+        "key": 117
+      },
+      {
+        "count": 3,
+        "key": 100
+      },
+      {
+        "count": 3,
+        "key": 200
+      },
+      {
+        "count": 3,
+        "key": 91
+      },
+      {
+        "count": 3,
+        "key": 285
+      },
+      {
+        "count": 3,
+        "key": 1140
+      },
+      {
+        "count": 3,
+        "key": 1018
+      },
+      {
+        "count": 3,
+        "key": 1527
+      },
+      {
+        "count": 3,
+        "key": 2037
+      },
+      {
+        "count": 3,
+        "key": 2032
+      },
+      {
+        "count": 3,
+        "key": 515
+      },
+      {
+        "count": 3,
+        "key": 597
+      },
+      {
+        "count": 3,
+        "key": 365
+      },
+      {
+        "count": 3,
+        "key": 244
+      },
+      {
+        "count": 3,
+        "key": 174
+      },
+      {
+        "count": 3,
+        "key": 140
+      },
+      {
+        "count": 3,
+        "key": 267
+      },
+      {
+        "count": 3,
+        "key": 402
+      },
+      {
+        "count": 3,
+        "key": 109
+      },
+      {
+        "count": 3,
+        "key": 305
+      },
+      {
+        "count": 3,
+        "key": 214
+      },
+      {
+        "count": 3,
+        "key": 615
+      },
+      {
+        "count": 3,
+        "key": 189
+      },
+      {
+        "count": 3,
+        "key": 379
+      },
+      {
+        "count": 3,
+        "key": 93
+      },
+      {
+        "count": 3,
+        "key": 186
+      },
+      {
+        "count": 3,
+        "key": 201
+      },
+      {
+        "count": 3,
+        "key": 125
+      },
+      {
+        "count": 3,
+        "key": 167
+      },
+      {
+        "count": 3,
+        "key": 94
+      },
+      {
+        "count": 2,
+        "key": 106
+      },
+      {
+        "count": 2,
+        "key": 523
+      },
+      {
+        "count": 2,
+        "key": 113
+      },
+      {
+        "count": 2,
+        "key": 169
+      },
+      {
+        "count": 2,
+        "key": 226
+      },
+      {
+        "count": 2,
+        "key": 278
+      },
+      {
+        "count": 2,
+        "key": 272
+      },
+      {
+        "count": 2,
+        "key": 34
+      },
+      {
+        "count": 2,
+        "key": 103
+      },
+      {
+        "count": 2,
+        "key": 206
+      },
+      {
+        "count": 2,
+        "key": 150
+      },
+      {
+        "count": 2,
+        "key": 301
+      },
+      {
+        "count": 2,
+        "key": 602
+      },
+      {
+        "count": 2,
+        "key": 871
+      },
+      {
+        "count": 2,
+        "key": 1528
+      },
+      {
+        "count": 2,
+        "key": 2038
+      },
+      {
+        "count": 2,
+        "key": 137
+      },
+      {
+        "count": 2,
+        "key": 411
+      },
+      {
+        "count": 2,
+        "key": 570
+      },
+      {
+        "count": 2,
+        "key": 855
+      },
+      {
+        "count": 2,
+        "key": 39
+      },
+      {
+        "count": 2,
+        "key": 78
+      },
+      {
+        "count": 2,
+        "key": 156
+      },
+      {
+        "count": 2,
+        "key": 257
+      },
+      {
+        "count": 2,
+        "key": 149
+      },
+      {
+        "count": 2,
+        "key": 123
+      },
+      {
+        "count": 2,
+        "key": 165
+      },
+      {
+        "count": 2,
+        "key": 151
+      },
+      {
+        "count": 2,
+        "key": 302
+      },
+      {
+        "count": 2,
+        "key": 43
+      },
+      {
+        "count": 2,
+        "key": 87
+      },
+      {
+        "count": 2,
+        "key": 70
+      },
+      {
+        "count": 2,
+        "key": 350
+      },
+      {
+        "count": 2,
+        "key": 124
+      },
+      {
+        "count": 2,
+        "key": 133
+      },
+      {
+        "count": 2,
+        "key": 268
+      },
+      {
+        "count": 2,
+        "key": 219
+      },
+      {
+        "count": 2,
+        "key": 403
+      },
+      {
+        "count": 2,
+        "key": 81
+      },
+      {
+        "count": 2,
+        "key": 163
+      },
+      {
+        "count": 2,
+        "key": 326
+      },
+      {
+        "count": 2,
+        "key": 246
+      },
+      {
+        "count": 2,
+        "key": 89
+      },
+      {
+        "count": 2,
+        "key": 178
+      },
+      {
+        "count": 2,
+        "key": 356
+      },
+      {
+        "count": 2,
+        "key": 84
+      },
+      {
+        "count": 2,
+        "key": 784
+      },
+      {
+        "count": 2,
+        "key": 152
+      },
+      {
+        "count": 2,
+        "key": 610
+      },
+      {
+        "count": 2,
+        "key": 642
+      },
+      {
+        "count": 2,
+        "key": 307
+      },
+      {
+        "count": 2,
+        "key": 922
+      },
+      {
+        "count": 2,
+        "key": 1230
+      },
+      {
+        "count": 2,
+        "key": 594
+      },
+      {
+        "count": 2,
+        "key": 220
+      },
+      {
+        "count": 2,
+        "key": 292
+      },
+      {
+        "count": 2,
+        "key": 438
+      },
+      {
+        "count": 2,
+        "key": 585
+      },
+      {
+        "count": 2,
+        "key": 758
+      },
+      {
+        "count": 2,
+        "key": 279
+      },
+      {
+        "count": 2,
+        "key": 297
+      },
+      {
+        "count": 2,
+        "key": 390
+      },
+      {
+        "count": 2,
+        "key": 209
+      },
+      {
+        "count": 2,
+        "key": 418
+      },
+      {
+        "count": 2,
+        "key": 627
+      },
+      {
+        "count": 2,
+        "key": 114
+      },
+      {
+        "count": 2,
+        "key": 205
+      },
+      {
+        "count": 2,
+        "key": 502
+      },
+      {
+        "count": 2,
+        "key": 441
+      },
+      {
+        "count": 2,
+        "key": 71
+      },
+      {
+        "count": 2,
+        "key": 581
+      },
+      {
+        "count": 2,
+        "key": 345
+      },
+      {
+        "count": 2,
+        "key": 691
+      },
+      {
+        "count": 2,
+        "key": 196
+      },
+      {
+        "count": 2,
+        "key": 269
+      },
+      {
+        "count": 2,
+        "key": 171
+      },
+      {
+        "count": 2,
+        "key": 239
+      },
+      {
+        "count": 2,
+        "key": 319
+      },
+      {
+        "count": 2,
+        "key": 46
+      },
+      {
+        "count": 2,
+        "key": 172
+      },
+      {
+        "count": 2,
+        "key": 516
+      },
+      {
+        "count": 2,
+        "key": 231
+      },
+      {
+        "count": 2,
+        "key": 2028
+      },
+      {
+        "count": 2,
+        "key": 154
+      },
+      {
+        "count": 2,
+        "key": 492
+      },
+      {
+        "count": 2,
+        "key": 136
+      },
+      {
+        "count": 2,
+        "key": 199
+      },
+      {
+        "count": 2,
+        "key": 398
+      },
+      {
+        "count": 2,
+        "key": 582
+      },
+      {
+        "count": 2,
+        "key": 1525
+      },
+      {
+        "count": 2,
+        "key": 2034
+      },
+      {
+        "count": 1,
+        "key": 320
+      },
+      {
+        "count": 1,
+        "key": 427
+      },
+      {
+        "count": 1,
+        "key": 785
+      },
+      {
+        "count": 1,
+        "key": 1047
+      },
+      {
+        "count": 1,
+        "key": 221
+      },
+      {
+        "count": 1,
+        "key": 443
+      },
+      {
+        "count": 1,
+        "key": 665
+      },
+      {
+        "count": 1,
+        "key": 887
+      },
+      {
+        "count": 1,
+        "key": 112
+      },
+      {
+        "count": 1,
+        "key": 225
+      },
+      {
+        "count": 1,
+        "key": 92
+      },
+      {
+        "count": 1,
+        "key": 185
+      },
+      {
+        "count": 1,
+        "key": 371
+      },
+      {
+        "count": 1,
+        "key": 544
+      },
+      {
+        "count": 1,
+        "key": 816
+      },
+      {
+        "count": 1,
+        "key": 1089
+      },
+      {
+        "count": 1,
+        "key": 69
+      },
+      {
+        "count": 1,
+        "key": 104
+      },
+      {
+        "count": 1,
+        "key": 1529
+      },
+      {
+        "count": 1,
+        "key": 2039
+      },
+      {
+        "count": 1,
+        "key": 309
+      },
+      {
+        "count": 1,
+        "key": 412
+      },
+      {
+        "count": 1,
+        "key": 451
+      },
+      {
+        "count": 1,
+        "key": 263
+      },
+      {
+        "count": 1,
+        "key": 526
+      },
+      {
+        "count": 1,
+        "key": 789
+      },
+      {
+        "count": 1,
+        "key": 1052
+      },
+      {
+        "count": 1,
+        "key": 340
+      },
+      {
+        "count": 1,
+        "key": 680
+      },
+      {
+        "count": 1,
+        "key": 1020
+      },
+      {
+        "count": 1,
+        "key": 1361
+      },
+      {
+        "count": 1,
+        "key": 217
+      },
+      {
+        "count": 1,
+        "key": 435
+      },
+      {
+        "count": 1,
+        "key": 653
+      },
+      {
+        "count": 1,
+        "key": 58
+      },
+      {
+        "count": 1,
+        "key": 176
+      },
+      {
+        "count": 1,
+        "key": 235
+      },
+      {
+        "count": 1,
+        "key": 50
+      },
+      {
+        "count": 1,
+        "key": 310
+      },
+      {
+        "count": 1,
+        "key": 621
+      },
+      {
+        "count": 1,
+        "key": 932
+      },
+      {
+        "count": 1,
+        "key": 1243
+      },
+      {
+        "count": 1,
+        "key": 414
+      },
+      {
+        "count": 1,
+        "key": 828
+      },
+      {
+        "count": 1,
+        "key": 1242
+      },
+      {
+        "count": 1,
+        "key": 1656
+      },
+      {
+        "count": 1,
+        "key": 184
+      },
+      {
+        "count": 1,
+        "key": 368
+      },
+      {
+        "count": 1,
+        "key": 552
+      },
+      {
+        "count": 1,
+        "key": 737
+      },
+      {
+        "count": 1,
+        "key": 325
+      },
+      {
+        "count": 1,
+        "key": 650
+      },
+      {
+        "count": 1,
+        "key": 975
+      },
+      {
+        "count": 1,
+        "key": 1300
+      },
+      {
+        "count": 1,
+        "key": 364
+      },
+      {
+        "count": 1,
+        "key": 274
+      },
+      {
+        "count": 1,
+        "key": 549
+      },
+      {
+        "count": 1,
+        "key": 1526
+      },
+      {
+        "count": 1,
+        "key": 2035
+      },
+      {
+        "count": 1,
+        "key": 128
+      },
+      {
+        "count": 1,
+        "key": 386
+      },
+      {
+        "count": 1,
+        "key": 298
+      },
+      {
+        "count": 1,
+        "key": 447
+      },
+      {
+        "count": 1,
+        "key": 122
+      },
+      {
+        "count": 1,
+        "key": 366
+      },
+      {
+        "count": 1,
+        "key": 489
+      },
+      {
+        "count": 1,
+        "key": 82
+      },
+      {
+        "count": 1,
+        "key": 453
+      },
+      {
+        "count": 1,
+        "key": 604
+      },
+      {
+        "count": 1,
+        "key": 35
+      },
+      {
+        "count": 1,
+        "key": 105
+      },
+      {
+        "count": 1,
+        "key": 700
+      },
+      {
+        "count": 1,
+        "key": 1050
+      },
+      {
+        "count": 1,
+        "key": 1401
+      },
+      {
+        "count": 1,
+        "key": 462
+      },
+      {
+        "count": 1,
+        "key": 924
+      },
+      {
+        "count": 1,
+        "key": 1386
+      },
+      {
+        "count": 1,
+        "key": 1848
+      },
+      {
+        "count": 1,
+        "key": 166
+      },
+      {
+        "count": 1,
+        "key": 66
+      },
+      {
+        "count": 1,
+        "key": 537
+      },
+      {
+        "count": 1,
+        "key": 349
+      },
+      {
+        "count": 1,
+        "key": 524
+      },
+      {
+        "count": 1,
+        "key": 699
+      },
+      {
+        "count": 1,
+        "key": 54
+      },
+      {
+        "count": 1,
+        "key": 164
+      },
+      {
+        "count": 1,
+        "key": 807
+      },
+      {
+        "count": 1,
+        "key": 1211
+      },
+      {
+        "count": 1,
+        "key": 1615
+      },
+      {
+        "count": 1,
+        "key": 369
+      },
+      {
+        "count": 1,
+        "key": 493
+      },
+      {
+        "count": 1,
+        "key": 42
+      },
+      {
+        "count": 1,
+        "key": 126
+      },
+      {
+        "count": 1,
+        "key": 1046
+      },
+      {
+        "count": 1,
+        "key": 457
+      },
+      {
+        "count": 1,
+        "key": 428
+      },
+      {
+        "count": 1,
+        "key": 856
+      },
+      {
+        "count": 1,
+        "key": 275
+      },
+      {
+        "count": 1,
+        "key": 550
+      },
+      {
+        "count": 1,
+        "key": 825
+      },
+      {
+        "count": 1,
+        "key": 1101
+      },
+      {
+        "count": 1,
+        "key": 712
+      },
+      {
+        "count": 1,
+        "key": 1068
+      },
+      {
+        "count": 1,
+        "key": 1424
+      },
+      {
+        "count": 1,
+        "key": 198
+      },
+      {
+        "count": 1,
+        "key": 396
+      },
+      {
+        "count": 1,
+        "key": 793
+      },
+      {
+        "count": 1,
+        "key": 265
+      },
+      {
+        "count": 1,
+        "key": 530
+      },
+      {
+        "count": 1,
+        "key": 795
+      },
+      {
+        "count": 1,
+        "key": 1061
+      },
+      {
+        "count": 1,
+        "key": 55
+      },
+      {
+        "count": 1,
+        "key": 247
+      },
+      {
+        "count": 1,
+        "key": 494
+      },
+      {
+        "count": 1,
+        "key": 741
+      },
+      {
+        "count": 1,
+        "key": 989
+      },
+      {
+        "count": 1,
+        "key": 568
+      },
+      {
+        "count": 1,
+        "key": 373
+      },
+      {
+        "count": 1,
+        "key": 37
+      },
+      {
+        "count": 1,
+        "key": 74
+      },
+      {
+        "count": 1,
+        "key": 111
+      },
+      {
+        "count": 1,
+        "key": 391
+      },
+      {
+        "count": 1,
+        "key": 522
+      },
+      {
+        "count": 1,
+        "key": 148
+      },
+      {
+        "count": 1,
+        "key": 445
+      },
+      {
+        "count": 1,
+        "key": 260
+      },
+      {
+        "count": 1,
+        "key": 520
+      },
+      {
+        "count": 1,
+        "key": 836
+      },
+      {
+        "count": 1,
+        "key": 354
+      },
+      {
+        "count": 1,
+        "key": 708
+      },
+      {
+        "count": 1,
+        "key": 1062
+      },
+      {
+        "count": 1,
+        "key": 1417
+      },
+      {
+        "count": 1,
+        "key": 252
+      },
+      {
+        "count": 1,
+        "key": 337
+      },
+      {
+        "count": 1,
+        "key": 183
+      },
+      {
+        "count": 1,
+        "key": 367
+      },
+      {
+        "count": 1,
+        "key": 551
+      },
+      {
+        "count": 1,
+        "key": 735
+      },
+      {
+        "count": 1,
+        "key": 38
+      },
+      {
+        "count": 1,
+        "key": 76
+      },
+      {
+        "count": 1,
+        "key": 75
+      },
+      {
+        "count": 1,
+        "key": 227
+      },
+      {
+        "count": 1,
+        "key": 303
+      },
+      {
+        "count": 1,
+        "key": 232
+      },
+      {
+        "count": 1,
+        "key": 465
+      },
+      {
+        "count": 1,
+        "key": 697
+      },
+      {
+        "count": 1,
+        "key": 930
+      },
+      {
+        "count": 1,
+        "key": 616
+      },
+      {
+        "count": 1,
+        "key": 822
+      },
+      {
+        "count": 1,
+        "key": 251
+      },
+      {
+        "count": 1,
+        "key": 753
+      },
+      {
+        "count": 1,
+        "key": 1005
+      },
+      {
+        "count": 1,
+        "key": 330
+      },
+      {
+        "count": 1,
+        "key": 138
+      },
+      {
+        "count": 1,
+        "key": 277
+      },
+      {
+        "count": 1,
+        "key": 415
+      },
+      {
+        "count": 1,
+        "key": 554
+      },
+      {
+        "count": 1,
+        "key": 142
+      },
+      {
+        "count": 1,
+        "key": 193
+      },
+      {
+        "count": 1,
+        "key": 387
+      },
+      {
+        "count": 1,
+        "key": 775
+      },
+      {
+        "count": 1,
+        "key": 915
+      },
+      {
+        "count": 1,
+        "key": 1220
+      },
+      {
+        "count": 1,
+        "key": 1037
+      },
+      {
+        "count": 1,
+        "key": 1383
+      },
+      {
+        "count": 1,
+        "key": 1137
+      },
+      {
+        "count": 1,
+        "key": 1517
+      },
+      {
+        "count": 1,
+        "key": 107
+      },
+      {
+        "count": 1,
+        "key": 215
+      },
+      {
+        "count": 1,
+        "key": 323
+      },
+      {
+        "count": 1,
+        "key": 431
+      },
+      {
+        "count": 1,
+        "key": 392
+      },
+      {
+        "count": 1,
+        "key": 588
+      },
+      {
+        "count": 1,
+        "key": 380
+      },
+      {
+        "count": 1,
+        "key": 760
+      },
+      {
+        "count": 1,
+        "key": 67
+      },
+      {
+        "count": 1,
+        "key": 284
+      },
+      {
+        "count": 1,
+        "key": 343
+      },
+      {
+        "count": 1,
+        "key": 687
+      },
+      {
+        "count": 1,
+        "key": 773
+      },
+      {
+        "count": 1,
+        "key": 1031
+      },
+      {
+        "count": 1,
+        "key": 79
+      },
+      {
+        "count": 1,
+        "key": 159
+      },
+      {
+        "count": 1,
+        "key": 131
+      },
+      {
+        "count": 1,
+        "key": 262
+      },
+      {
+        "count": 1,
+        "key": 393
+      },
+      {
+        "count": 1,
+        "key": 525
+      },
+      {
+        "count": 1,
+        "key": 344
+      },
+      {
+        "count": 1,
+        "key": 689
+      },
+      {
+        "count": 1,
+        "key": 429
+      },
+      {
+        "count": 1,
+        "key": 644
+      },
+      {
+        "count": 1,
+        "key": 859
+      },
+      {
+        "count": 1,
+        "key": 426
+      },
+      {
+        "count": 1,
+        "key": 115
+      },
+      {
+        "count": 1,
+        "key": 347
+      },
+      {
+        "count": 1,
+        "key": 463
+      },
+      {
+        "count": 1,
+        "key": 77
+      },
+      {
+        "count": 1,
+        "key": 308
+      },
+      {
+        "count": 1,
+        "key": 293
+      },
+      {
+        "count": 1,
+        "key": 440
+      },
+      {
+        "count": 1,
+        "key": 587
+      },
+      {
+        "count": 1,
+        "key": 62
+      },
+      {
+        "count": 1,
+        "key": 248
+      },
+      {
+        "count": 1,
+        "key": 536
+      },
+      {
+        "count": 1,
+        "key": 518
+      },
+      {
+        "count": 1,
+        "key": 47
+      },
+      {
+        "count": 1,
+        "key": 141
+      },
+      {
+        "count": 1,
+        "key": 271
+      },
+      {
+        "count": 1,
+        "key": 543
+      },
+      {
+        "count": 1,
+        "key": 815
+      },
+      {
+        "count": 1,
+        "key": 1087
+      },
+      {
+        "count": 1,
+        "key": 57
+      },
+      {
+        "count": 1,
+        "key": 229
+      },
+      {
+        "count": 1,
+        "key": 212
+      },
+      {
+        "count": 1,
+        "key": 424
+      },
+      {
+        "count": 1,
+        "key": 636
+      },
+      {
+        "count": 1,
+        "key": 849
+      },
+      {
+        "count": 1,
+        "key": 143
+      },
+      {
+        "count": 1,
+        "key": 286
+      },
+      {
+        "count": 1,
+        "key": 738
+      },
+      {
+        "count": 1,
+        "key": 985
+      },
+      {
+        "count": 1,
+        "key": 1004
+      },
+      {
+        "count": 1,
+        "key": 1506
+      },
+      {
+        "count": 1,
+        "key": 2009
+      },
+      {
+        "count": 1,
+        "key": 408
+      },
+      {
+        "count": 1,
+        "key": 545
+      },
+      {
+        "count": 1,
+        "key": 329
+      },
+      {
+        "count": 1,
+        "key": 439
+      },
+      {
+        "count": 1,
+        "key": 119
+      },
+      {
+        "count": 1,
+        "key": 238
+      },
+      {
+        "count": 1,
+        "key": 357
+      },
+      {
+        "count": 1,
+        "key": 477
+      },
+      {
+        "count": 1,
+        "key": 258
+      },
+      {
+        "count": 1,
+        "key": 774
+      },
+      {
+        "count": 1,
+        "key": 1032
+      },
+      {
+        "count": 1,
+        "key": 32
+      },
+      {
+        "count": 1,
+        "key": 65
+      },
+      {
+        "count": 1,
+        "key": 97
+      },
+      {
+        "count": 1,
+        "key": 336
+      },
+      {
+        "count": 1,
+        "key": 504
+      },
+      {
+        "count": 1,
+        "key": 672
+      },
+      {
+        "count": 1,
+        "key": 401
+      },
+      {
+        "count": 1,
+        "key": 803
+      },
+      {
+        "count": 1,
+        "key": 501
+      },
+      {
+        "count": 1,
+        "key": 1002
+      },
+      {
+        "count": 1,
+        "key": 1503
+      },
+      {
+        "count": 1,
+        "key": 2005
+      },
+      {
+        "count": 1,
+        "key": 96
+      },
+      {
+        "count": 1,
+        "key": 192
+      },
+      {
+        "count": 1,
+        "key": 288
+      },
+      {
+        "count": 1,
+        "key": 384
+      },
+      {
+        "count": 1,
+        "key": 321
+      },
+      {
+        "count": 1,
+        "key": 963
+      },
+      {
+        "count": 1,
+        "key": 1284
+      },
+      {
+        "count": 1,
+        "key": 796
+      },
+      {
+        "count": 1,
+        "key": 68
+      },
+      {
+        "count": 1,
+        "key": 102
+      },
+      {
+        "count": 1,
+        "key": 116
+      },
+      {
+        "count": 1,
+        "key": 233
+      },
+      {
+        "count": 1,
+        "key": 467
+      },
+      {
+        "count": 1,
+        "key": 291
+      },
+      {
+        "count": 1,
+        "key": 873
+      },
+      {
+        "count": 1,
+        "key": 1164
+      },
+      {
+        "count": 1,
+        "key": 95
+      },
+      {
+        "count": 1,
+        "key": 191
+      },
+      {
+        "count": 1,
+        "key": 287
+      },
+      {
+        "count": 1,
+        "key": 383
+      },
+      {
+        "count": 1,
+        "key": 410
+      },
+      {
+        "count": 1,
+        "key": 821
+      },
+      {
+        "count": 1,
+        "key": 473
+      },
+      {
+        "count": 1,
+        "key": 946
+      },
+      {
+        "count": 1,
+        "key": 1419
+      },
+      {
+        "count": 1,
+        "key": 1893
+      },
+      {
+        "count": 1,
+        "key": 210
+      },
+      {
+        "count": 1,
+        "key": 280
+      },
+      {
+        "count": 1,
+        "key": 44
+      },
+      {
+        "count": 1,
+        "key": 294
+      },
+      {
+        "count": 1,
+        "key": 589
+      },
+      {
+        "count": 1,
+        "key": 479
+      },
+      {
+        "count": 1,
+        "key": 718
+      },
+      {
+        "count": 1,
+        "key": 958
+      },
+      {
+        "count": 1,
+        "key": 40
+      },
+      {
+        "count": 1,
+        "key": 80
+      },
+      {
+        "count": 1,
+        "key": 120
+      },
+      {
+        "count": 1,
+        "key": 160
+      },
+      {
+        "count": 1,
+        "key": 90
+      },
+      {
+        "count": 1,
+        "key": 180
+      },
+      {
+        "count": 1,
+        "key": 270
+      },
+      {
+        "count": 1,
+        "key": 360
+      },
+      {
+        "count": 1,
+        "key": 419
+      },
+      {
+        "count": 1,
+        "key": 559
+      },
+      {
+        "count": 1,
+        "key": 837
+      },
+      {
+        "count": 1,
+        "key": 534
+      },
+      {
+        "count": 1,
+        "key": 801
+      },
+      {
+        "count": 1,
+        "key": 1069
+      },
+      {
+        "count": 1,
+        "key": 557
+      },
+      {
+        "count": 1,
+        "key": 835
+      },
+      {
+        "count": 1,
+        "key": 1114
+      },
+      {
+        "count": 1,
+        "key": 254
+      },
+      {
+        "count": 1,
+        "key": 762
+      },
+      {
+        "count": 1,
+        "key": 177
+      },
+      {
+        "count": 1,
+        "key": 355
+      },
+      {
+        "count": 1,
+        "key": 533
+      },
+      {
+        "count": 1,
+        "key": 711
+      },
+      {
+        "count": 1,
+        "key": 780
+      },
+      {
+        "count": 1,
+        "key": 1170
+      },
+      {
+        "count": 1,
+        "key": 1561
+      },
+      {
+        "count": 1,
+        "key": 51
+      },
+      {
+        "count": 1,
+        "key": 85
+      },
+      {
+        "count": 1,
+        "key": 170
+      },
+      {
+        "count": 1,
+        "key": 255
+      },
+      {
+        "count": 1,
+        "key": 341
+      },
+      {
+        "count": 1,
+        "key": 187
+      },
+      {
+        "count": 1,
+        "key": 49
+      },
+      {
+        "count": 1,
+        "key": 98
+      },
+      {
+        "count": 1,
+        "key": 984
+      },
+      {
+        "count": 1,
+        "key": 1476
+      },
+      {
+        "count": 1,
+        "key": 1968
+      },
+      {
+        "count": 1,
+        "key": 404
+      },
+      {
+        "count": 1,
+        "key": 539
+      },
+      {
+        "count": 1,
+        "key": 188
+      },
+      {
+        "count": 1,
+        "key": 282
+      },
+      {
+        "count": 1,
+        "key": 376
+      },
+      {
+        "count": 1,
+        "key": 290
+      },
+      {
+        "count": 1,
+        "key": 1162
+      },
+      {
+        "count": 1,
+        "key": 241
+      },
+      {
+        "count": 1,
+        "key": 483
+      },
+      {
+        "count": 1,
+        "key": 724
+      },
+      {
+        "count": 1,
+        "key": 966
+      },
+      {
+        "count": 1,
+        "key": 194
+      },
+      {
+        "count": 1,
+        "key": 388
+      },
+      {
+        "count": 1,
+        "key": 777
+      },
+      {
+        "count": 1,
+        "key": 797
+      },
+      {
+        "count": 1,
+        "key": 611
+      },
+      {
+        "count": 1,
+        "key": 916
+      },
+      {
+        "count": 1,
+        "key": 1222
+      },
+      {
+        "count": 1,
+        "key": 395
+      },
+      {
+        "count": 1,
+        "key": 790
+      },
+      {
+        "count": 1,
+        "key": 1185
+      },
+      {
+        "count": 1,
+        "key": 1580
+      },
+      {
+        "count": 1,
+        "key": 547
+      },
+      {
+        "count": 1,
+        "key": 730
+      },
+      {
+        "count": 1,
+        "key": 72
+      },
+      {
+        "count": 1,
+        "key": 108
+      },
+      {
+        "count": 1,
+        "key": 145
+      },
+      {
+        "count": 1,
+        "key": 409
+      },
+      {
+        "count": 1,
+        "key": 546
+      },
+      {
+        "count": 1,
+        "key": 595
+      },
+      {
+        "count": 1,
+        "key": 892
+      },
+      {
+        "count": 1,
+        "key": 1190
+      },
+      {
+        "count": 1,
+        "key": 218
+      },
+      {
+        "count": 1,
+        "key": 436
+      },
+      {
+        "count": 1,
+        "key": 654
+      },
+      {
+        "count": 1,
+        "key": 872
+      }
+    ],
+    "total": 1000
+  }
+}

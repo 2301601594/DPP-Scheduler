@@ -34,6 +34,7 @@ from benchmarks.qwen3_runtime import (
     build_dpp_server_command,
     build_stock_server_command,
     load_active_runtime,
+    load_dpp_settings,
     require_frozen_for_execution,
     resolve_under,
     sha256_file,
@@ -54,6 +55,8 @@ SCHEDULER_POLICIES = ("stock", "dpp")
 DPP_DIAGNOSTIC_ITERATION_LOG_ENV = "DPP_DIAGNOSTIC_ITERATION_LOG"
 DPP_DIAGNOSTIC_AGGREGATE_PATH_ENV = "DPP_DIAGNOSTIC_AGGREGATE_PATH"
 DPP_EXECUTION_SCOPE_ENV = "DPP_EXECUTION_SCOPE"
+DPP_TTFT_DRIFT_WEIGHT_ENV = "DPP_TTFT_DRIFT_WEIGHT"
+DPP_SELECTION_MODE_ENV = "DPP_SELECTION_MODE"
 
 
 def resolve_execution_scope(
@@ -500,6 +503,8 @@ def _resolved_preview(
     diagnostic_iteration_log: bool,
     campaign_id: str | None,
     comparison_scope: str,
+    dpp_ttft_drift_weight: float | None = None,
+    dpp_selection_mode: str = "normal",
 ) -> dict[str, Any]:
     return {
         "config": str(runtime.config_path),
@@ -517,6 +522,8 @@ def _resolved_preview(
         "campaign_id": campaign_id,
         "comparison_scope": comparison_scope,
         "dpp_diagnostic_iteration_log": diagnostic_iteration_log,
+        "dpp_ttft_drift_weight": dpp_ttft_drift_weight,
+        "dpp_selection_mode": dpp_selection_mode,
         "client_safety_ceiling_tokens": runtime.client_safety_ceiling_tokens,
         "scheduler_receives_safety_ceiling": False,
         "output_dir": str(output_dir),
@@ -557,6 +564,12 @@ def main() -> int:
         "--dpp-diagnostic-iteration-log",
         action="store_true",
         help="enable per-iteration DPP INFO logs for a diagnostic run only",
+    )
+    parser.add_argument("--dpp-ttft-drift-weight", type=float)
+    parser.add_argument(
+        "--dpp-selection-mode",
+        choices=("normal", "forced_stock_plan"),
+        default="normal",
     )
     parser.add_argument("--port", type=int, default=8010)
     parser.add_argument("--startup-timeout", type=float, default=600)
@@ -609,6 +622,28 @@ def main() -> int:
         raise ActiveConfigError(
             "DPP diagnostic iteration logging requires --policy dpp"
         )
+    if args.policy != "dpp" and (
+        args.dpp_ttft_drift_weight is not None
+        or args.dpp_selection_mode != "normal"
+    ):
+        raise ActiveConfigError("DPP weight/selection overrides require --policy dpp")
+    if args.dpp_ttft_drift_weight is not None and (
+        not math.isfinite(args.dpp_ttft_drift_weight)
+        or args.dpp_ttft_drift_weight <= 0
+    ):
+        raise ActiveConfigError("DPP TTFT drift weight must be finite and positive")
+    if args.policy == "dpp" and (
+        args.dpp_ttft_drift_weight is not None
+        or args.dpp_selection_mode != "normal"
+    ) and comparison_scope != "development_nonformal":
+        raise ActiveConfigError("DPP weight/selection overrides are development-only")
+    resolved_weight = None
+    if args.policy == "dpp":
+        resolved_weight = (
+            args.dpp_ttft_drift_weight
+            if args.dpp_ttft_drift_weight is not None
+            else load_dpp_settings(runtime).ttft_drift_weight
+        )
     command_builder = (
         build_dpp_server_command if args.policy == "dpp" else build_stock_server_command
     )
@@ -625,6 +660,8 @@ def main() -> int:
         diagnostic_iteration_log=args.dpp_diagnostic_iteration_log,
         campaign_id=args.campaign_id,
         comparison_scope=comparison_scope,
+        dpp_ttft_drift_weight=resolved_weight,
+        dpp_selection_mode=args.dpp_selection_mode,
     )
     execution_scope = resolve_execution_scope(
         policy=args.policy,
@@ -636,6 +673,13 @@ def main() -> int:
         preview["runner_env_overrides"][DPP_DIAGNOSTIC_AGGREGATE_PATH_ENV] = str(
             output_dir / "dpp_diagnostic_aggregate.json"
         )
+        preview["runner_env_overrides"][DPP_SELECTION_MODE_ENV] = (
+            args.dpp_selection_mode
+        )
+        if args.dpp_ttft_drift_weight is not None:
+            preview["runner_env_overrides"][DPP_TTFT_DRIFT_WEIGHT_ENV] = str(
+                resolved_weight
+            )
     if args.dry_run:
         print(json.dumps(preview, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
@@ -647,6 +691,8 @@ def main() -> int:
     output_dir.mkdir(parents=True)
 
     environment = os.environ.copy()
+    environment.pop(DPP_TTFT_DRIFT_WEIGHT_ENV, None)
+    environment.pop(DPP_SELECTION_MODE_ENV, None)
     environment.update(dict(runtime.required_env))
     environment["PATH"] = f"{runtime.python.parent}:{environment.get('PATH', '')}"
     environment[DPP_DIAGNOSTIC_ITERATION_LOG_ENV] = (
@@ -657,6 +703,9 @@ def main() -> int:
         environment[DPP_DIAGNOSTIC_AGGREGATE_PATH_ENV] = str(
             output_dir / "dpp_diagnostic_aggregate.json"
         )
+        environment[DPP_SELECTION_MODE_ENV] = args.dpp_selection_mode
+        if args.dpp_ttft_drift_weight is not None:
+            environment[DPP_TTFT_DRIFT_WEIGHT_ENV] = str(resolved_weight)
     manifest: dict[str, Any] = {
         "schema_version": 2,
         "kind": "qwen3_14b_scheduler_natural_output",

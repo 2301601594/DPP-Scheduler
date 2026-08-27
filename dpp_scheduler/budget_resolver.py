@@ -50,11 +50,40 @@ URGENCY_FLOOR_SECONDS: float = 1.0e-6
 
 @dataclass(frozen=True)
 class BudgetResolution:
-    """Result of one Predictor-inversion budget resolution."""
+    """Result of one Predictor-inversion budget resolution.
+
+    The resolver must return a ``base_prefill_budget`` whose semantics are
+    "the largest actually-executable Prefill token count at or below the
+    current Snapshot's resource boundary that the Predictor still considers
+    feasible". The diagnostic fields below make every step of that
+    derivation observable to the Adapter and the validation harnesses.
+
+    ``max_executable_prefill_budget`` is the resource-capped ceiling used
+    before any Predictor sweep (``P_max = min(backlog, token_budget -
+    decode_count)``). ``configured_grid_budgets`` is the original
+    configured inversion grid before clamping; ``executable_grid_budgets``
+    is the same grid clamped to ``max_executable_prefill_budget``, with
+    the ceiling explicitly appended and then deduplicated and sorted.
+    ``actual_shadow_prefill_budgets`` is the sorted list of
+    ``plan.total_prefill_tokens`` values produced by the shadow sweep;
+    some grid points collapse to the same actual when sequence /
+    minimum-chunk constraints reject partial chunks. The final
+    ``base_prefill_budget`` is the maximum of ``feasible_actual_budgets``
+    rather than any raw requested grid value, so it always equals an
+    actually-executable Prefill token count.
+    """
 
     base_prefill_budget: int
     target_duration_seconds: float | None
     resolution_status: str
+    max_executable_prefill_budget: int = 0
+    configured_grid_budgets: tuple[int, ...] = ()
+    executable_grid_budgets: tuple[int, ...] = ()
+    actual_shadow_prefill_budgets: tuple[int, ...] = ()
+    feasible_actual_budgets: tuple[int, ...] = ()
+    # Backward-compatible aliases populated from the fields above so older
+    # callers that introspect ``requested_grid_budgets`` /
+    # ``feasible_grid_budgets`` keep working.
     requested_grid_budgets: tuple[int, ...] = ()
     feasible_grid_budgets: tuple[int, ...] = ()
     predictor_in_support_ratio: float | None = None
@@ -86,6 +115,33 @@ class NullBudgetResolver(BudgetResolver):
             feasible_grid_budgets=(),
             predictor_in_support_ratio=None,
         )
+
+
+def derive_executable_inversion_grid(
+    configured_grid: tuple[int, ...] | list[int],
+    max_executable_prefill: int,
+) -> tuple[int, ...]:
+    """Clamp the inversion grid to the current resource ceiling.
+
+    Every configured grid budget ``b`` is replaced by
+    ``min(b, max_executable_prefill)``. The ceiling itself is then
+    appended explicitly so the Predictor sweep always evaluates the
+    maximum actually-executable Prefill token count, even when the
+    configured grid does not contain it. The resulting set is
+    deduplicated and returned in ascending order. A non-positive
+    ``max_executable_prefill`` collapses to ``(0,)`` so the resolver can
+    still record the configured grid without attempting an empty sweep.
+    """
+    if not isinstance(max_executable_prefill, int):
+        raise TypeError("max_executable_prefill must be an int")
+    ceiling = max(0, int(max_executable_prefill))
+    if ceiling <= 0:
+        return (0,)
+    clamped: list[int] = []
+    for budget in configured_grid:
+        clamped.append(max(0, min(ceiling, int(budget))))
+    clamped.append(ceiling)
+    return tuple(sorted(set(clamped)))
 
 
 def _continuation_order(
@@ -236,6 +292,10 @@ class RidgeBudgetResolver(BudgetResolver):
             item.remaining_tokens for item in snapshot.waiting_prefill_requests
         )
         decode_count = len(snapshot.active_decode_requests)
+        max_executable_prefill = min(
+            max(0, int(backlog)),
+            max(0, int(snapshot.token_budget) - int(decode_count)),
+        )
 
         if decode_count == 0:
             if backlog <= 0:
@@ -243,13 +303,21 @@ class RidgeBudgetResolver(BudgetResolver):
                     base_prefill_budget=0,
                     target_duration_seconds=None,
                     resolution_status=RESOLUTION_NO_DECODE_NO_BACKLOG,
+                    max_executable_prefill_budget=0,
+                    configured_grid_budgets=self._budget_grid,
+                    executable_grid_budgets=derive_executable_inversion_grid(
+                        self._budget_grid, 0
+                    ),
                 )
             return BudgetResolution(
-                base_prefill_budget=min(
-                    backlog, max(0, snapshot.token_budget - decode_count)
-                ),
+                base_prefill_budget=max_executable_prefill,
                 target_duration_seconds=None,
                 resolution_status=RESOLUTION_NO_DECODE_USE_MAX,
+                max_executable_prefill_budget=max_executable_prefill,
+                configured_grid_budgets=self._budget_grid,
+                executable_grid_budgets=derive_executable_inversion_grid(
+                    self._budget_grid, max_executable_prefill
+                ),
             )
 
         live_deadlines: list[float] = []
@@ -263,35 +331,64 @@ class RidgeBudgetResolver(BudgetResolver):
 
         if not live_deadlines:
             return BudgetResolution(
-                base_prefill_budget=min(
-                    backlog, max(0, snapshot.token_budget - decode_count)
-                ),
+                base_prefill_budget=max_executable_prefill,
                 target_duration_seconds=None,
                 resolution_status=RESOLUTION_NO_DECODE_USE_MAX,
+                max_executable_prefill_budget=max_executable_prefill,
+                configured_grid_budgets=self._budget_grid,
+                executable_grid_budgets=derive_executable_inversion_grid(
+                    self._budget_grid, max_executable_prefill
+                ),
             )
 
         s_min = min(live_deadlines)
         target_duration = max(0.0, s_min - self._safety_margin_seconds)
-        return self._invert(snapshot, target_duration, backlog)
+        return self._invert(
+            snapshot,
+            target_duration,
+            backlog,
+            max_executable_prefill,
+        )
 
     def _invert(
         self,
         snapshot: StateSnapshot,
         target_duration: float,
         backlog: int,
+        max_executable_prefill: int,
     ) -> BudgetResolution:
         decode_ids = tuple(item.request_id for item in snapshot.active_decode_requests)
         order = _continuation_order(snapshot)
 
-        requested: list[int] = []
-        feasible: list[tuple[int, float, bool]] = []
-        plans: list[BatchPlan] = []
-        plan_budgets: list[int] = []
+        if max_executable_prefill <= 0:
+            return BudgetResolution(
+                base_prefill_budget=0,
+                target_duration_seconds=target_duration,
+                resolution_status=RESOLUTION_NO_FEASIBLE_BUDGET,
+                max_executable_prefill_budget=0,
+                configured_grid_budgets=self._budget_grid,
+                executable_grid_budgets=derive_executable_inversion_grid(
+                    self._budget_grid, 0
+                ),
+                actual_shadow_prefill_budgets=(),
+                feasible_actual_budgets=(),
+                requested_grid_budgets=self._budget_grid,
+                feasible_grid_budgets=(),
+                predictor_in_support_ratio=None,
+            )
 
-        for budget in self._budget_grid:
+        executable_grid = derive_executable_inversion_grid(
+            self._budget_grid, max_executable_prefill
+        )
+
+        plans: list[BatchPlan] = []
+        actual_budgets: list[int] = []
+
+        for budget in executable_grid:
             prefill_items = _shadow_fill(
                 snapshot, budget, order, self._settings
             )
+            actual = sum(tokens for _, tokens in prefill_items)
             plan = _build_shadow_plan(
                 snapshot,
                 prefill_items,
@@ -299,15 +396,19 @@ class RidgeBudgetResolver(BudgetResolver):
                 f"INVERSION:requested_{budget}",
             )
             plans.append(plan)
-            plan_budgets.append(budget)
-            requested.append(budget)
+            actual_budgets.append(actual)
 
         if not plans:
             return BudgetResolution(
                 base_prefill_budget=0,
                 target_duration_seconds=target_duration,
                 resolution_status=RESOLUTION_NO_FEASIBLE_BUDGET,
-                requested_grid_budgets=tuple(requested),
+                max_executable_prefill_budget=max_executable_prefill,
+                configured_grid_budgets=self._budget_grid,
+                executable_grid_budgets=executable_grid,
+                actual_shadow_prefill_budgets=(),
+                feasible_actual_budgets=(),
+                requested_grid_budgets=self._budget_grid,
                 feasible_grid_budgets=(),
                 predictor_in_support_ratio=None,
             )
@@ -318,64 +419,74 @@ class RidgeBudgetResolver(BudgetResolver):
                 base_prefill_budget=0,
                 target_duration_seconds=target_duration,
                 resolution_status=RESOLUTION_PREDICTOR_INVALID,
-                requested_grid_budgets=tuple(requested),
+                max_executable_prefill_budget=max_executable_prefill,
+                configured_grid_budgets=self._budget_grid,
+                executable_grid_budgets=executable_grid,
+                actual_shadow_prefill_budgets=tuple(sorted(set(actual_budgets))),
+                feasible_actual_budgets=(),
+                requested_grid_budgets=self._budget_grid,
                 feasible_grid_budgets=(),
                 predictor_in_support_ratio=None,
             )
 
-        chosen_budget = 0
-        chosen_status = RESOLUTION_NO_FEASIBLE_BUDGET
         in_support_count = 0
+        chosen_actual = 0
         any_feasible = False
+        feasible_actuals: set[int] = set()
 
-        for budget, prediction in zip(plan_budgets, predictions):
+        for actual, prediction in zip(actual_budgets, predictions):
             if prediction.in_support:
                 in_support_count += 1
             duration = prediction.expected_duration
-            if (
-                duration is None
-                or not isinstance(duration, (int, float))
-                or not math.isfinite(duration)
-                or duration <= 0
-                or duration > target_duration
-            ):
+            if not _is_feasible(duration, target_duration):
                 continue
             any_feasible = True
-            if budget >= chosen_budget:
-                chosen_budget = budget
+            feasible_actuals.add(int(actual))
+            if actual >= chosen_actual:
+                chosen_actual = int(actual)
+
+        actual_shadow_set = sorted(set(actual_budgets))
+        feasible_actual_sorted = sorted(feasible_actuals)
 
         if not any_feasible:
             return BudgetResolution(
                 base_prefill_budget=0,
                 target_duration_seconds=target_duration,
                 resolution_status=RESOLUTION_NO_FEASIBLE_BUDGET,
-                requested_grid_budgets=tuple(requested),
+                max_executable_prefill_budget=max_executable_prefill,
+                configured_grid_budgets=self._budget_grid,
+                executable_grid_budgets=executable_grid,
+                actual_shadow_prefill_budgets=tuple(actual_shadow_set),
+                feasible_actual_budgets=(),
+                requested_grid_budgets=self._budget_grid,
                 feasible_grid_budgets=(),
                 predictor_in_support_ratio=_in_support_ratio(
                     in_support_count, len(predictions)
                 ),
             )
 
-        feasible_budgets = tuple(
-            budget
-            for budget, prediction in zip(plan_budgets, predictions)
-            if _is_feasible(prediction.expected_duration, target_duration)
-        )
         if in_support_count == len(predictions):
             chosen_status = RESOLUTION_INVERTED_OK
         else:
             chosen_status = RESOLUTION_INVERTED_OOD
 
-        # The resolver returns the raw largest-feasible budget; resource
-        # clamping against backlog / token-budget / sequence-budget is the
-        # Candidate Generator's responsibility (via derive_candidate_budgets).
+        # ``chosen_actual`` is the largest ``plan.total_prefill_tokens``
+        # value that the Predictor still considers feasible. It is bounded
+        # by ``max_executable_prefill_budget`` and by the actual shadow
+        # fill, so it is always an executable Prefill token count for the
+        # current Snapshot, never a raw requested grid value.
 
         return BudgetResolution(
-            base_prefill_budget=int(chosen_budget),
+            base_prefill_budget=int(chosen_actual),
             target_duration_seconds=target_duration,
             resolution_status=chosen_status,
-            requested_grid_budgets=tuple(requested),
-            feasible_grid_budgets=feasible_budgets,
+            max_executable_prefill_budget=max_executable_prefill,
+            configured_grid_budgets=self._budget_grid,
+            executable_grid_budgets=executable_grid,
+            actual_shadow_prefill_budgets=tuple(actual_shadow_set),
+            feasible_actual_budgets=tuple(feasible_actual_sorted),
+            requested_grid_budgets=self._budget_grid,
+            feasible_grid_budgets=tuple(feasible_actual_sorted),
             predictor_in_support_ratio=_in_support_ratio(
                 in_support_count, len(predictions)
             ),

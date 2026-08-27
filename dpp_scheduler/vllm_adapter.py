@@ -14,9 +14,9 @@ import math
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,7 @@ from dpp_scheduler.contracts import (
     Decision,
     ExecutionObservation,
     PrefillRequest,
+    SafeSetResult,
     StateSnapshot,
     validate_snapshot_hash,
 )
@@ -34,6 +35,7 @@ from dpp_scheduler.candidate_generator import (
     project_sequence_count,
 )
 from dpp_scheduler.state_store import ObligationLedger
+from dpp_scheduler.settings import DPPSettings
 
 
 STOCK_PROFILE_PATH_ENV = "DPP_STOCK_PROFILE_PATH"
@@ -55,11 +57,76 @@ PREDICTOR_EVAL_RECIPE_MODE_ENV = "DPP_PREDICTOR_EVAL_RECIPE_MODE"
 DPP_DIAGNOSTIC_ITERATION_LOG_ENV = "DPP_DIAGNOSTIC_ITERATION_LOG"
 DPP_DIAGNOSTIC_AGGREGATE_PATH_ENV = "DPP_DIAGNOSTIC_AGGREGATE_PATH"
 DPP_EXECUTION_SCOPE_ENV = "DPP_EXECUTION_SCOPE"
+DPP_TTFT_DRIFT_WEIGHT_ENV = "DPP_TTFT_DRIFT_WEIGHT"
+DPP_SELECTION_MODE_ENV = "DPP_SELECTION_MODE"
+DPP_SELECTION_MODES = frozenset({"normal", "forced_stock_plan"})
 
 VLLM_OFFICIAL_ITERATION_TIMING = "vllm_official_iteration_details"
 VLLM_ALIGNED_ITERATION_TIMING = "vllm_aligned_monotonic"
 STOCK_PROFILE_SCHEMA_VERSION = 2
 STOCK_CONCURRENCY_SEMANTICS = "dpp_stage_queues_v2"
+
+
+def resolve_dpp_runtime_overrides(
+    settings: DPPSettings,
+    *,
+    execution_scope: str,
+    environment: Mapping[str, str],
+) -> tuple[DPPSettings, str]:
+    """Resolve development-only selection and TTFT-weight overrides."""
+    selection_mode = environment.get(DPP_SELECTION_MODE_ENV, "normal")
+    if selection_mode not in DPP_SELECTION_MODES:
+        raise ValueError(
+            f"{DPP_SELECTION_MODE_ENV} must be one of {sorted(DPP_SELECTION_MODES)}"
+        )
+    weight_override = environment.get(DPP_TTFT_DRIFT_WEIGHT_ENV)
+    if (selection_mode != "normal" or weight_override is not None) and (
+        execution_scope != "development_nonformal"
+    ):
+        raise ValueError(
+            "DPP selection/weight overrides are development_nonformal only"
+        )
+    if weight_override is not None:
+        try:
+            parsed_weight = float(weight_override)
+        except ValueError as error:
+            raise ValueError(
+                f"{DPP_TTFT_DRIFT_WEIGHT_ENV} must be numeric"
+            ) from error
+        if not math.isfinite(parsed_weight) or parsed_weight <= 0:
+            raise ValueError(
+                f"{DPP_TTFT_DRIFT_WEIGHT_ENV} must be finite and positive"
+            )
+        settings = replace(settings, ttft_drift_weight=parsed_weight)
+    return settings, selection_mode
+
+
+def materialize_forced_stock_plan(
+    snapshot: StateSnapshot,
+    stock_builder: Callable[[StateSnapshot], BatchPlan],
+    materialize: Callable[[BatchPlan], Any],
+) -> tuple[BatchPlan, Decision, Any]:
+    """Build and materialize exactly one STOCK plan without selection stages."""
+    plan = stock_builder(snapshot)
+    plan.validate_snapshot(snapshot)
+    workload_nonempty = bool(
+        snapshot.active_decode_requests or snapshot.waiting_prefill_requests
+    )
+    if workload_nonempty and plan.total_prefill_tokens + plan.total_decode_tokens <= 0:
+        raise RuntimeError(
+            "forced_stock_plan could not construct executable work for "
+            "a non-empty Snapshot"
+        )
+    if plan.template_id != "STOCK":
+        raise RuntimeError("forced_stock_plan builder returned a non-STOCK plan")
+    scheduler_output = materialize(plan)
+    decision = Decision(
+        frame_id=snapshot.frame_id,
+        snapshot_hash=snapshot.snapshot_hash,
+        selected_plan=plan,
+        reason="FORCED_STOCK_PLAN",
+    )
+    return plan, decision, scheduler_output
 
 
 def _classify_isolated_scheduler_update(
@@ -986,7 +1053,6 @@ def get_modular_scheduler_class() -> type:
     from vllm.logger import init_logger
     from vllm.v1.core.sched.scheduler import Scheduler
 
-    from dpp_scheduler.budget_resolver import RidgeBudgetResolver
     from dpp_scheduler.candidate_generator import CandidateGenerator
     from dpp_scheduler.consequence_estimator import ConsequenceEstimator
     from dpp_scheduler.dpp_selector import DPPSelector
@@ -1047,6 +1113,11 @@ def get_modular_scheduler_class() -> type:
             diagnostics_settings = load_scheduler_diagnostics_settings(runtime)
             predictor = load_frozen_predictor(runtime)
             execution_scope = os.environ.get(DPP_EXECUTION_SCOPE_ENV, "")
+            dpp_settings, selection_mode = resolve_dpp_runtime_overrides(
+                dpp_settings,
+                execution_scope=execution_scope,
+                environment=os.environ,
+            )
             if not dpp_settings.live_v2_ready:
                 raise RuntimeError(
                     "live v2 is disabled until Stock reference concurrency is frozen"
@@ -1081,26 +1152,18 @@ def get_modular_scheduler_class() -> type:
                 obligation_ledger=self._dpp_obligation_ledger,
                 critical_horizon_seconds=None,
             )
-            # Predictor must be constructed before the Candidate Generator so
-            # the slack-centered BudgetResolver can be injected.
             self._dpp_predictor = RidgeDurationPredictor.from_artifact(
                 predictor.artifact_root,
                 ood_uncertainty_coefficient=(
                     predictor_settings.ood_uncertainty_coefficient
                 ),
             )
-            self._dpp_budget_resolver = RidgeBudgetResolver(
-                predictor=self._dpp_predictor,
-                settings=candidate.settings,
-            )
-            self._dpp_generator = CandidateGenerator(
-                candidate.settings,
-                budget_resolver=self._dpp_budget_resolver,
-            )
+            self._dpp_generator = CandidateGenerator(candidate.settings)
             self._dpp_consequence_estimator = ConsequenceEstimator()
             self._dpp_safe_set = ResourceAndRiskSafeSet(safe_set_settings)
             self._dpp_fallback = DeterministicFallback(fallback_settings)
             self._dpp_selector = DPPSelector(dpp_settings)
+            self._dpp_selection_mode = selection_mode
             self._dpp_state_store = InMemoryStateStore(settings=dpp_settings)
             if (
                 diagnostics_settings.performance_logging_enable_env
@@ -1153,19 +1216,24 @@ def get_modular_scheduler_class() -> type:
 
         @staticmethod
         def _dpp_new_aggregate() -> dict[str, Any]:
-            buckets = ("ZERO", "M050", "M075", "M100", "M125", "M150", "OTHER")
-            policies = (
+            buckets = (
                 "ZERO",
-                "URGENCY",
-                "COMPLETION_AWARE",
-                "CONTINUATION",
+                "P10",
+                "P20",
+                "P30",
+                "P40",
+                "P50",
+                "P60",
+                "P70",
+                "P80",
+                "P90",
+                "P100",
+                "STOCK",
                 "OTHER",
             )
             return {
                 "selection_histogram": {b: 0 for b in buckets},
                 "tie_selected_histogram": {b: 0 for b in buckets},
-                "policy_selection_histogram": {p: 0 for p in policies},
-                "tie_policy_selection_histogram": {p: 0 for p in policies},
                 "prefill_backlog_frame_count": 0,
                 "tie_frame_count": 0,
                 "mixed_iteration_count": 0,
@@ -1178,33 +1246,22 @@ def get_modular_scheduler_class() -> type:
                     "decode_only": [],
                     "prefill_only": [],
                 },
-                "m150_selected_frames": {},
+                "pipeline_call_counts": {
+                    "predictor": 0,
+                    "safe_set": 0,
+                    "selector": 0,
+                    "fallback": 0,
+                },
             }
 
         @staticmethod
         def _dpp_aggregate_bucket(template_id: str) -> str:
-            parts = template_id.split(":")
-            if len(parts) >= 2 and parts[1] == "ZERO":
+            if template_id == "STOCK":
+                return "STOCK"
+            if template_id == "ZERO" or template_id.startswith("ZERO:"):
                 return "ZERO"
-            if (
-                len(parts) >= 3
-                and parts[1] == "SLACK_BUDGET"
-                and parts[2] in ("M050", "M075", "M100", "M125", "M150")
-            ):
-                return parts[2]
-            return "OTHER"
-
-        @staticmethod
-        def _dpp_aggregate_policy(template_id: str) -> str:
-            parts = template_id.split(":")
-            if len(parts) >= 2 and parts[1] == "ZERO":
-                return "ZERO"
-            if (
-                len(parts) >= 4
-                and parts[1] == "SLACK_BUDGET"
-                and parts[3] in ("URGENCY", "COMPLETION_AWARE", "CONTINUATION")
-            ):
-                return parts[3]
+            if template_id in {f"P{index * 10}" for index in range(1, 11)}:
+                return template_id
             return "OTHER"
 
         @staticmethod
@@ -1250,34 +1307,13 @@ def get_modular_scheduler_class() -> type:
             if not path:
                 return
             agg = self._dpp_aggregate
-            m150_frames = agg["m150_selected_frames"]
-            m150_durations = [
-                float(entry["actual_duration_seconds"])
-                for entry in m150_frames.values()
-                if entry.get("actual_duration_seconds") is not None
-            ]
-            for field in (
-                "sum_tbt_debt",
-                "max_tbt_debt",
-                "sum_ttft_debt",
-                "max_ttft_debt",
-            ):
-                values = [float(e[field]) for e in m150_frames.values()]
-                agg.setdefault("m150_audit", {})[field + "_mean"] = (
-                    sum(values) / len(values) if values else None
-                )
-                agg["m150_audit"][field + "_max"] = (
-                    max(values) if values else None
-                )
             payload = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "kind": "dpp_diagnostic_aggregate",
+                "selection_mode": self._dpp_selection_mode,
+                "ttft_drift_weight": self._dpp_selector.settings.ttft_drift_weight,
                 "selection_histogram": agg["selection_histogram"],
                 "tie_selected_histogram": agg["tie_selected_histogram"],
-                "policy_selection_histogram": agg["policy_selection_histogram"],
-                "tie_policy_selection_histogram": (
-                    agg["tie_policy_selection_histogram"]
-                ),
                 "prefill_backlog_frame_count": agg["prefill_backlog_frame_count"],
                 "tie_frame_count": agg["tie_frame_count"],
                 "mixed_iteration_count": agg["mixed_iteration_count"],
@@ -1300,11 +1336,7 @@ def get_modular_scheduler_class() -> type:
                         agg["actual_duration_seconds"]["prefill_only"]
                     ),
                 },
-                "m150_audit": {
-                    "count": len(m150_frames),
-                    "duration": self._dpp_duration_stats(m150_durations),
-                    **agg.get("m150_audit", {}),
-                },
+                "pipeline_call_counts": agg["pipeline_call_counts"],
             }
             with open(path, "w", encoding="utf-8") as stream:
                 json.dump(payload, stream, ensure_ascii=False, sort_keys=True, indent=1)
@@ -1324,9 +1356,7 @@ def get_modular_scheduler_class() -> type:
         ) -> None:
             """Bounded in-memory aggregate for run-end diagnostic artifacts."""
             agg = self._dpp_aggregate
-            selected_policy = self._dpp_aggregate_policy(plan.template_id)
             agg["selection_histogram"][selected_bucket] += 1
-            agg["policy_selection_histogram"][selected_policy] += 1
             prefill_count = len(snapshot.waiting_prefill_requests)
             decode_count = len(snapshot.active_decode_requests)
             if prefill_count > 0:
@@ -1340,33 +1370,11 @@ def get_modular_scheduler_class() -> type:
             if frame_tie["winner_tie"]:
                 agg["tie_frame_count"] += 1
                 agg["tie_selected_histogram"][selected_bucket] += 1
-                agg["tie_policy_selection_histogram"][selected_policy] += 1
             if selected_prefill_progress is not None:
                 agg["selected_prefill_progress"].append(selected_prefill_progress)
                 agg["selected_prefill_tokens"].append(
                     int(plan.total_prefill_tokens)
                 )
-            if selected_bucket == "M150":
-                agg["m150_selected_frames"][snapshot.frame_id] = {
-                    "frame_id": snapshot.frame_id,
-                    "current_prefill_count": prefill_count,
-                    "current_decode_count": decode_count,
-                    "sum_ttft_debt": sum(
-                        value for _, value in control.ttft_service_debts
-                    ),
-                    "max_ttft_debt": max(
-                        (value for _, value in control.ttft_service_debts),
-                        default=0.0,
-                    ),
-                    "sum_tbt_debt": sum(
-                        value for _, value in control.tbt_service_debts
-                    ),
-                    "max_tbt_debt": max(
-                        (value for _, value in control.tbt_service_debts),
-                        default=0.0,
-                    ),
-                    "actual_duration_seconds": None,
-                }
 
         def _dpp_record_obligation_update(self, update: LedgerUpdate) -> None:
             self._dpp_obligation_updates.append(update)
@@ -1455,29 +1463,19 @@ def get_modular_scheduler_class() -> type:
             }
 
         def _dpp_candidate_generator_diagnostic(self) -> dict[str, Any]:
-            """Surface Candidate Generator slack-centered summary in the log.
-
-            Reads ``self._dpp_generator.last_diagnostic`` and emits the new
-            v3 fields. Returns an empty dict when no generator diagnostic is
-            available (e.g. generator has not yet produced any plans).
-            """
+            """Surface the fixed-fraction Candidate Generator summary."""
             diagnostic = getattr(self._dpp_generator, "last_diagnostic", None)
             if diagnostic is None:
                 return {
-                    "base_prefill_budget": None,
-                    "budget_resolution_status": None,
-                    "target_duration_seconds": None,
+                    "maximum_prefill_budget": None,
                     "candidate_count_before_dedup": None,
                     "candidate_count_after_dedup": None,
                     "candidate_budget_values": (),
-                    "multiplier_budgets": (),
-                    "distinct_allocations_by_multiplier": (),
+                    "fraction_budgets": (),
+                    "stock_prefill_budget": None,
                 }
-            resolution = diagnostic.resolution
             return {
-                "base_prefill_budget": int(resolution.base_prefill_budget),
-                "budget_resolution_status": resolution.resolution_status,
-                "target_duration_seconds": resolution.target_duration_seconds,
+                "maximum_prefill_budget": int(diagnostic.maximum_prefill_budget),
                 "candidate_count_before_dedup": int(diagnostic.raw_candidate_count),
                 "candidate_count_after_dedup": int(
                     diagnostic.deduplicated_candidate_count
@@ -1485,16 +1483,11 @@ def get_modular_scheduler_class() -> type:
                 "candidate_budget_values": tuple(
                     int(value) for value in diagnostic.candidate_budget_values
                 ),
-                "multiplier_budgets": tuple(
+                "fraction_budgets": tuple(
                     (str(label), int(value))
-                    for label, value in diagnostic.multiplier_budgets
+                    for label, value in diagnostic.fraction_budgets
                 ),
-                "distinct_allocations_by_multiplier": tuple(
-                    (str(label), int(value))
-                    for label, value in (
-                        diagnostic.distinct_allocations_by_multiplier
-                    )
-                ),
+                "stock_prefill_budget": int(diagnostic.stock_prefill_budget),
             }
 
         def _dpp_record_schedule_diagnostic(
@@ -1512,6 +1505,13 @@ def get_modular_scheduler_class() -> type:
             scheduler_cpu_seconds: float,
             candidate_scores: tuple[Any, ...] = (),
         ) -> None:
+            pipeline_counts = self._dpp_aggregate["pipeline_call_counts"]
+            if self._dpp_selection_mode == "normal":
+                pipeline_counts["predictor"] += 1
+                pipeline_counts["safe_set"] += 1
+                pipeline_counts["selector"] += 1
+            if fallback_result is not None:
+                pipeline_counts["fallback"] += 1
             candidate_score_records: list[dict[str, Any]] | None = None
             if self._dpp_diagnostic_iteration_log:
                 candidates_by_plan_id = {
@@ -1571,9 +1571,11 @@ def get_modular_scheduler_class() -> type:
                             "in_support": prediction.in_support,
                             "prediction_mode": prediction.prediction_mode,
                             "ood_distance": prediction.ood_distance,
-                            "prefill_normalized_drift": score.prefill_drift,
-                            "decode_normalized_drift": score.decode_drift,
-                            "total_normalized_drift": score.total_drift,
+                            "normalized_ttft_drift": score.normalized_ttft_drift,
+                            "ttft_drift_weight": score.ttft_drift_weight,
+                            "weighted_ttft_drift": score.weighted_ttft_drift,
+                            "normalized_tbt_drift": score.normalized_tbt_drift,
+                            "total_drift": score.total_drift,
                             "score": score.score,
                             "prefill_reference_concurrency": (
                                 score.prefill_reference_concurrency
@@ -1661,6 +1663,14 @@ def get_modular_scheduler_class() -> type:
                 decode_tokens=plan.total_decode_tokens,
                 diagnostic={
                     "frame_id": snapshot.frame_id,
+                    "selection_mode": self._dpp_selection_mode,
+                    "ttft_drift_weight": (
+                        self._dpp_selector.settings.ttft_drift_weight
+                    ),
+                    "predictor_called": self._dpp_selection_mode == "normal",
+                    "safe_set_called": self._dpp_selection_mode == "normal",
+                    "selector_called": self._dpp_selection_mode == "normal",
+                    "fallback_called": fallback_result is not None,
                     "candidate_count": len(plans),
                     "safe_candidate_count": len(safe_result.safe_candidates),
                     "selected_plan": plan.plan_id,
@@ -1747,6 +1757,38 @@ def get_modular_scheduler_class() -> type:
             control = self._dpp_state_store.bind_snapshot(snapshot)
             # Deadline/Goodput ledger events are diagnostic-only in v2.
             self._dpp_control_pending_updates = []
+            if self._dpp_selection_mode == "forced_stock_plan":
+                plan, decision, scheduler_output = materialize_forced_stock_plan(
+                    snapshot,
+                    self._dpp_generator.build_stock_plan,
+                    self._dpp_adapter.build_scheduler_output,
+                )
+                self._dpp_bind_pending(
+                    snapshot=snapshot,
+                    plan=plan,
+                    scheduler_output=scheduler_output,
+                    base_duration_seconds=None,
+                    skip_predictor_update=True,
+                )
+                self._dpp_record_schedule_diagnostic(
+                    snapshot=snapshot,
+                    control=control,
+                    plans=(plan,),
+                    safe_result=SafeSetResult(
+                        snapshot_hash=snapshot.snapshot_hash,
+                        safe_candidates=(),
+                    ),
+                    decision=decision,
+                    fallback_result=None,
+                    plan=plan,
+                    scheduler_output=scheduler_output,
+                    predictor_in_support=False,
+                    scheduler_cpu_seconds=(
+                        time.perf_counter() - scheduler_cpu_started
+                    ),
+                    candidate_scores=(),
+                )
+                return scheduler_output
             plans = self._dpp_generator.generate(snapshot)
             predictions = self._dpp_predictor.predict(snapshot, plans)
             if len(predictions) != len(plans):
@@ -1950,12 +1992,6 @@ def get_modular_scheduler_class() -> type:
                 self._dpp_aggregate["actual_duration_seconds"]["decode_only"].append(
                     actual_duration
                 )
-            if self._dpp_aggregate_bucket(executed.template_id) == "M150":
-                m150_entry = self._dpp_aggregate["m150_selected_frames"].get(
-                    pending["snapshot"].frame_id
-                )
-                if m150_entry is not None:
-                    m150_entry["actual_duration_seconds"] = actual_duration
             next_control = self._dpp_state_store.update_from_actual(
                 previous_snapshot=pending["snapshot"],
                 actual_duration_seconds=actual_duration,

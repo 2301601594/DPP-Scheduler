@@ -11,7 +11,11 @@ from benchmarks.qwen3_runtime import (
     load_dpp_settings,
     load_predictor_settings,
 )
-from dpp_scheduler.candidate_generator import project_kv_blocks, project_sequence_count
+from dpp_scheduler.candidate_generator import (
+    build_stock_plan,
+    project_kv_blocks,
+    project_sequence_count,
+)
 from dpp_scheduler.contracts import (
     BatchPlan,
     ControlState,
@@ -24,11 +28,24 @@ from dpp_scheduler.contracts import (
 from dpp_scheduler.dpp_selector import DPPScore, DPPSelector
 from dpp_scheduler.settings import DPPSettings
 from dpp_scheduler.state_store import DuplicateLedgerEvent, InMemoryStateStore
-from dpp_scheduler.vllm_adapter import get_modular_scheduler_class
+from dpp_scheduler.vllm_adapter import (
+    DPP_SELECTION_MODE_ENV,
+    DPP_TTFT_DRIFT_WEIGHT_ENV,
+    get_modular_scheduler_class,
+    materialize_forced_stock_plan,
+    resolve_dpp_runtime_overrides,
+)
 
 
-def settings(*, prefill_ref: int = 1, decode_ref: int = 1) -> DPPSettings:
-    return DPPSettings(prefill_ref, decode_ref, float.fromhex("0x1.fffffffffffffp+1023"))
+def settings(
+    *, prefill_ref: int = 1, decode_ref: int = 1, ttft_weight: float = 1.0
+) -> DPPSettings:
+    return DPPSettings(
+        prefill_ref,
+        decode_ref,
+        float.fromhex("0x1.fffffffffffffp+1023"),
+        ttft_drift_weight=ttft_weight,
+    )
 
 
 def snapshot(
@@ -156,6 +173,105 @@ class DPPSelectorV2Tests(unittest.TestCase):
         )
         self.assertAlmostEqual(score.effective_duration, 0.3)
 
+    def test_ttft_weight_scales_only_prefill_drift(self) -> None:
+        state = snapshot(
+            prefill=(PrefillRequest("p", 0.0, 100, 0),),
+            decode=(DecodeRequest("d", 0.0, 100),),
+        )
+        control = ControlState(state.snapshot_hash, (("p", 1.0),), (("d", 1.0),))
+        item = candidate(state, "weighted", duration=0.2)
+        base = DPPSelector(settings(ttft_weight=1.0)).score_candidate(
+            state, control, item
+        )
+        weighted = DPPSelector(settings(ttft_weight=4.0)).score_candidate(
+            state, control, item
+        )
+        self.assertEqual(weighted.prefill_drift, base.prefill_drift)
+        self.assertEqual(weighted.decode_drift, base.decode_drift)
+        self.assertAlmostEqual(
+            weighted.weighted_prefill_drift, 4.0 * base.prefill_drift
+        )
+        self.assertAlmostEqual(
+            weighted.total_drift,
+            4.0 * base.prefill_drift + base.decode_drift,
+        )
+
+    def test_lambda_one_matches_unweighted_total(self) -> None:
+        state = snapshot(
+            prefill=(PrefillRequest("p", 0.0, 100, 0),),
+            decode=(DecodeRequest("d", 0.0, 100),),
+        )
+        control = ControlState(state.snapshot_hash, (("p", 1.0),), (("d", 1.0),))
+        score = DPPSelector(settings(ttft_weight=1.0)).score_candidate(
+            state, control, candidate(state, "lambda-one", duration=0.2)
+        )
+        self.assertEqual(score.normalized_ttft_drift, score.prefill_drift)
+        self.assertEqual(score.normalized_tbt_drift, score.decode_drift)
+        self.assertAlmostEqual(
+            score.total_drift, score.prefill_drift + score.decode_drift
+        )
+
+    def test_invalid_ttft_weight_fails_closed(self) -> None:
+        with self.assertRaises(ValueError):
+            settings(ttft_weight=0.0)
+
+    def test_development_runtime_overrides(self) -> None:
+        resolved, mode = resolve_dpp_runtime_overrides(
+            settings(),
+            execution_scope="development_nonformal",
+            environment={
+                DPP_SELECTION_MODE_ENV: "forced_stock_plan",
+                DPP_TTFT_DRIFT_WEIGHT_ENV: "0.125",
+            },
+        )
+        self.assertEqual(mode, "forced_stock_plan")
+        self.assertEqual(resolved.ttft_drift_weight, 0.125)
+        with self.assertRaises(ValueError):
+            resolve_dpp_runtime_overrides(
+                settings(),
+                execution_scope="formal",
+                environment={DPP_SELECTION_MODE_ENV: "forced_stock_plan"},
+            )
+
+    def test_forced_stock_materializes_the_builder_plan_without_selection(self) -> None:
+        state = snapshot(decode=(DecodeRequest("d", 0.0, 15),))
+        built: list[BatchPlan] = []
+        materialized: list[BatchPlan] = []
+
+        def builder(value: StateSnapshot) -> BatchPlan:
+            plan = build_stock_plan(value)
+            built.append(plan)
+            return plan
+
+        def materialize(plan: BatchPlan) -> object:
+            materialized.append(plan)
+            return object()
+
+        plan, decision, _ = materialize_forced_stock_plan(
+            state, builder, materialize
+        )
+        self.assertEqual(built, [plan])
+        self.assertEqual(materialized, [plan])
+        self.assertIs(decision.selected_plan, plan)
+        self.assertEqual(decision.reason, "FORCED_STOCK_PLAN")
+
+    def test_forced_stock_fails_closed_on_nonempty_zero_plan(self) -> None:
+        state = snapshot(decode=(DecodeRequest("d", 0.0, 15),))
+        zero = BatchPlan(
+            plan_id="zero",
+            snapshot_hash=state.snapshot_hash,
+            template_id="STOCK",
+            prefill_items=(),
+            decode_items=(),
+            total_prefill_tokens=0,
+            total_decode_tokens=0,
+            total_sequences=1,
+            projected_kv_blocks=0,
+            mandatory_request_ids=(),
+        )
+        with self.assertRaises(RuntimeError):
+            materialize_forced_stock_plan(state, lambda _: zero, lambda _: object())
+
     def test_isclose_tie_breaks_duration_budget_then_id(self) -> None:
         state = snapshot()
         control = ControlState(state.snapshot_hash)
@@ -234,7 +350,9 @@ def manual_score(
 ) -> DPPScore:
     return DPPScore(
         plan_id=plan_id,
+        ttft_drift_weight=1.0,
         prefill_drift=0.0,
+        weighted_prefill_drift=0.0,
         decode_drift=0.0,
         total_drift=-score * duration,
         effective_duration=duration,

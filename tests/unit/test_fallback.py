@@ -263,14 +263,10 @@ class FallbackIntegrationTests(unittest.TestCase):
         candidate = load_frozen_candidate_settings(runtime)
         fallback = load_fallback_settings(runtime)
         self.assertEqual(
-            candidate.settings.prefill_budget_multipliers,
-            (0.50, 0.75, 1.00, 1.25, 1.50),
+            candidate.settings.prefill_budget_fractions,
+            tuple(index / 10 for index in range(1, 11)),
         )
-        self.assertEqual(candidate.settings.maximum_seed_candidates, 16)
-        self.assertEqual(
-            candidate.settings.completion_aware_tiering,
-            "relative_urgency_tertiles",
-        )
+        self.assertEqual(candidate.settings.maximum_seed_candidates, 12)
         self.assertEqual(fallback.minimum_prefill_chunk_tokens, 6)
 
     def test_live_scheduler_factory_wires_fallback(self) -> None:

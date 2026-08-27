@@ -34,11 +34,12 @@ Safe-Set, and DPP values are versioned. The remaining formal-gate inputs are a
 Recovery-age rule and measured replacements for the explicitly
 integration-only G4/DPP values if they are to support formal benchmark claims.
 
-For the user-requested Candidate Generator V3 engineering comparison, the
-segmented Predictor temporarily uses the explicit uncalibrated default
-`kappa_ood=0`. This mode is limited in code and configuration to
-`development_nonformal`; it does not complete G3 or make the comparison formal
-evidence.
+The active non-formal engineering comparison now uses fixed Prefill fractions
+plus a Stock-like BatchPlan. A planned nine-run matrix at QPS 0.25, seed 1001,
+and 150 requests compares one native Stock run, one forced-Stock-plan DPP run,
+and seven TTFT drift weights. It shares one length-blind trace and one Stock
+baseline. No result exists yet, no weight is selected, and this work does not
+complete a gate or become formal evidence.
 
 ## Gate sequence
 
@@ -46,7 +47,7 @@ evidence.
 | --- | --- | --- |
 | G0 | Freeze environment, model, runtime, source, and trace identity | exact manifests, remote smoke, startup log, final SchedulerConfig/KV facts |
 | G1 | Stock natural-EOS baseline and event telemetry | verified TTFT/TBT event semantics, frozen SLO/Goodput definitions, resource/load calibration |
-| G2 | Contracts, Snapshot, exact-plan Adapter, Candidate Generator | immutable same-hash structures; at most 16 deterministic V3 plans; selected plan equals actual execution |
+| G2 | Contracts, Snapshot, exact-plan Adapter, Candidate Generator | immutable same-hash structures; at most 12 deterministic plans; selected plan equals actual execution |
 | G3 | Same-configuration profiling and offline model selection | held-out expected error, conservative P95 coverage/underprediction, support/OOD report, CPU overhead |
 | G4 | Safe-Set, Rolling KV, and Fallback | physical/Predictor feasibility with risk metadata retained for every candidate, deterministic fallback/liveness-preemption/empty-idle audit |
 | G5 | DPP and SLO ledger freeze | complete equation, units, numeric ranges, obligation boundaries, one owner for fallback, deterministic tie-break |
@@ -89,14 +90,14 @@ observing DPP test results.
 ### G2: Exact BatchPlan path
 
 Implement public immutable contracts, `snapshot_hash` validation, and atomic
-exact-plan execution. The active Candidate Generator is the slack-centered
-multiplier V3 defined in `docs/Candidate-Generator-V3.md`: all active Decode is
-retained, Predictor inversion supplies the Prefill search center, and at most
-16 deterministic ZERO/multiplier/allocation-policy plans are canonically
-deduplicated. Predictor and Safe-Set evaluate the complete plans after
+exact-plan execution. The active Candidate Generator is defined in
+`docs/Candidate-Generator-V3.md`: it emits ZERO, fixed P10 through P100 plans,
+and a Stock-like plan, with at most 12 canonically deduplicated candidates.
+Fixed-fraction plans retain all active Decode and bind Prefill running-first,
+then waiting FCFS. Predictor and Safe-Set evaluate complete plans only after
 generation. Request IDs and token counts may not be reselected after the
-decision. The retained earlier Horizon/Knee freeze artifacts remain historical
-negative or integration evidence and are not V3 decision inputs.
+decision. The retained Predictor-inversion and Horizon/Knee artifacts are
+historical and are not active Candidate inputs.
 
 ### G3: Predictor
 

@@ -9,83 +9,32 @@ from typing import Any, Mapping
 
 @dataclass(frozen=True)
 class SchedulerSettings:
-    """Deterministic slack-centered Prefill multiplier candidate settings."""
+    """Deterministic fixed-fraction Prefill candidate settings."""
 
-    prefill_budget_multipliers: tuple[float, ...] = (0.50, 0.75, 1.00, 1.25, 1.50)
-    maximum_seed_candidates: int = 16
-    predictor_inversion_safety_margin_seconds: float = 0.020
-    predictor_inversion_budget_grid: tuple[int, ...] = (
-        0,
-        64,
-        128,
-        256,
-        384,
-        512,
-        768,
-        1024,
-        1536,
-        2048,
+    prefill_budget_fractions: tuple[float, ...] = (
+        0.1,
+        0.2,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.7,
+        0.8,
+        0.9,
+        1.0,
     )
+    maximum_seed_candidates: int = 12
     stable_tie_key: str = "request_id"
-    completion_aware_tiering: str = "relative_urgency_tertiles"
-    completion_aware_equal_score_policy: str = "same_tier_at_first_rank"
-    completion_aware_order: tuple[str, ...] = (
-        "relative_urgency_tier",
-        "remaining_tokens",
-        "running_before_waiting",
-        "arrival_time",
-        "ordinal",
-        "request_id",
-    )
     allow_partial_prefill: bool = True
     minimum_prefill_chunk_tokens: int = 1
     frozen: bool = True
 
     def __post_init__(self) -> None:
-        if self.prefill_budget_multipliers != (0.50, 0.75, 1.00, 1.25, 1.50):
-            raise ValueError(
-                "Prefill budget multipliers are fixed at 0.50/0.75/1.00/1.25/1.50"
-            )
-        if self.maximum_seed_candidates != 16:
-            raise ValueError("maximum_seed_candidates is fixed at 16")
-        if self.completion_aware_tiering != "relative_urgency_tertiles":
-            raise ValueError(
-                "completion_aware_tiering must be relative_urgency_tertiles"
-            )
-        if self.completion_aware_equal_score_policy != "same_tier_at_first_rank":
-            raise ValueError(
-                "completion_aware_equal_score_policy must be "
-                "same_tier_at_first_rank"
-            )
-        if self.completion_aware_order != (
-            "relative_urgency_tier",
-            "remaining_tokens",
-            "running_before_waiting",
-            "arrival_time",
-            "ordinal",
-            "request_id",
-        ):
-            raise ValueError("completion_aware_order does not match the v3 contract")
-        margin = self.predictor_inversion_safety_margin_seconds
-        if (
-            isinstance(margin, bool)
-            or not isinstance(margin, (int, float))
-            or not math.isfinite(margin)
-            or margin <= 0
-        ):
-            raise ValueError(
-                "predictor_inversion_safety_margin_seconds must be finite and positive"
-            )
-        grid = self.predictor_inversion_budget_grid
-        if (
-            isinstance(grid, bool)
-            or not isinstance(grid, tuple)
-            or not all(isinstance(item, int) and item >= 0 for item in grid)
-            or list(grid) != sorted(grid)
-        ):
-            raise ValueError(
-                "predictor_inversion_budget_grid must be a non-decreasing tuple of non-negative ints"
-            )
+        expected = tuple(index / 10 for index in range(1, 11))
+        if self.prefill_budget_fractions != expected:
+            raise ValueError("Prefill budget fractions are fixed at 0.1 through 1.0")
+        if self.maximum_seed_candidates != 12:
+            raise ValueError("maximum_seed_candidates is fixed at 12")
         if self.minimum_prefill_chunk_tokens <= 0:
             raise ValueError("minimum_prefill_chunk_tokens must be positive")
 
@@ -98,21 +47,30 @@ class SchedulerSettings:
         """Load the frozen decision values from the active config section."""
         if not isinstance(value, Mapping):
             raise ValueError("candidate_generator settings must be a mapping")
-        if "prefill_budget_fractions" in value or "include_finish_boundary" in value:
+        obsolete = {
+            "prefill_budget_multipliers",
+            "predictor_inversion_safety_margin_seconds",
+            "predictor_inversion_budget_grid",
+            "prefill_priority_policies",
+            "completion_aware_tiering",
+            "completion_aware_equal_score_policy",
+            "completion_aware_order",
+            "include_finish_boundary",
+        }.intersection(value)
+        if obsolete:
             raise ValueError(
-                "candidate_generator v2 fields (prefill_budget_fractions, "
-                "include_finish_boundary) are no longer accepted; use "
-                "prefill_budget_multipliers and prefill_priority_policies"
+                "obsolete Candidate Generator fields are no longer accepted: "
+                + ", ".join(sorted(obsolete))
             )
-        multipliers = value.get("prefill_budget_multipliers")
-        if not isinstance(multipliers, list):
+        fractions = value.get("prefill_budget_fractions")
+        if not isinstance(fractions, list):
             raise ValueError(
-                "candidate_generator.prefill_budget_multipliers must be a list"
+                "candidate_generator.prefill_budget_fractions must be a list"
             )
         frozen = value.get("parameters_frozen")
         if not isinstance(frozen, bool):
             raise ValueError("candidate_generator.parameters_frozen must be boolean")
-        maximum = value.get("maximum_seed_candidates", 16)
+        maximum = value.get("maximum_seed_candidates", 12)
         if isinstance(maximum, bool) or not isinstance(maximum, int):
             raise ValueError("maximum_seed_candidates must be an integer")
         minimum_prefill = value.get("minimum_prefill_chunk_tokens", 1)
@@ -120,53 +78,9 @@ class SchedulerSettings:
             minimum_prefill, int
         ):
             raise ValueError("minimum_prefill_chunk_tokens must be an integer")
-        margin = value.get(
-            "predictor_inversion_safety_margin_seconds", 0.020
-        )
-        if (
-            isinstance(margin, bool)
-            or not isinstance(margin, (int, float))
-            or not math.isfinite(margin)
-            or margin <= 0
-        ):
-            raise ValueError(
-                "predictor_inversion_safety_margin_seconds must be finite and positive"
-            )
-        grid_raw = value.get(
-            "predictor_inversion_budget_grid",
-            list((0, 64, 128, 256, 384, 512, 768, 1024, 1536, 2048)),
-        )
-        if not isinstance(grid_raw, list):
-            raise ValueError(
-                "candidate_generator.predictor_inversion_budget_grid must be a list"
-            )
-        grid = tuple(int(item) for item in grid_raw)
-        tiering = value.get("completion_aware_tiering")
-        if not isinstance(tiering, str):
-            raise ValueError(
-                "candidate_generator.completion_aware_tiering must be a string"
-            )
-        equal_score_policy = value.get("completion_aware_equal_score_policy")
-        if not isinstance(equal_score_policy, str):
-            raise ValueError(
-                "candidate_generator.completion_aware_equal_score_policy "
-                "must be a string"
-            )
-        order_raw = value.get("completion_aware_order")
-        if not isinstance(order_raw, list) or not all(
-            isinstance(item, str) for item in order_raw
-        ):
-            raise ValueError(
-                "candidate_generator.completion_aware_order must be a list of strings"
-            )
         return cls(
-            prefill_budget_multipliers=tuple(float(item) for item in multipliers),
+            prefill_budget_fractions=tuple(float(item) for item in fractions),
             maximum_seed_candidates=maximum,
-            predictor_inversion_safety_margin_seconds=float(margin),
-            predictor_inversion_budget_grid=grid,
-            completion_aware_tiering=tiering,
-            completion_aware_equal_score_policy=equal_score_policy,
-            completion_aware_order=tuple(order_raw),
             minimum_prefill_chunk_tokens=minimum_prefill,
             frozen=frozen,
         )
@@ -459,6 +373,7 @@ class DPPSettings:
     algorithm: str = "request_service_deficit_v2"
     reference_artifact_path: str | None = None
     reference_artifact_sha256: str | None = None
+    ttft_drift_weight: float = 1.0
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -488,6 +403,14 @@ class DPPSettings:
             raise ValueError("frozen reference artifact path/hash is incomplete")
         if self.score_rel_tol != 1e-9 or self.score_abs_tol != 1e-12:
             raise ValueError("DPP score tie tolerance is fixed")
+        weight = self.ttft_drift_weight
+        if (
+            isinstance(weight, bool)
+            or not isinstance(weight, (int, float))
+            or not math.isfinite(weight)
+            or weight <= 0
+        ):
+            raise ValueError("ttft_drift_weight must be finite and positive")
 
     @property
     def live_v2_ready(self) -> bool:
@@ -532,4 +455,5 @@ class DPPSettings:
             algorithm=str(value.get("algorithm", "")),
             reference_artifact_path=reference.get("artifact_path"),
             reference_artifact_sha256=reference.get("artifact_sha256"),
+            ttft_drift_weight=float(value.get("ttft_drift_weight", 1.0)),
         )

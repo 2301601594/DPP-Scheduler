@@ -1,0 +1,326 @@
+{
+  "schema_version": 1,
+  "kind": "dpp_v3_candidate_vs_selector_diagnosis",
+  "analysis_scope": "development_nonformal",
+  "formal_benchmark_eligible": false,
+  "verdict": "INDETERMINATE_FROM_THIS_RUN",
+  "verdict_detail": "The discriminating statistic P(ZERO selected | prefill backlog AND a non-ZERO safe candidate existed) is not computable: the target run was launched with DPP_DIAGNOSTIC_ITERATION_LOG=0, so no per-frame candidate record was ever emitted. Only a pre-reduced aggregate survives.",
+
+  "source": {
+    "campaign_id": "dpp_v3_default_n300_qps0p25_seed1001_v1",
+    "run_id": "main_dpp_qps0p25_seed1001_attempt01",
+    "started_at_utc": "2026-08-26T15:21:29.207593+00:00",
+    "finished_at_utc": "2026-08-26T15:49:06.821052+00:00",
+    "status": "complete_with_failures",
+    "scheduler_policy": "dpp",
+    "trace_sha256": "9da30703ed0fb617e8a02cd3ac871a9a470b745b3405716323f7a9262007a771",
+    "trace_manifest_sha256": "9ed1c615ddb0de5256d218a2d9fba15768cc3885a9bf6e8023883e6876492c7b",
+    "config_sha256": "9589b53c7e90c4206b84931e1e5016d1ca94d6757827e0e0e3e415f6c24e793a",
+    "git_root_commit": "7e1205464e5952eb93f23d1b8b148b0771dba099",
+    "git_root_dirty": true,
+    "git_root_dirty_includes_scheduler_source": [
+      "dpp_scheduler/candidate_generator.py",
+      "dpp_scheduler/fallback.py",
+      "dpp_scheduler/settings.py",
+      "dpp_scheduler/vllm_adapter.py"
+    ],
+    "vllm_commit": "83ad767eed3be3ee7f2df63be693bfaca5c7c922",
+    "artifact_sha256": {
+      "dpp_diagnostic_aggregate.json": "53d0c02cf93c6f86553d462366f02a85bfa740daafa1a10d82391704a1febf08",
+      "run_manifest.json": "478397f6b62b762ecffa557028871f85d2e6151de084fd03588f1bbc0b7f239c",
+      "summary.json": "5f7069530162c577afc08ffda512020d5010852325e1c609da7bc2f7c400ea9a"
+    }
+  },
+
+  "data_completeness": {
+    "dpp_diagnostic_iteration_log": false,
+    "iteration_log_env": "DPP_DIAGNOSTIC_ITERATION_LOG=0",
+    "per_frame_records_retained": 0,
+    "startup_log_lines": 551,
+    "startup_log_diagnostic_frame_records": 0,
+    "aggregate_is_pre_reduced": true,
+    "aggregate_retains_no_per_frame_entries": true,
+    "note_m150_selected_frames": "vllm_adapter.py keeps an in-memory m150_selected_frames dict but _dpp_write_aggregate serialises only its reduced statistics; no frame_id-level row is written to disk.",
+    "field_availability": {
+      "frame_id": "absent",
+      "prefill_backlog_tokens_per_frame": "absent",
+      "prefill_backlog_frame_count_only": "present",
+      "decode_count_per_frame": "absent",
+      "base_prefill_budget_P": "absent",
+      "target_duration": "absent",
+      "resolution_status": "absent",
+      "multiplier_budgets": "absent",
+      "raw_candidate_count": "absent",
+      "deduplicated_candidate_count": "absent",
+      "safe_candidate_count": "absent",
+      "selected_template": "aggregated_histogram_only",
+      "priority_policy": "aggregated_histogram_only",
+      "prefill_items": "absent",
+      "actual_prefill_tokens": "reduced_stats_only",
+      "predicted_duration": "absent",
+      "conservative_duration": "absent",
+      "dpp_candidate_score": "absent"
+    },
+    "where_fields_would_exist": "dpp_scheduler/vllm_adapter.py:1500 _dpp_record_schedule_diagnostic emits plan_id, template_id, prefill_items, total_prefill_tokens, per-candidate predictions and DPP score ranks into the server log, but only when DPP_DIAGNOSTIC_ITERATION_LOG=1."
+  },
+
+  "frame_population": {
+    "decision_frames_selection_histogram_total": 7752,
+    "selected_prefill_tokens_count": 7751,
+    "accounting_gap_frames": 1,
+    "accounting_gap_note": "One frame is present in selection_histogram but absent from the selected_prefill_tokens/progress samples; all derived counts below carry a +/-1 frame uncertainty.",
+    "prefill_backlog_frames": 4211,
+    "backlog_with_active_decode_frames": 4209,
+    "backlog_without_active_decode_frames": 2,
+    "no_backlog_frames": 3541,
+    "no_backlog_fraction_pct": 45.68,
+    "executed_plan_composition": {
+      "mixed": 403,
+      "prefill_only": 2,
+      "decode_only": 7346
+    },
+    "selection_histogram": {
+      "ZERO": 7346,
+      "M050": 250,
+      "M075": 36,
+      "M100": 86,
+      "M125": 11,
+      "M150": 22,
+      "OTHER": 1
+    },
+    "policy_selection_histogram": {
+      "ZERO": 7346,
+      "URGENCY": 283,
+      "COMPLETION_AWARE": 45,
+      "CONTINUATION": 77,
+      "OTHER": 1
+    }
+  },
+
+  "computable_conditional_probabilities": {
+    "P_zero_selected": {
+      "value_pct": 94.7626,
+      "numerator": 7346,
+      "denominator": 7752,
+      "derivation": "selection_histogram ZERO / total"
+    },
+    "P_zero_given_backlog": {
+      "value_pct": 90.3823,
+      "numerator": 3806,
+      "denominator": 4211,
+      "derivation": "A non-ZERO plan can only draw prefill items from snapshot.waiting_prefill_requests (candidate_generator.py:391), so every non-ZERO selection is necessarily a backlog frame. backlog_frames - (executed_mixed + executed_prefill_only) = 4211 - 405.",
+      "uncertainty_frames": 1
+    },
+    "P_zero_given_backlog_and_active_decode": {
+      "value_pct": 90.4253,
+      "numerator": 3806,
+      "denominator": 4209,
+      "uncertainty_frames": 1
+    },
+    "zero_selections_forced_by_empty_backlog": 3541,
+    "zero_selections_despite_backlog": "3805-3806"
+  },
+
+  "not_computable": {
+    "P_zero_given_backlog_and_nonzero_safe_candidate_exists": {
+      "status": "not_computable",
+      "reason": "The per-frame count of non-ZERO safe candidates was never recorded.",
+      "identifiability_bound": "Among the 3806 backlog frames where ZERO was selected, the number that offered at least one non-ZERO safe candidate is bounded only by [0, 3806]. At 0 the cause is entirely candidate absence; at 3806 it is entirely selector preference. The retained data provides no information to narrow this interval."
+    },
+    "P_zero_given_light_mixed_candidate_exists_300ms": {
+      "status": "not_computable",
+      "reason": "No per-candidate predicted or conservative duration was recorded, so light/near-light/medium/heavy classification of the unselected candidates is impossible."
+    },
+    "P_zero_given_light_mixed_candidate_exists_250ms": {
+      "status": "not_computable",
+      "reason": "Same as above."
+    },
+    "attribution_classes_A_through_F": {
+      "status": "not_computable",
+      "reason": "Classes A/B/C/D/E/F all require the per-frame candidate list with per-candidate predicted duration. None survives."
+    },
+    "budget_diversity_distinct_budget_canonical_plan_policy": {
+      "status": "not_computable_for_this_run",
+      "reason": "raw_candidate_count, deduplicated_candidate_count and per-multiplier allocation sets are computed inside CandidateGenerator.last_diagnostic and only surfaced through the disabled iteration log."
+    },
+    "multiplier_clamp_analysis_P_vs_Pmax": {
+      "status": "not_computable_for_this_run",
+      "reason": "Neither base P, nor per-frame backlog tokens, nor token_budget - decode_count was recorded, so P/P_max cannot be formed and clamp collapse cannot be counted or attributed to BACKLOG_CLAMP / TOKEN_BUDGET_CLAMP / SEQUENCE_LIMIT / MIN_CHUNK / CANONICAL_DEDUP."
+    },
+    "zero_streak_analysis": {
+      "status": "not_computable",
+      "reason": "Streaks require the ordered per-frame selection sequence. The aggregate keeps only order-free histograms; no frame_id or timestamp survives."
+    },
+    "dpp_score_decomposition": {
+      "status": "not_computable",
+      "reason": "No per-candidate DPP score, duration denominator, or TTFT/TBT/Prefill debt contribution was recorded."
+    },
+    "representative_frames": {
+      "status": "not_computable",
+      "reason": "Zero per-frame rows survive, so no representative frame can be quoted without fabricating it."
+    }
+  },
+
+  "partially_computable_evidence": {
+    "selected_multiplier_bucket_counts": {
+      "M050": 250,
+      "M075": 36,
+      "M100": 86,
+      "M125": 11,
+      "M150": 22,
+      "note": "Per-bucket predicted duration, actual duration, requested budget and actual prefill tokens are NOT retained per bucket. Only the pooled mixed distribution plus an M150-only audit exist, so the per-bucket table requested in section 10 cannot be filled."
+    },
+    "pooled_mixed_execution_duration_seconds": {
+      "count": 403,
+      "mean": 0.4160784549589983,
+      "p50": 0.4045414220308885,
+      "p90": 0.651026498991996,
+      "p95": 0.7690315939253196,
+      "p99": 0.9604932349175215,
+      "max": 0.9837837759405375,
+      "gt250ms": 282,
+      "gt300ms": 258,
+      "gt500ms": 141
+    },
+    "m150_only_audit": {
+      "count": 22,
+      "duration_mean": 0.23354726624463432,
+      "duration_p50": 0.23433954000938684,
+      "duration_p90": 0.25882420293055475,
+      "duration_p95": 0.26397861796431243,
+      "duration_max": 0.26874665601644665,
+      "gt250ms": 5,
+      "gt300ms": 0,
+      "gt500ms": 0,
+      "sum_ttft_debt_mean": 50.47677313286867,
+      "sum_ttft_debt_max": 423.4980685398316,
+      "max_ttft_debt_mean": 7.072411417797498,
+      "max_ttft_debt_max": 53.22561569879379,
+      "sum_tbt_debt_mean": 0.1038548465479504,
+      "sum_tbt_debt_max": 2.2848066240549088
+    },
+    "multiplier_cost_ordering_inversion": {
+      "observation": "M150 is the largest multiplier (1.5x P) yet every one of its 22 selected frames executed in <= 269 ms, while the pooled mixed population has mean 416 ms, p95 769 ms and max 984 ms and 141 executions over 500 ms.",
+      "implication": "The heavy mixed executions therefore came from M050-M125 selections, so the multiplier label carries no consistent cost ordering across frames. This is the signature expected if base P varies by orders of magnitude between frames rather than tracking a per-frame slack target.",
+      "strength": "data_supported_inference",
+      "caveat": "Derived from two separately reduced distributions, not from a per-frame join. It bounds the population but cannot be checked frame by frame."
+    },
+    "selected_prefill_tokens": {
+      "count": 7751,
+      "mean": 29.254934847116502,
+      "p50": 0,
+      "p95": 74,
+      "max": 2018
+    },
+    "tie_frames": {
+      "tie_frame_count": 36,
+      "tie_selected_histogram": {"ZERO": 0, "M050": 0, "M075": 0, "M100": 22, "M125": 4, "M150": 10, "OTHER": 0},
+      "note": "ZERO never won a tie; all 36 ties resolved to a non-ZERO plan."
+    },
+    "counter_evidence_against_monotone_zero_bias": {
+      "observation": "In 119 of the 405 non-ZERO selections the selector chose M100, M125 or M150 rather than the smallest multiplier, and ZERO won none of the 36 tie frames.",
+      "implication": "The selector is not monotonically biased toward less prefill work whenever a choice exists.",
+      "strength": "weak_inference",
+      "caveat": "Per-frame candidate availability is unknown, so it is not established that a lighter multiplier was actually on offer in those 119 frames."
+    }
+  },
+
+  "external_supporting_evidence": {
+    "warning": "Neither report below is evidence about the target run. Both come from scripts/dpp_v3_candidate_generator_diagnostic.py, whose own docstring states it drives CandidateGenerator against a SYNTHESIZED per-iteration schedule with an explicit synthetic prefill hold, and that this is 'a policy-stress input, not a vLLM replay or performance measurement'. Re-running it would produce synthetic-schedule statistics, which the instruction explicitly forbids as a route to a conclusion. They are recorded here only as provenance for the open question, and are explicitly NOT used to assign a root cause.",
+    "dpp_v3_candidate_generator_diagnostic_v1": {
+      "path": "results/processed/qwen3_14b_dgx_spark/dpp_v3_candidate_generator_diagnostic_v1/report.json",
+      "tracked": true,
+      "committed_in": "7e1205464e5952eb93f23d1b8b148b0771dba099",
+      "local_mtime_utc": "2026-08-26T21:57:02",
+      "frames": 200,
+      "raw_candidate_count_mean": 5.44,
+      "raw_candidate_count_p50": 4,
+      "deduplicated_candidate_count_mean": 2.48,
+      "resolution_inverted_ok": 170,
+      "resolution_inverted_ood": 18,
+      "resolution_no_feasible": 11,
+      "P_p50": 2048,
+      "P_p95": 2048,
+      "multiplier_selections": {"ZERO": 168, "M050": 32},
+      "config_sha256_in_report": "not_retained_in_committed_file"
+    },
+    "budget_resolver_v3_after": {
+      "path": "results/processed/qwen3_14b_dgx_spark/budget_resolver_v3_after/report.json",
+      "tracked": false,
+      "committed_in": "not_committed",
+      "local_mtime_utc": "2026-08-27T00:08:27",
+      "sha256": "f82ee538e9ab6bdef3ab5150630e7becde065f879fa7c2e9839bd6b6b028d004",
+      "frames": 200,
+      "raw_candidate_count_mean": 1.165,
+      "raw_candidate_count_p50": 1,
+      "deduplicated_candidate_count_mean": 1.055,
+      "resolution_no_feasible": 197,
+      "resolution_inverted_ok": 1,
+      "P_p50": 0,
+      "distinct_multiplier_budget_count_p50": 0,
+      "policy_diverse_multiplier_count_mean": 0.0,
+      "multiplier_selections": {"ZERO": 197, "M050": 3},
+      "config_sha256_in_report": "9589b53c7e90c4206b84931e1e5016d1ca94d6757827e0e0e3e415f6c24e793a",
+      "provenance_note": "This file is currently UNTRACKED. Its mtime (2026-08-27 00:08 UTC) coincides with in-session modifications to dpp_scheduler/budget_resolver.py and tests/unit/test_candidate_generator_v3.py that the user is making live. It most likely reflects the CURRENT WIP state of the BudgetResolver the user is iterating on, not a prior committed V3 harness run. Per AGENTS.md section 6 it is not a version-controlled input and must not be cited as evidence."
+    },
+    "disagreement_note": "The two harness states disagree by two orders of magnitude on feasibility (no_feasible 11/200 vs 197/200) and on P (p50 2048 vs 0). After correcting provenance: the 'after' file is WIP, not historical. The disagreement therefore signals that the resolver's feasibility outcome is very sensitive to its own configuration across edits, not that two independent committed runs exist. Neither state is established as the code that produced the target run, which ran from a dirty tree at 7e12054 with dpp_scheduler/candidate_generator.py and dpp_scheduler/settings.py modified."
+  },
+
+  "structural_code_facts": {
+    "zero_only_action_space_condition": {
+      "location": "dpp_scheduler/candidate_generator.py:411",
+      "statement": "generate() emits the ZERO plan unconditionally and enters the multiplier x policy loop only under `if resolution.base_prefill_budget > 0`.",
+      "consequence": "Any frame whose BudgetResolver returns base_prefill_budget <= 0 has a ZERO-only action space by construction. In such frames the DPP Selector has no alternative to reject, so ZERO selection there carries zero information about selector preference."
+    },
+    "backlog_definition": {
+      "location": "dpp_scheduler/vllm_adapter.py:1330",
+      "statement": "prefill_backlog_frame_count increments when len(snapshot.waiting_prefill_requests) > 0; that tuple carries an is_running flag, so it spans both never-started and partially-prefilled requests."
+    },
+    "counter_semantics_are_not_inconsistent": {
+      "statement": "mixed_iteration_count (4209) buckets by snapshot composition (backlog present alongside active decode), whereas actual_duration_seconds.mixed (403) buckets by executed plan composition (plan carried both prefill and decode tokens). The gap is the starvation measurement, not a bookkeeping error.",
+      "locations": ["dpp_scheduler/vllm_adapter.py:1330-1339", "dpp_scheduler/vllm_adapter.py:1937-1951"]
+    }
+  },
+
+  "attribution": {
+    "rule_applied": "Instruction section 15",
+    "branch": "cannot be assigned from the target run; branch 1 is the better supported hypothesis but is not confirmed",
+    "candidate_side_support": [
+      "ZERO-only action space is structurally forced whenever base_prefill_budget <= 0 (candidate_generator.py:411).",
+      "Multiplier cost ordering is inverted in the target run: M150 executions all <= 269 ms while the pooled mixed population reaches p95 769 ms.",
+      "Both offline resolver reports show a collapsed action space (raw candidate p50 of 4 and 1, dedup p50 of 2 and 1, no_feasible 11/200 and 197/200)."
+    ],
+    "selector_side_support": [
+      "None that is specific to the selector. No retained field distinguishes 'no candidate offered' from 'candidate offered and rejected'."
+    ],
+    "selector_side_counter_evidence": [
+      "119 of 405 non-ZERO selections chose M100/M125/M150 rather than the smallest multiplier.",
+      "ZERO won none of the 36 tie frames."
+    ]
+  },
+
+  "recommended_next_action": {
+    "do_not_modify": ["CandidateGenerator", "BudgetResolver", "DPP Selector", "Safe-Set", "Predictor", "benchmark configuration"],
+    "required_data_collection": "Re-run the identical configuration with DPP_DIAGNOSTIC_ITERATION_LOG=1 so that _dpp_record_schedule_diagnostic emits per-frame candidate records, then repeat sections 3-13 against that log.",
+    "prior_attempt": {
+      "campaign_id": "dpp_v3_multiplier_diag_qps0p25_seed1001_v1",
+      "run_id": "dpp_v3_multiplier_diag_qps0p25_seed1001_v1",
+      "iteration_log_enabled": true,
+      "same_trace_sha256": true,
+      "status": "failed",
+      "diagnostic_frames_emitted": 0,
+      "root_cause": "RuntimeError: live v2 is disabled until held-out OOD calibration freezes kappa, raised during EngineCore init at git 06a5d96; engine never started.",
+      "assessment": "This is a settings gate, not a defect in the diagnostic logging path. The later successful run at 7e12054 passed the equivalent gate, so re-collection is expected to be viable.",
+      "authorization": "A re-run is a GPU benchmark and is out of scope for this analysis-only stage; it requires explicit user authorization."
+    },
+    "precondition_for_touching_the_selector": "Do not analyse or modify the DPP Selector objective until P(ZERO | backlog AND a non-ZERO safe candidate existed) has been measured."
+  },
+
+  "integrity_notes": [
+    "Every number above is read from the retained artifacts of the named run or derived from them by stated arithmetic; nothing is imputed.",
+    "The target run is development_nonformal with formal_comparison_eligible=false and must not be reported as a benchmark result.",
+    "The target run also carries one client-side transport failure (poisson_q0.25_s1001_0094, ServerDisconnectedError) and status complete_with_failures; that request is retained, not filtered.",
+    "The offline harness reports are synthetic-schedule policy stress tests and are kept in a separate section for that reason.",
+    "No per-frame CSV accompanies this record because zero per-frame rows survive in the target run; emitting one would require fabrication."
+  ]
+}

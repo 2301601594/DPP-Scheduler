@@ -163,35 +163,19 @@ contracts:
     engine_core_output_created_by_locked_scheduler_update_from_output
 
 candidate_generator:
-  algorithm: slack_centered_multiplier_v3
-  prefill_budget_multipliers: [0.50, 0.75, 1.00, 1.25, 1.50]
-  prefill_multiplier_rounding: floor
-  maximum_seed_candidates: 16
+  algorithm: fixed_fraction_with_stock_plan
+  prefill_budget_fractions: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+  prefill_fraction_rounding: floor
+  maximum_seed_candidates: 12
   minimum_prefill_chunk_tokens: 6
   all_active_decode_required: true
-  predictor_inversion_safety_margin_seconds: 0.020
-  predictor_inversion_budget_grid:
-    - 0
-    - 64
-    - 128
-    - 256
-    - 384
-    - 512
-    - 768
-    - 1024
-    - 1536
-    - 2048
-  prefill_priority_policies: [URGENCY, COMPLETION_AWARE, CONTINUATION]
-  completion_aware_tiering: relative_urgency_tertiles
-  completion_aware_equal_score_policy: same_tier_at_first_rank
-  completion_aware_order:
-    - relative_urgency_tier
-    - remaining_tokens
-    - running_before_waiting
-    - arrival_time
-    - ordinal
-    - request_id
-  zero_candidate_always_emitted: true
+  all_active_decode_exception: stock_plan_mirrors_native_running_then_waiting_selection
+  prefill_order:
+    - running_prefill_by_live_ordinal
+    - waiting_prefill_by_arrival_time_ordinal_request_id
+  include_zero_candidate: true
+  include_stock_candidate: true
+  zero_candidate_before_canonical_dedup: true
   recovery_age_threshold_seconds: 0.25
   recovery_age_threshold_status: provisional_for_scheduler_integration
   recovery_age_threshold_source: >-
@@ -201,7 +185,6 @@ candidate_generator:
   formal_benchmark_eligible: false
   canonical_deduplication: true
   decode_order: [arrival_time, ordinal, request_id]
-  prefill_order_tiers: [top_urgency_third, middle_urgency_third, bottom_urgency_third]
   stable_prefill_tie_key: [arrival_time, ordinal, request_id]
   kv_projection_side_effect_free: true
 
@@ -348,6 +331,8 @@ dpp:
     interpolation: expected_duration
     constrained_extrapolation: conservative_duration
   score: negative_fixed_reference_lyapunov_drift_per_effective_second
+  ttft_drift_weight: 1.0
+  development_override_env: DPP_TTFT_DRIFT_WEIGHT
   score_tie_tolerance:
     relative: 1.0e-9
     absolute: 1.0e-12
@@ -369,6 +354,12 @@ dpp:
     weight_v: 0.0
     token_normalization: 2048
     obligation_normalization: 64
+
+  selection_mode:
+    default: normal
+    development_override_env: DPP_SELECTION_MODE
+    allowed: [normal, forced_stock_plan]
+    forced_stock_plan_formal_eligible: false
 
 profiling:
   required_identity:
@@ -423,6 +414,28 @@ experiments:
     trace_location: append_only_campaign_staging
     trace_review_status: development_only_not_promoted_to_frozen_trace_namespace
     smoke_gate_required_before_main_runs: true
+    performance_instrumentation: false
+    request_timeout_seconds: 3600
+    run_timeout_seconds: 5400
+    campaign_timeout_seconds: 43200
+    max_attempts_per_invocation: 2
+  ttft_weight_grid:
+    status: approved_for_nonformal_engineering_comparison
+    formal_benchmark_eligible: false
+    campaign_id: dpp_ttft_weight_grid_qps0p25_n150_seed1001_v1
+    tmux_session: dpp-ttft-grid-qps0p25-n150-s1001-v1
+    smoke_campaign_id: dpp_ttft_weight_grid_smoke_n1_seed1001_v1
+    smoke_tmux_session: dpp-ttft-grid-smoke-n1-s1001-v1
+    smoke_request_count: 1
+    smoke_request_timeout_seconds: 1200
+    smoke_run_timeout_seconds: 1800
+    smoke_campaign_timeout_seconds: 5400
+    offered_load_requests_per_second: 0.25
+    trace_seed: 1001
+    request_count_per_run: 150
+    ttft_drift_weights: [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
+    policies: [stock, dpp_forced_stock_plan, dpp_weight_grid]
+    shared_stock_run: true
     performance_instrumentation: false
     request_timeout_seconds: 3600
     run_timeout_seconds: 5400

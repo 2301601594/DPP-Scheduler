@@ -19,7 +19,9 @@ from dpp_scheduler.settings import DPPSettings
 @dataclass(frozen=True)
 class DPPScore:
     plan_id: str
+    ttft_drift_weight: float
     prefill_drift: float
+    weighted_prefill_drift: float
     decode_drift: float
     total_drift: float
     effective_duration: float
@@ -33,6 +35,18 @@ class DPPScore:
     # plan's actual per-request Prefill service. Used ONLY for isclose
     # score tie-breaking; never part of the main DPP score.
     prefill_progress: float
+
+    @property
+    def normalized_ttft_drift(self) -> float:
+        return self.prefill_drift
+
+    @property
+    def weighted_ttft_drift(self) -> float:
+        return self.weighted_prefill_drift
+
+    @property
+    def normalized_tbt_drift(self) -> float:
+        return self.decode_drift
 
 
 def _finite_positive(label: str, value: float | None, maximum: float) -> float:
@@ -139,19 +153,28 @@ class DPPSelector:
         prefill_drift = math.fsum(prefill_changes) / (
             2.0 * self.settings.prefill_reference_concurrency
         )
+        weighted_prefill_drift = self.settings.ttft_drift_weight * prefill_drift
         decode_drift = math.fsum(decode_changes) / (
             2.0 * self.settings.decode_reference_concurrency
         )
-        total_drift = prefill_drift + decode_drift
+        total_drift = weighted_prefill_drift + decode_drift
         score = -total_drift / tau
         if not all(
             math.isfinite(value)
-            for value in (prefill_drift, decode_drift, total_drift, score)
+            for value in (
+                prefill_drift,
+                weighted_prefill_drift,
+                decode_drift,
+                total_drift,
+                score,
+            )
         ):
             raise ValueError("DPP v2 score is non-finite")
         return DPPScore(
             plan_id=candidate.plan.plan_id,
+            ttft_drift_weight=self.settings.ttft_drift_weight,
             prefill_drift=prefill_drift,
+            weighted_prefill_drift=weighted_prefill_drift,
             decode_drift=decode_drift,
             total_drift=total_drift,
             effective_duration=tau,

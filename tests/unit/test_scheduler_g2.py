@@ -4,12 +4,6 @@ import dataclasses
 import inspect
 import unittest
 
-from dpp_scheduler.budget_resolver import (
-    RESOLUTION_INVERTED_OK,
-    RESOLUTION_NO_DECODE_USE_MAX,
-    BudgetResolution,
-    BudgetResolver,
-)
 from dpp_scheduler.candidate_generator import CandidateGenerator
 from dpp_scheduler.contracts import (
     ControlState,
@@ -65,51 +59,24 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(ControlState.__dataclass_params__.frozen)
 
 
-class _StaticBudgetResolver(BudgetResolver):
-    """Resolver stub for v3 Generator layout tests.
-
-    Returns ``base_prefill_budget`` from the constructor argument, allowing
-    tests to drive the Generator without depending on a Predictor artifact.
-    """
-
-    def __init__(self, base: int, status: str = RESOLUTION_INVERTED_OK) -> None:
-        self._base = base
-        self._status = status
-
-    def resolve(self, snapshot: StateSnapshot) -> BudgetResolution:  # noqa: ARG002
-        return BudgetResolution(
-            base_prefill_budget=int(self._base),
-            target_duration_seconds=0.250,
-            resolution_status=self._status,
-        )
-
-
 class CandidateGeneratorV3Tests(unittest.TestCase):
     def test_all_candidates_include_all_active_decode(self) -> None:
         state = snapshot(
             prefill=(PrefillRequest("p", 0.0, 100, 0),),
             decode=(DecodeRequest("d2", 1.0, 20), DecodeRequest("d1", 0.0, 20)),
         )
-        generator = CandidateGenerator(
-            SchedulerSettings.provisional(),
-            budget_resolver=_StaticBudgetResolver(base=512),
-        )
+        generator = CandidateGenerator(SchedulerSettings.provisional())
         plans = generator.generate(state)
-        # Expect ZERO + 5 multipliers × 3 policies (when every policy produces
-        # the same canonical plan under only one Prefill request, dedup
-        # collapses to ZERO + ≤15 distinct plans).
         self.assertGreaterEqual(len(plans), 2)
-        self.assertLessEqual(len(plans), 16)
-        self.assertTrue(all(plan.decode_items == ("d1", "d2") for plan in plans))
+        self.assertLessEqual(len(plans), 12)
+        fractions = [p for p in plans if p.template_id.startswith("P")]
+        self.assertTrue(all(plan.decode_items == ("d1", "d2") for plan in fractions))
 
     def test_multiplier_neighborhood_includes_zero(self) -> None:
         state = snapshot(
             prefill=(PrefillRequest("p", 0.0, 8, 0),), token_budget=8
         )
-        generator = CandidateGenerator(
-            SchedulerSettings.provisional(),
-            budget_resolver=_StaticBudgetResolver(base=8),
-        )
+        generator = CandidateGenerator(SchedulerSettings.provisional())
         plans = generator.generate(state)
         # ZERO plus the deduplicated 5×3 neighborhood of the single-request
         # prefill. With one prefill request and a 100-token token budget
@@ -125,14 +92,8 @@ class CandidateGeneratorV3Tests(unittest.TestCase):
                 PrefillRequest("running", 5.0, 100, 10, is_running=True),
             )
         )
-        generator = CandidateGenerator(
-            SchedulerSettings.provisional(),
-            budget_resolver=_StaticBudgetResolver(base=512),
-        )
+        generator = CandidateGenerator(SchedulerSettings.provisional())
         plans = generator.generate(state)
-        # CONTINUATION owns running-first behavior even when the relative-tier
-        # Completion-Aware policy chooses a different order. The key invariant
-        # is that at least one non-zero plan preserves continuation.
         nonzero = [plan for plan in plans if plan.total_prefill_tokens > 0]
         self.assertTrue(nonzero, "expected at least one non-zero Mixed plan")
         running_first = [
@@ -151,38 +112,16 @@ class CandidateGeneratorV3Tests(unittest.TestCase):
         self.assertNotIn("DurationPredictor", source)
         self.assertNotIn("SafeSet", source)
 
-    def test_p_zero_only_zero(self) -> None:
-        state = snapshot(
-            prefill=(PrefillRequest("p", 0.0, 100, 0),),
-        )
-        generator = CandidateGenerator(
-            SchedulerSettings.provisional(),
-            budget_resolver=_StaticBudgetResolver(base=0),
-        )
-        plans = generator.generate(state)
-        self.assertEqual(len(plans), 1)
-        self.assertEqual(plans[0].template_id, "ALL_DECODE:ZERO")
-        self.assertEqual(plans[0].total_prefill_tokens, 0)
-
-    def test_no_decode_path_emits_neighborhood(self) -> None:
+    def test_no_decode_path_emits_fraction_and_stock_candidates(self) -> None:
         state = snapshot(
             prefill=(PrefillRequest("p", 0.0, 100, 0),),
             decode=(),
         )
-        generator = CandidateGenerator(
-            SchedulerSettings.provisional(),
-            budget_resolver=_StaticBudgetResolver(
-                base=600, status=RESOLUTION_NO_DECODE_USE_MAX
-            ),
-        )
+        generator = CandidateGenerator(SchedulerSettings.provisional())
         plans = generator.generate(state)
         self.assertGreaterEqual(len(plans), 1)
-        # At least one plan should carry a SLACK_BUDGET multiplier prefix
-        # and one should be ZERO.
-        self.assertTrue(
-            any(plan.template_id.startswith("ALL_DECODE:SLACK_BUDGET:") for plan in plans)
-        )
-        self.assertTrue(any(plan.template_id == "ALL_DECODE:ZERO" for plan in plans))
+        self.assertTrue(any(plan.template_id.startswith("P") for plan in plans))
+        self.assertTrue(any(plan.template_id == "STOCK" for plan in plans))
 
 
 class ControllerExactPlanTests(unittest.TestCase):
@@ -212,56 +151,24 @@ class ControllerExactPlanTests(unittest.TestCase):
 
 
 class SettingsTests(unittest.TestCase):
-    def test_mapping_freezes_v3_candidate_constants(self) -> None:
+    def test_mapping_freezes_fixed_fraction_candidate_constants(self) -> None:
         value = {
-            "prefill_budget_multipliers": [0.50, 0.75, 1.00, 1.25, 1.50],
-            "maximum_seed_candidates": 16,
+            "prefill_budget_fractions": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            "maximum_seed_candidates": 12,
             "minimum_prefill_chunk_tokens": 6,
-            "predictor_inversion_safety_margin_seconds": 0.020,
-            "predictor_inversion_budget_grid": [0, 64, 128, 256, 384, 512, 768, 1024, 1536, 2048],
-            "completion_aware_tiering": "relative_urgency_tertiles",
-            "completion_aware_equal_score_policy": "same_tier_at_first_rank",
-            "completion_aware_order": [
-                "relative_urgency_tier",
-                "remaining_tokens",
-                "running_before_waiting",
-                "arrival_time",
-                "ordinal",
-                "request_id",
-            ],
             "parameters_frozen": True,
         }
         settings = SchedulerSettings.from_mapping(value)
-        self.assertEqual(settings.maximum_seed_candidates, 16)
-        self.assertEqual(settings.prefill_budget_multipliers[0], 0.50)
-        self.assertEqual(settings.prefill_budget_multipliers[-1], 1.50)
-        self.assertEqual(settings.predictor_inversion_safety_margin_seconds, 0.020)
-        self.assertEqual(
-            settings.predictor_inversion_budget_grid[0], 0
-        )
-        self.assertEqual(
-            settings.predictor_inversion_budget_grid[-1], 2048
-        )
-        self.assertEqual(
-            settings.completion_aware_tiering, "relative_urgency_tertiles"
-        )
+        self.assertEqual(settings.maximum_seed_candidates, 12)
+        self.assertEqual(settings.prefill_budget_fractions[0], 0.1)
+        self.assertEqual(settings.prefill_budget_fractions[-1], 1.0)
 
-    def test_mapping_rejects_v2_field_names(self) -> None:
+    def test_mapping_rejects_obsolete_multiplier_fields(self) -> None:
         with self.assertRaises(ValueError):
             SchedulerSettings.from_mapping(
                 {
-                    "prefill_budget_fractions": [0.0, 0.25, 0.5, 0.75, 1.0],
-                    "maximum_seed_candidates": 6,
-                    "minimum_prefill_chunk_tokens": 1,
-                    "parameters_frozen": True,
-                }
-            )
-        with self.assertRaises(ValueError):
-            SchedulerSettings.from_mapping(
-                {
-                    "include_finish_boundary": True,
-                    "prefill_budget_multipliers": [0.50, 0.75, 1.00, 1.25, 1.50],
-                    "maximum_seed_candidates": 16,
+                    "prefill_budget_multipliers": [0.5, 1.0],
+                    "maximum_seed_candidates": 12,
                     "minimum_prefill_chunk_tokens": 6,
                     "parameters_frozen": True,
                 }

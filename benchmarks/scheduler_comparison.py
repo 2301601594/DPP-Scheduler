@@ -249,6 +249,7 @@ def validate_run_directory(
     expected_run: ComparisonRun,
     expected_request_count: int,
     smoke: bool,
+    expected_source_request_count: int = 300,
 ) -> dict[str, Any]:
     manifest = _read_json(run_root / "run_manifest.json")
     if manifest.get("schema_version") != 2:
@@ -274,7 +275,7 @@ def validate_run_directory(
         raise ValueError(f"resolved policy mismatch: {run_root}")
     if int(resolved.get("request_count", 0)) != expected_request_count:
         raise ValueError(f"resolved request count mismatch: {run_root}")
-    if int(resolved.get("source_request_count", 0)) != 300:
+    if int(resolved.get("source_request_count", 0)) != expected_source_request_count:
         raise ValueError(f"resolved source request count mismatch: {run_root}")
     if bool(resolved.get("diagnostic_prefix")) != smoke:
         raise ValueError(f"resolved diagnostic-prefix mismatch: {run_root}")

@@ -14,15 +14,15 @@ from dpp_scheduler.budget_resolver import (
     BudgetResolution,
     NullBudgetResolver,
     RidgeBudgetResolver,
+    derive_executable_inversion_grid,
 )
 from dpp_scheduler.candidate_generator import (
-    BUDGET_MULTIPLIERS,
-    MULTIPLIER_LABELS,
+    BUDGET_FRACTIONS,
+    FRACTION_LABELS,
     CandidateGenerator,
+    build_stock_plan,
     derive_candidate_budgets,
-    rank_prefill_completion_aware,
-    rank_prefill_continuation,
-    rank_prefill_urgency,
+    rank_prefill_requests,
 )
 from dpp_scheduler.contracts import (
     DecodeRequest,
@@ -62,12 +62,6 @@ def _snapshot(
         sequence_budget=sequence_budget,
         total_kv_blocks=1000,
     )
-
-
-def _static_resolver(base: int, status: str = RESOLUTION_INVERTED_OK):
-    """Tiny alias around :class:`_BudgetResolver` for readability in tests."""
-
-    return _BudgetResolver(base=base, status=status)
 
 
 class _FixedPredictor(DurationPredictor):
@@ -138,343 +132,102 @@ class _BudgetKeyedPredictor(DurationPredictor):
         return tuple(results)
 
 
-class _BudgetResolver:
-    """Test resolver that returns a fixed ``base_prefill_budget``.
-
-    Used as the ``budget_resolver=`` argument to ``CandidateGenerator`` in
-    unit tests; never registered as the production resolver.
-    """
-
-    def __init__(self, base: int, status: str = RESOLUTION_INVERTED_OK) -> None:
-        self._base = int(base)
-        self._status = status
-
-    def resolve(self, snapshot: StateSnapshot) -> BudgetResolution:  # noqa: ARG002
-        return BudgetResolution(
-            base_prefill_budget=self._base,
-            target_duration_seconds=0.250,
-            resolution_status=self._status,
-        )
-
-
 # ---------------------------------------------------------------------------
-# §14.1 Budget multiplier
+# Fixed-fraction and Stock-plan behavior
 # ---------------------------------------------------------------------------
 
 
-class BudgetMultiplierTests(unittest.TestCase):
-    def test_budget_multipliers_no_clamp(self) -> None:
+class FixedFractionCandidateTests(unittest.TestCase):
+    def test_fraction_grid_uses_pmax(self) -> None:
         budgets = derive_candidate_budgets(
-            1000,
-            token_budget=4096,
-            decode_count=0,
-            total_prefill_backlog=4096,
+            token_budget=1001,
+            decode_count=1,
+            total_prefill_backlog=2000,
         )
-        # floor(0.5*1000)=500, floor(0.75*1000)=750, 1000, 1250, 1500 — all
-        # within resource cap of 4096 so no clamp fires.
-        self.assertEqual(len(budgets), 5)
-        self.assertEqual(
-            [budget for _, budget, _ in budgets],
-            [500, 750, 1000, 1250, 1500],
-        )
-        self.assertEqual([label for label, _, _ in budgets], list(MULTIPLIER_LABELS))
-        self.assertEqual(
-            [multiplier for _, _, multiplier in budgets],
-            list(BUDGET_MULTIPLIERS),
-        )
+        self.assertEqual([label for label, _, _ in budgets], list(FRACTION_LABELS))
+        self.assertEqual([value for _, value, _ in budgets], list(range(100, 1001, 100)))
+        self.assertEqual([value for _, _, value in budgets], list(BUDGET_FRACTIONS))
 
-    def test_resource_clamp(self) -> None:
-        # token_budget - decode_count = 1200; high multipliers must clamp to
-        # 1200 and the dedup must collapse the two duplicates.
-        budgets = derive_candidate_budgets(
-            1000,
-            token_budget=2200,
-            decode_count=1000,
-            total_prefill_backlog=4096,
-        )
-        self.assertEqual([budget for _, budget, _ in budgets], [500, 750, 1000, 1200])
-
-    def test_backlog_clamp(self) -> None:
-        # Backlog smaller than P means every multiplier >= 1.0 collapses to
-        # the backlog floor. floor(0.5*1000)=500 stays under the 600 backlog
-        # cap; floor(0.75*1000)=750 clamps to 600; multipliers >= 1.0 all
-        # clamp to 600; the four 600 entries dedup to one.
-        budgets = derive_candidate_budgets(
-            1000,
-            token_budget=4096,
-            decode_count=0,
-            total_prefill_backlog=600,
-        )
-        self.assertEqual([budget for _, budget, _ in budgets], [500, 600])
-
-    def test_base_zero_yields_no_budgets(self) -> None:
-        self.assertEqual(
-            derive_candidate_budgets(
-                0,
-                token_budget=4096,
-                decode_count=0,
-                total_prefill_backlog=4096,
-            ),
-            (),
-        )
-
-
-# ---------------------------------------------------------------------------
-# §14.4–14.6 Prefill ordering
-# ---------------------------------------------------------------------------
-
-
-class PrefillOrderingTests(unittest.TestCase):
-    def test_urgency_ordering(self) -> None:
-        # Construct three Prefill requests with the same arrival time so that
-        # the u_i score alone decides the order. A has 800 tokens / 0.5s
-        # slack (u=1600), B has 400 / 1.0s (u=400), C has 200 / 1.0s (u=200).
-        prefill = (
-            PrefillRequest(
-                "A", 0.0, 800, 0, ttft_deadline=10.5
-            ),
-            PrefillRequest(
-                "B", 0.0, 400, 0, ttft_deadline=11.0
-            ),
-            PrefillRequest(
-                "C", 0.0, 200, 0, ttft_deadline=11.0
-            ),
-        )
-        state = _snapshot(prefill=prefill, timestamp=10.0)
-        ordered = rank_prefill_urgency(state)
-        self.assertEqual(tuple(item.request_id for item in ordered), ("A", "B", "C"))
-
-    def test_completion_aware_ordering(self) -> None:
-        # Equal urgency scores stay in the same relative tier. The intra-tier
-        # sort then picks smallest-remaining-first.
-        prefill = (
-            PrefillRequest("A", 0.0, 800, 0, ttft_deadline=18.0),
-            PrefillRequest("B", 0.0, 100, 0, ttft_deadline=11.0),
-            PrefillRequest("C", 0.0, 300, 0, ttft_deadline=13.0),
-        )
-        state = _snapshot(prefill=prefill, timestamp=10.0)
-        ordered = rank_prefill_completion_aware(state)
-        self.assertEqual(tuple(item.request_id for item in ordered), ("B", "C", "A"))
-
-    def test_completion_aware_tier_priority(self) -> None:
-        # Six distinct urgency scores produce two requests in each relative
-        # tier. A shorter request in a lower tier must not jump a higher tier.
-        prefill = (
-            PrefillRequest("c1", 0.0, 100, 0, ttft_deadline=11.0),
-            PrefillRequest("c2", 0.0, 9, 0, ttft_deadline=10.1),
-            PrefillRequest("n1", 0.0, 70, 0, ttft_deadline=11.0),
-            PrefillRequest("n2", 0.0, 6, 0, ttft_deadline=10.1),
-            PrefillRequest("b1", 0.0, 30, 0, ttft_deadline=11.0),
-            PrefillRequest("b2", 0.0, 2, 0, ttft_deadline=10.1),
-        )
-        state = _snapshot(prefill=prefill, timestamp=10.0)
-        ordered = rank_prefill_completion_aware(state)
-        self.assertEqual(
-            tuple(item.request_id for item in ordered),
-            ("c2", "c1", "n2", "n1", "b2", "b1"),
-        )
-
-    def test_completion_aware_prefers_short_waiting_before_long_running(self) -> None:
-        # Both requests have the same urgency and therefore the same tier.
-        # Completion-aware prioritizes the shorter request; running-first is
-        # intentionally owned by the CONTINUATION policy.
-        prefill = (
-            PrefillRequest(
-                "long-running",
-                0.0,
-                2100,
-                100,
-                ttft_deadline=30.0,
-                is_running=True,
-            ),
-            PrefillRequest(
-                "short-waiting", 1.0, 100, 0, ttft_deadline=11.0
-            ),
-        )
-        state = _snapshot(prefill=prefill, timestamp=10.0)
-        ordered = rank_prefill_completion_aware(state)
-        self.assertEqual(
-            tuple(item.request_id for item in ordered),
-            ("short-waiting", "long-running"),
-        )
-
-    def test_continuation_ordering(self) -> None:
-        prefill = (
-            PrefillRequest("waiting", 0.0, 100, 0),
-            PrefillRequest("running", 5.0, 100, 10, is_running=True),
-        )
-        state = _snapshot(prefill=prefill)
-        ordered = rank_prefill_continuation(state)
-        self.assertEqual(tuple(item.request_id for item in ordered), ("running", "waiting"))
-
-
-# ---------------------------------------------------------------------------
-# §14.7–14.11 End-to-end Generator layout
-# ---------------------------------------------------------------------------
-
-
-class CandidateGeneratorLayoutTests(unittest.TestCase):
-    def _resolver_with_base(self, base: int, status: str = RESOLUTION_INVERTED_OK):
-        return _BudgetResolver(base=base, status=status)
-
-    def test_same_budget_three_policies_produce_distinct_orders(self) -> None:
-        # Three Prefill requests with distinct ttft deadlines produce
-        # distinct orders under URGENCY vs CONTINUATION. We assert that
-        # the three prefill orders returned by build_prefill_orders are
-        # pairwise different.
-        prefill = (
-            PrefillRequest("A", 0.0, 100, 0, ttft_deadline=10.5),
-            PrefillRequest("B", 0.0, 100, 0, ttft_deadline=10.2),
-            PrefillRequest("C", 0.0, 100, 0, ttft_deadline=10.9),
-        )
-        decode = (DecodeRequest("d1", 0.0, 20),)
-        state = _snapshot(prefill=prefill, decode=decode)
-
-        # Use rank functions directly.
-        from dpp_scheduler.candidate_generator import build_prefill_orders
-
-        orders = build_prefill_orders(state)
-        urgency_ids = tuple(item.request_id for item in orders[0][1])
-        continuation_ids = tuple(item.request_id for item in orders[2][1])
-        self.assertNotEqual(urgency_ids, continuation_ids)
-
-    def test_upper_bound_sixteen(self) -> None:
-        # Build a snapshot where the five multipliers stay distinct after
-        # floor and there is enough backlog / token budget for them all.
-        # Five Prefill requests × 1000 tokens each; no Decode.
-        prefill = tuple(
-            PrefillRequest(
-                request_id=f"p{i}", arrival_time=float(i),
-                token_count=1000, prefilled_tokens=0, ordinal=i,
+    def test_running_first_then_waiting_fcfs(self) -> None:
+        state = _snapshot(
+            prefill=(
+                PrefillRequest("newer", 2.0, 100, 0, ordinal=2),
+                PrefillRequest("running", 9.0, 100, 20, is_running=True, ordinal=0),
+                PrefillRequest("older", 1.0, 100, 0, ordinal=1),
             )
-            for i in range(5)
         )
-        state = _snapshot(prefill=prefill, decode=(), token_budget=2048)
-        generator = CandidateGenerator(
-            SchedulerSettings.provisional(),
-            budget_resolver=self._resolver_with_base(base=1024),
+        self.assertEqual(
+            [item.request_id for item in rank_prefill_requests(state)],
+            ["running", "older", "newer"],
         )
-        plans = generator.generate(state)
-        # ZERO + deduped 5×3 = up to 16 raw, but with multiple prefill
-        # requests and a 1024-token budget the canonical plans remain
-        # distinct. Assert we hit the upper bound.
-        self.assertGreaterEqual(len(plans), 2)
-        self.assertLessEqual(len(plans), 16)
-        # The 16th (last) plan should still parse from a deterministic
-        # template_id namespace.
-        template_ids = {plan.template_id for plan in plans}
-        self.assertIn("ALL_DECODE:ZERO", template_ids)
 
-    def test_canonical_dedup(self) -> None:
-        # Two multiplier × policy combinations that produce identical
-        # prefill_items must dedup to a single BatchPlan. Construct the
-        # situation by giving only one Prefill request — every policy
-        # produces the same (request_id, token_count) pair for any given
-        # multiplier, so all 5×3 plans collapse to ZERO plus at most 5
-        # distinct Mixed plans.
-        prefill = (PrefillRequest("only", 0.0, 100, 0),)
-        state = _snapshot(prefill=prefill, decode=(), token_budget=2048)
-        generator = CandidateGenerator(
-            SchedulerSettings.provisional(),
-            budget_resolver=self._resolver_with_base(base=800),
+    def test_generator_has_at_most_twelve_canonical_candidates(self) -> None:
+        state = _snapshot(
+            prefill=(PrefillRequest("p", 0.0, 4000, 0),),
+            decode=(DecodeRequest("d", 0.0, 20),),
+            token_budget=2048,
         )
-        plans = generator.generate(state)
-        keys = {(plan.prefill_items, plan.decode_items) for plan in plans}
-        self.assertEqual(len(keys), len(plans), "dedup invariant failed")
-        # At most 6 distinct plans: ZERO + 5 multiplier neighborhoods.
-        self.assertLessEqual(len(plans), 6)
+        plans = CandidateGenerator().generate(state)
+        self.assertLessEqual(len(plans), 12)
+        self.assertEqual(len(plans), len({(p.prefill_items, p.decode_items) for p in plans}))
+        self.assertEqual(plans[0].template_id, "STOCK")
+        self.assertIn("ZERO", {plan.template_id for plan in plans})
 
-    def test_p_zero_only_zero(self) -> None:
-        prefill = (PrefillRequest("p", 0.0, 100, 0),)
-        state = _snapshot(prefill=prefill, decode=())
-        generator = CandidateGenerator(
-            SchedulerSettings.provisional(),
-            budget_resolver=self._resolver_with_base(base=0),
-        )
-        plans = generator.generate(state)
-        self.assertEqual(len(plans), 1)
-        self.assertEqual(plans[0].template_id, "ALL_DECODE:ZERO")
-        self.assertEqual(plans[0].total_prefill_tokens, 0)
-
-    def test_no_decode_path(self) -> None:
-        prefill = (PrefillRequest("p", 0.0, 100, 0),)
-        state = _snapshot(prefill=prefill, decode=())
-        generator = CandidateGenerator(
-            SchedulerSettings.provisional(),
-            budget_resolver=self._resolver_with_base(
-                base=100, status=RESOLUTION_NO_DECODE_USE_MAX
+    def test_stock_plan_follows_running_interleaving_then_waiting(self) -> None:
+        state = _snapshot(
+            prefill=(
+                PrefillRequest("rp", 0.0, 50, 10, is_running=True, ordinal=0),
+                PrefillRequest("wp", 2.0, 100, 0, ordinal=2),
             ),
+            decode=(DecodeRequest("d", 1.0, 32, ordinal=1),),
+            token_budget=80,
         )
-        plans = generator.generate(state)
-        # ZERO plus 5 × 3 = up to 16 distinct templates (subject to dedup).
-        self.assertGreaterEqual(len(plans), 2)
-        # At least one plan template_id encodes the slack-budget policy.
-        slack = [
-            plan for plan in plans
-            if plan.template_id.startswith("ALL_DECODE:SLACK_BUDGET:")
-        ]
-        self.assertTrue(slack, "expected at least one SLACK_BUDGET plan")
-        # Each slack-budget plan should carry one of the three policies.
-        policies = {
-            plan.template_id.rsplit(":", 1)[-1]
-            for plan in slack
-        }
-        self.assertTrue({"URGENCY", "COMPLETION_AWARE", "CONTINUATION"} & policies)
+        plan = build_stock_plan(state)
+        self.assertEqual(plan.template_id, "STOCK")
+        self.assertEqual(plan.prefill_items, (("rp", 40), ("wp", 39)))
+        self.assertEqual(plan.decode_items, ("d",))
+        self.assertEqual(plan.total_prefill_tokens + plan.total_decode_tokens, 80)
 
-    def test_no_decode_no_backlog_returns_empty(self) -> None:
-        state = _snapshot(prefill=(), decode=())
-        generator = CandidateGenerator(
-            SchedulerSettings.provisional(),
-            budget_resolver=_BudgetResolver(
-                base=0, status=RESOLUTION_NO_DECODE_NO_BACKLOG
+    def test_fraction_candidates_clamp_to_available_kv(self) -> None:
+        state = StateSnapshot.create(
+            frame_id=1,
+            timestamp=10.0,
+            waiting_prefill_requests=(PrefillRequest("p", 0.0, 100, 0),),
+            active_decode_requests=(),
+            active_ttft_obligations=(),
+            active_tbt_obligations=(),
+            recovery_requests=(),
+            free_kv_blocks=1,
+            kv_block_size=16,
+            token_budget=100,
+            sequence_budget=64,
+            total_kv_blocks=1,
+        )
+        plans = CandidateGenerator().generate(state)
+        fractions = [plan for plan in plans if plan.template_id.startswith("P")]
+        self.assertTrue(fractions)
+        self.assertTrue(all(plan.total_prefill_tokens <= 16 for plan in fractions))
+        self.assertTrue(all(plan.projected_kv_blocks <= 1 for plan in fractions))
+
+    def test_stock_plan_obeys_sequence_capacity(self) -> None:
+        state = _snapshot(
+            prefill=(
+                PrefillRequest("first", 0.0, 10, 0, ordinal=0),
+                PrefillRequest("second", 1.0, 10, 0, ordinal=1),
             ),
+            sequence_budget=1,
         )
-        plans = generator.generate(state)
-        self.assertEqual(plans, ())
+        self.assertEqual(build_stock_plan(state).prefill_items, (("first", 10),))
 
-    def test_no_predictor_dependency_in_candidate_generator_module(self) -> None:
+    def test_no_predictor_dependency(self) -> None:
         source = inspect.getsource(
             __import__("dpp_scheduler.candidate_generator", fromlist=["x"])
         )
         self.assertNotIn("DurationPredictor", source)
-        self.assertNotIn("SafeSet", source)
-        self.assertNotIn("DPPSelector", source)
+        self.assertNotIn("BudgetResolver", source)
 
-    def test_last_diagnostic_summary(self) -> None:
-        prefill = (PrefillRequest("p", 0.0, 100, 0),)
-        decode = (DecodeRequest("d", 0.0, 20),)
-        state = _snapshot(prefill=prefill, decode=decode)
-        generator = CandidateGenerator(
-            SchedulerSettings.provisional(),
-            budget_resolver=self._resolver_with_base(base=512),
-        )
-        plans = generator.generate(state)
-        diag = generator.last_diagnostic
-        self.assertIsNotNone(diag)
-        self.assertEqual(diag.resolution.base_prefill_budget, 512)
-        self.assertEqual(diag.resolution.resolution_status, RESOLUTION_INVERTED_OK)
-        self.assertGreaterEqual(diag.raw_candidate_count, len(plans))
-        self.assertEqual(diag.deduplicated_candidate_count, len(plans))
-        self.assertIn(0, diag.candidate_budget_values)
-        self.assertTrue(diag.multiplier_budgets)
-        self.assertTrue(diag.distinct_allocations_by_multiplier)
-
-    def test_diagnostic_counts_policy_allocations_per_multiplier(self) -> None:
-        prefill = (
-            PrefillRequest("old", 0.0, 100, 0, ttft_deadline=20.0),
-            PrefillRequest("urgent", 1.0, 100, 0, ttft_deadline=10.1),
-            PrefillRequest("short", 2.0, 20, 0, ttft_deadline=11.0),
-        )
-        state = _snapshot(prefill=prefill, timestamp=10.0, token_budget=512)
-        generator = CandidateGenerator(
-            SchedulerSettings.provisional(),
-            budget_resolver=self._resolver_with_base(base=100),
-        )
-        generator.generate(state)
-        diag = generator.last_diagnostic
-        self.assertIsNotNone(diag)
-        counts = dict(diag.distinct_allocations_by_multiplier)
-        self.assertTrue(any(count > 1 for count in counts.values()))
+    def test_empty_snapshot_returns_no_candidates(self) -> None:
+        self.assertEqual(CandidateGenerator().generate(_snapshot()), ())
 
 
 # ---------------------------------------------------------------------------
@@ -657,7 +410,11 @@ class RidgeBudgetResolverTests(unittest.TestCase):
                 return ()  # Wrong length on purpose.
 
         decode = (DecodeRequest("d", 0.0, 20, tbt_deadline=10.5),)
-        state = _snapshot(decode=decode, timestamp=10.0)
+        # A small backlog so the resolver actually attempts the Predictor
+        # sweep; with backlog=0 the resolver short-circuits to
+        # NO_FEASIBLE_BUDGET before ever calling the Predictor.
+        prefill = (PrefillRequest("p", 0.0, 64, 0),)
+        state = _snapshot(prefill=prefill, decode=decode, timestamp=10.0)
         resolver = RidgeBudgetResolver(
             predictor=_WrongShapePredictor(),
             settings=SchedulerSettings.provisional(),
@@ -666,23 +423,264 @@ class RidgeBudgetResolverTests(unittest.TestCase):
         self.assertEqual(resolution.base_prefill_budget, 0)
         self.assertEqual(resolution.resolution_status, RESOLUTION_PREDICTOR_INVALID)
 
-
-# ---------------------------------------------------------------------------
-# Null resolver Generator integration
-# ---------------------------------------------------------------------------
-
-
-class NullResolverIntegrationTests(unittest.TestCase):
-    def test_null_resolver_with_prefill_only_emits_zero(self) -> None:
-        prefill = (PrefillRequest("p", 0.0, 100, 0),)
-        state = _snapshot(prefill=prefill)
-        generator = CandidateGenerator(
-            SchedulerSettings.provisional(),
-            budget_resolver=NullBudgetResolver(),
+    def test_zero_max_executable_short_circuits(self) -> None:
+        # With backlog = 0 the resolver must short-circuit to
+        # NO_FEASIBLE_BUDGET before touching the Predictor, even when a
+        # live Decode TBT deadline would otherwise drive the inversion path.
+        decode = (DecodeRequest("d", 0.0, 20, tbt_deadline=10.5),)
+        state = _snapshot(decode=decode, timestamp=10.0)
+        resolver = RidgeBudgetResolver(
+            predictor=_FixedPredictor(0.10),
+            settings=SchedulerSettings.provisional(),
         )
-        plans = generator.generate(state)
-        self.assertEqual(len(plans), 1)
-        self.assertEqual(plans[0].template_id, "ALL_DECODE:ZERO")
+        resolution = resolver.resolve(state)
+        self.assertEqual(resolution.base_prefill_budget, 0)
+        self.assertEqual(resolution.max_executable_prefill_budget, 0)
+        self.assertEqual(
+            resolution.resolution_status, RESOLUTION_NO_FEASIBLE_BUDGET
+        )
+        self.assertEqual(resolution.executable_grid_budgets, (0,))
+
+    # --- §9 BudgetResolver actual-budget and grid-clamp semantics ------
+
+    def test_backlog_smaller_than_grid_clamps_inversion_grid(self) -> None:
+        # §9.1: backlog = 500; grid 768/1024/1536/2048 must collapse to 500
+        # rather than remain as distinct test points.
+        prefill = (PrefillRequest("p", 0.0, 500, 0),)
+        decode = (DecodeRequest("d", 0.0, 20, tbt_deadline=10.5),)
+        state = _snapshot(prefill=prefill, decode=decode, timestamp=10.0)
+        resolver = RidgeBudgetResolver(
+            predictor=_FixedPredictor(0.10),
+            settings=SchedulerSettings.provisional(),
+        )
+        resolution = resolver.resolve(state)
+        self.assertEqual(resolution.max_executable_prefill_budget, 500)
+        # Clamp + add P_max + dedup + sort yields exactly {0, 64, 128,
+        # 256, 384, 500}.
+        self.assertEqual(
+            resolution.executable_grid_budgets,
+            (0, 64, 128, 256, 384, 500),
+        )
+        # High grid values never appear as separate test points.
+        for collapsed in (768, 1024, 1536, 2048):
+            self.assertNotIn(collapsed, resolution.executable_grid_budgets)
+        # The configured grid is still preserved for diagnostic introspection.
+        self.assertEqual(
+            resolution.configured_grid_budgets, DEFAULT_INVERSION_BUDGET_GRID
+        )
+        self.assertEqual(resolution.requested_grid_budgets, DEFAULT_INVERSION_BUDGET_GRID)
+
+    def test_p_collapses_to_actual_when_predicted_at_max(self) -> None:
+        # §9.2: shadow fill caps the work at 512 even when the configured
+        # grid asks for 1024/1536/2048; P must therefore be 512, not 2048.
+        prefill = (PrefillRequest("p", 0.0, 512, 0),)
+        decode = (DecodeRequest("d", 0.0, 20, tbt_deadline=10.5),)
+        state = _snapshot(prefill=prefill, decode=decode, timestamp=10.0)
+        # Feasible at every budget the predictor knows about; P_max becomes
+        # the largest *actual* feasible budget, not the largest grid value.
+        predictor = _BudgetKeyedPredictor(
+            duration_by_budget={
+                0: 0.10,
+                64: 0.10,
+                128: 0.10,
+                256: 0.10,
+                384: 0.10,
+                512: 0.10,
+                768: 0.10,
+                1024: 0.10,
+                1536: 0.10,
+                2048: 0.10,
+            }
+        )
+        resolver = RidgeBudgetResolver(
+            predictor=predictor,
+            settings=SchedulerSettings.provisional(),
+        )
+        resolution = resolver.resolve(state)
+        # Backlog is 512 so max_executable_prefill = 512.
+        self.assertEqual(resolution.max_executable_prefill_budget, 512)
+        self.assertEqual(resolution.base_prefill_budget, 512)
+        # 512 must appear as the canonical actual budget; 2048 (the largest
+        # configured value) must not.
+        self.assertEqual(
+            resolution.actual_shadow_prefill_budgets[-1], 512
+        )
+        self.assertIn(512, resolution.feasible_actual_budgets)
+        for blocked in (768, 1024, 1536, 2048):
+            self.assertNotIn(blocked, resolution.actual_shadow_prefill_budgets)
+            self.assertNotIn(blocked, resolution.feasible_actual_budgets)
+
+    def test_token_capacity_clamps_max_executable(self) -> None:
+        # §9.3: backlog = 2000 but token_budget - decode_count = 700; P_max
+        # must therefore be 700 and no plan may exceed it.
+        prefill = (PrefillRequest("p", 0.0, 2000, 0),)
+        decode = tuple(
+            DecodeRequest(f"d{i}", 0.0, 20, tbt_deadline=10.5) for i in range(5)
+        )
+        state = _snapshot(
+            prefill=prefill, decode=decode, token_budget=705, timestamp=10.0
+        )
+        resolver = RidgeBudgetResolver(
+            predictor=_FixedPredictor(0.10),
+            settings=SchedulerSettings.provisional(),
+        )
+        resolution = resolver.resolve(state)
+        self.assertEqual(resolution.max_executable_prefill_budget, 700)
+        self.assertLessEqual(resolution.base_prefill_budget, 700)
+        # 700 appears in the executable grid; values larger than the cap do
+        # not appear as distinct entries.
+        self.assertIn(700, resolution.executable_grid_budgets)
+        for oversized in (768, 1024, 1536, 2048):
+            self.assertNotIn(oversized, resolution.executable_grid_budgets)
+        # The feasible-actual set and the chosen P are both <= the cap.
+        for value in resolution.feasible_actual_budgets:
+            self.assertLessEqual(value, 700)
+        for value in resolution.actual_shadow_prefill_budgets:
+            self.assertLessEqual(value, 700)
+
+    def test_p_max_added_when_not_in_configured_grid(self) -> None:
+        # §9.4: P_max = 450 is not present in the configured grid, yet the
+        # executable grid must contain 450 so the Predictor sweep evaluates
+        # the resource boundary directly.
+        prefill = (PrefillRequest("p", 0.0, 450, 0),)
+        decode = (DecodeRequest("d", 0.0, 20, tbt_deadline=10.5),)
+        state = _snapshot(prefill=prefill, decode=decode, timestamp=10.0)
+        resolver = RidgeBudgetResolver(
+            predictor=_FixedPredictor(0.10),
+            settings=SchedulerSettings.provisional(),
+        )
+        resolution = resolver.resolve(state)
+        self.assertEqual(resolution.max_executable_prefill_budget, 450)
+        self.assertIn(450, resolution.executable_grid_budgets)
+        # 450 is the last entry (ceiling) — verifies it was appended after
+        # the configured grid.
+        self.assertEqual(resolution.executable_grid_budgets[-1], 450)
+        # And the helper alone produces the same result.
+        self.assertEqual(
+            derive_executable_inversion_grid(DEFAULT_INVERSION_BUDGET_GRID, 450),
+            (0, 64, 128, 256, 384, 450),
+        )
+
+    def test_shadow_fill_actual_used_for_selection(self) -> None:
+        # §9.5: requested=512 collapses to actual=384 due to sequence /
+        # minimum-chunk constraints; feasibility and P must reflect 384,
+        # never 512.
+        settings = SchedulerSettings(minimum_prefill_chunk_tokens=400)
+        # Running A (384 remaining) + waiting B (600). With min_chunk=400
+        # the partial fill of B at requested=512 (= 128 tokens) is skipped,
+        # so actual_prefill_tokens for the requested=512 plan is exactly 384.
+        prefill = (
+            PrefillRequest("A", 0.0, 384, 0, is_running=True),
+            PrefillRequest("B", 1.0, 600, 0),
+        )
+        decode = (DecodeRequest("d", 0.0, 20, tbt_deadline=10.5),)
+        state = _snapshot(prefill=prefill, decode=decode, timestamp=10.0)
+        # Low grid points are feasible; mid grid points are infeasible.
+        predictor = _BudgetKeyedPredictor(
+            duration_by_budget={
+                0: 0.10,
+                64: 0.10,
+                128: 0.10,
+                256: 0.10,
+                384: 0.10,
+                512: 1.0,
+                768: 1.0,
+                1024: 1.0,
+                1536: 1.0,
+                2048: 1.0,
+            }
+        )
+        resolver = RidgeBudgetResolver(
+            predictor=predictor,
+            settings=settings,
+        )
+        resolution = resolver.resolve(state)
+        # backlog=984, decode_count=1, token_budget=4096 → P_max = 984.
+        self.assertEqual(resolution.max_executable_prefill_budget, 984)
+        # 384 appears as an actual budget because requested=512 collapses
+        # to actual=384 under the minimum-chunk constraint.
+        self.assertIn(384, resolution.actual_shadow_prefill_budgets)
+        # 512 is NOT an actual budget (it was never realized by the fill).
+        self.assertNotIn(512, resolution.actual_shadow_prefill_budgets)
+        # The feasible-actual set uses 384 as the largest feasible actual;
+        # chosen P is therefore 384, NOT 512.
+        self.assertEqual(resolution.base_prefill_budget, 384)
+        self.assertIn(384, resolution.feasible_actual_budgets)
+        self.assertNotIn(512, resolution.feasible_actual_budgets)
+
+    def test_live_candidate_generator_is_decoupled_from_resolver(self) -> None:
+        # Preserve the resolver implementation for diagnostics, but prove that
+        # live Candidate generation no longer accepts or calls it.
+        prefill = tuple(
+            PrefillRequest(
+                request_id=f"p{i}", arrival_time=float(i),
+                token_count=400, prefilled_tokens=0, ordinal=i,
+            )
+            for i in range(5)
+        )
+        decode = (DecodeRequest("d1", 0.0, 20, tbt_deadline=10.5),)
+        state = _snapshot(prefill=prefill, decode=decode, timestamp=10.0)
+        with self.assertRaises(TypeError):
+            CandidateGenerator(
+                SchedulerSettings.provisional(),
+                budget_resolver=RidgeBudgetResolver(
+                    predictor=_FixedPredictor(0.10),
+                    settings=SchedulerSettings.provisional(),
+                ),
+            )
+        plans = CandidateGenerator(SchedulerSettings.provisional()).generate(state)
+        self.assertIn("STOCK", {plan.template_id for plan in plans})
+        self.assertTrue(any(plan.template_id.startswith("P") for plan in plans))
+
+
+class DeriveExecutableInversionGridTests(unittest.TestCase):
+    """Direct coverage of :func:`derive_executable_inversion_grid`."""
+
+    def test_clamp_high_values_to_ceiling(self) -> None:
+        # grid 512/768/1024/1536/2048 collapses to 500 when ceiling = 500.
+        grid = (0, 64, 128, 256, 384, 512, 768, 1024, 1536, 2048)
+        self.assertEqual(
+            derive_executable_inversion_grid(grid, 500),
+            (0, 64, 128, 256, 384, 500),
+        )
+
+    def test_appends_ceiling_when_not_in_configured(self) -> None:
+        # ceiling 450 is not in the default grid; it must be appended.
+        self.assertEqual(
+            derive_executable_inversion_grid(
+                DEFAULT_INVERSION_BUDGET_GRID, 450
+            ),
+            (0, 64, 128, 256, 384, 450),
+        )
+
+    def test_no_clamp_when_ceiling_above_grid_max(self) -> None:
+        # ceiling = 5000 leaves the default grid untouched and adds 5000.
+        self.assertEqual(
+            derive_executable_inversion_grid(
+                DEFAULT_INVERSION_BUDGET_GRID, 5000
+            ),
+            (0, 64, 128, 256, 384, 512, 768, 1024, 1536, 2048, 5000),
+        )
+
+    def test_zero_or_negative_ceiling_collapses_to_zero(self) -> None:
+        # A non-positive ceiling means no Prefill work is executable; the
+        # helper returns the canonical zero budget so the resolver still
+        # has a single grid point to report.
+        self.assertEqual(
+            derive_executable_inversion_grid(DEFAULT_INVERSION_BUDGET_GRID, 0),
+            (0,),
+        )
+        self.assertEqual(
+            derive_executable_inversion_grid(DEFAULT_INVERSION_BUDGET_GRID, -10),
+            (0,),
+        )
+
+    def test_dedups_collapsing_values(self) -> None:
+        # Two grid points that collapse to the same ceiling must dedup.
+        self.assertEqual(
+            derive_executable_inversion_grid((10, 10, 20, 30), 20),
+            (10, 20),
+        )
 
 
 if __name__ == "__main__":

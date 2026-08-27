@@ -1,113 +1,85 @@
-# Candidate Generator V3
+# Candidate Generator — fixed fractions with Stock BatchPlan
 
-## 1. Scope and status
+Status: active development contract, non-formal.
 
-This document defines the current `slack_centered_multiplier_v3` Candidate
-Generator. It supersedes the v2 Candidate Generator layout while leaving the
-rest of the modular Scheduler design unchanged.
+This document supersedes the former Predictor-inversion/multiplier V3
+behavior while retaining the historical filename used by the repository
+document index.
 
-The implementation and configuration are frozen for engineering integration.
-The active configuration still marks this component
-`formal_benchmark_eligible: false`; implementation completion alone is not
-formal performance evidence.
+## 1. Candidate set
 
-## 2. Candidate construction
-
-For each non-empty `StateSnapshot`:
-
-1. include every active Decode request in every normal candidate;
-2. always construct one `ALL_DECODE:ZERO` candidate;
-3. obtain a base Prefill budget `P` from the injected `BudgetResolver`;
-4. construct the multiplier neighborhood
-   `{0.50P, 0.75P, 1.00P, 1.25P, 1.50P}` using floor rounding;
-5. clamp each value by visible Prefill backlog and
-   `token_budget - active_decode_count`, then deduplicate equal budgets;
-6. allocate each positive budget using `URGENCY`, `COMPLETION_AWARE`, and
-   `CONTINUATION`; and
-7. canonically deduplicate plans by their exact
-   `(prefill_items, decode_items)`.
-
-The raw bound is 16 plans: one ZERO plus five budgets times three allocation
-policies. Resource projection is pure. Safe-Set remains responsible for final
-physical and Predictor feasibility.
-
-## 3. Slack-centered base budget
-
-When active Decode requests have live next-token TBT deadlines, the Resolver
-uses the smallest positive slack minus the configured safety margin as the
-target iteration duration. It evaluates the configured discrete Prefill budget
-grid with shadow `CONTINUATION` plans and selects the largest budget whose
-finite positive expected duration does not exceed that target.
-
-`P` is a search center, not a hard safety bound for all three allocation
-policies. The formal candidate plans are predicted and filtered again after
-generation.
-
-Without Decode or without a live Decode deadline, the Resolver uses the visible
-resource-capped Prefill maximum. An invalid Predictor response or no feasible
-grid point produces `P=0`.
-
-## 4. Prefill allocation policies
-
-### URGENCY
-
-Sort by `remaining_tokens / positive_ttft_slack` descending. Overdue requests
-receive the existing large overdue score. This dimensional value is used only
-for relative ordering, never compared with fixed numeric severity thresholds.
-
-### COMPLETION_AWARE
-
-Compute the same urgency score for all waiting Prefill requests in the current
-Snapshot and sort scores descending. Divide their empirical ranks into:
-
-- top urgency third;
-- middle urgency third; and
-- bottom urgency third.
-
-The boundaries are `ceil(n/3)` and `ceil(2n/3)`. Equal urgency scores always
-share the tier of their first descending rank, so an unrelated stable tie key
-cannot split equal scores across tiers.
-
-Within each tier, order by:
+For one immutable `StateSnapshot`, define
 
 ```text
-remaining_tokens ascending
--> running before waiting
--> arrival_time
--> ordinal
--> request_id
+D = number of active Decode requests
+R = sum of remaining prompt tokens
+P_max = min(R, token_budget - D)
 ```
 
-Thus completion-aware behavior prioritizes short remaining Prefill work within
-comparable urgency. `CONTINUATION`, rather than `COMPLETION_AWARE`, owns the
-strong running-first policy.
+The normal generator constructs:
 
-### CONTINUATION
+```text
+ZERO
+P10, P20, P30, P40, P50, P60, P70, P80, P90, P100
+STOCK
+```
 
-Order running Prefill first, then waiting Prefill, using arrival time, ordinal,
-and request ID as stable keys.
+`Pxx` uses `floor(P_max * fraction)`. Budgets are clamped, minimum chunk and
+sequence constraints are applied, and final plans are canonically deduplicated
+by `(prefill_items, decode_items)`. The maximum retained candidate count is 12.
 
-## 5. Diagnostics
+`ZERO` and every `Pxx` plan contain all active Decode requests. The separate
+`STOCK` plan is allowed to contain a subset because it follows native Stock
+request-selection order.
 
-Per-frame Candidate Generator diagnostics distinguish:
+## 2. Prefill binding order
 
-- unique actual Prefill token totals;
-- distinct positive multiplier budgets;
-- canonical plan count after deduplication; and
-- distinct canonical Prefill allocations produced by the three policies for
-  each multiplier.
+All fixed-fraction plans use one deterministic ordering:
 
-These metrics must not be substituted for one another. In particular, a count
-of distinct token totals does not establish policy diversity.
+1. running Prefill requests in live running/ordinal order;
+2. waiting Prefill requests by `(arrival_time, ordinal, request_id)`.
 
-The Python diagnostic harness is a synthetic policy-stress tool, not a real
-vLLM scheduling replay. It retains requests for an explicit diagnostic-only
-Prefill hold interval so a Snapshot may contain multiple waiting requests.
-After that interval, each synthetic Decode deadline represents the next token:
-`last_synthetic_token_time + TBT SLO`. The hold interval and its
-non-measurement status are recorded in the report.
+Debt, TTFT deadline, Predictor output, and future output length never affect
+this ordering. Partial Prefill remains controlled by the active minimum chunk
+setting.
 
-Production aggregate schema version 2 records multiplier selection
-(`ZERO`, `M050`, `M075`, `M100`, `M125`, `M150`, `OTHER`) separately from
-allocation policy selection (`ZERO`, `URGENCY`, `COMPLETION_AWARE`,
-`CONTINUATION`, `OTHER`).
+## 3. Stock plan
+
+`build_stock_plan(snapshot)` is a side-effect-free implementation of the
+locked vLLM Stock request-selection path supported by the active runtime:
+
+1. visit the combined running queue in ordinal order;
+2. schedule each running Prefill up to its remaining prompt work and each
+   running Decode for one token;
+3. admit waiting Prefill in FCFS order;
+4. stop or skip work that would exceed token, sequence, or current KV capacity.
+
+The runtime contract keeps prefix caching, speculative decoding, asynchronous
+scheduling, and KV connectors disabled. Native preemption is not encoded in a
+`BatchPlan`; a non-empty Snapshot that cannot yield Stock work fails closed in
+the forced-Stock development mode.
+
+The same builder is used both for the normal `STOCK` candidate and the
+`forced_stock_plan` test mode. The latter bypasses Predictor, Safe-Set,
+Selector, and Fallback while preserving exact-plan validation, execution, and
+actual debt/ledger feedback.
+
+## 4. Predictor boundary and diagnostics
+
+Candidate generation never calls Predictor. Predictor continues to estimate
+the duration of the completed normal candidate set before Safe-Set and DPP
+selection. `budget_resolver.py` is retained only as historical/compatibility
+code and is not wired into the live Scheduler.
+
+Per-run diagnostics use the buckets `ZERO`, `P10` through `P100`, `STOCK`, and
+`OTHER`. They record requested fraction budgets, actual candidate budgets,
+Stock Prefill budget, canonical candidate count, selection mode, and pipeline
+stage call counts.
+
+## 5. Required checks
+
+- fraction budget floor/clamp and canonical deduplication;
+- running-first then waiting-FCFS binding;
+- Stock running/waiting request selection and capacity bounds;
+- at most 12 retained candidates;
+- forced-Stock mode never calls Predictor, Safe-Set, Selector, or Fallback.

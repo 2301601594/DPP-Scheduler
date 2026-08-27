@@ -1,5 +1,25 @@
 # Active research decisions
 
+## 2026-08-27: use fixed Prefill fractions, a Stock plan, and one TTFT weight
+
+- This decision supersedes the 2026-08-26 Predictor-inversion multiplier and
+  relative-urgency Candidate behavior. The live Candidate Generator no longer
+  calls BudgetResolver. It emits ZERO, P10 through P100, and one Stock-like
+  BatchPlan, with running Prefill before waiting FCFS and a maximum of 12
+  canonical plans.
+- The Stock builder mirrors the supported locked-vLLM running-then-waiting
+  selection path without mutating Scheduler state. The same builder powers a
+  development-only `forced_stock_plan` mode that bypasses Predictor, Safe-Set,
+  Selector, and Fallback but preserves exact execution and actual feedback.
+- DPP uses `lambda_ttft * normalized_ttft_drift + normalized_tbt_drift`.
+  `lambda_ttft=1` is backward-compatible; reference concurrency remains
+  unchanged.
+- The planned grid is `{0.125, 0.25, 0.5, 1, 2, 4, 8}` at QPS 0.25, seed 1001,
+  and 150 requests. Seven weighted DPP runs and one forced-Stock-plan DPP run
+  share one trace and one native Stock baseline, for nine runs total.
+- The grid is single-seed, development-only, and non-formal. It does not select
+  or freeze a winning weight, update a gate, or establish a Scheduler claim.
+
 ## 2026-08-26: permit an uncalibrated Predictor default for one development comparison
 
 - At the user's direction, the active segmented Predictor uses

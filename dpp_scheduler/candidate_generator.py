@@ -1,39 +1,33 @@
-"""Slack-centered v3 Candidate Generator with multiplier neighborhood.
+"""Deterministic fixed-fraction and Stock-like BatchPlan generation.
 
-The Generator consumes a :class:`BudgetResolution` from the injected
-:class:`BudgetResolver` (Predictor-inversion-based) and emits up to 16 raw
-BatchPlans: 1 ZERO plan + at most ``5 multipliers × 3 priority policies``
-(M050/M075/M100/M125/M150 × URGENCY/COMPLETION_AWARE/CONTINUATION). Plans are
-canonical-deduplicated by ``(prefill_items, decode_items)``.
-
-This module never imports or calls Predictor, Safe-Set, or Selector directly.
-The Predictor dependency is injected into the resolver at the Adapter boundary,
-preserving the G2 contract test that introspects this module's source.
+Normal candidates contain every active Decode request and vary only the
+Prefill budget. A separate STOCK candidate mirrors the request-selection order
+of the locked vLLM Scheduler for the supported text-only runtime path. No
+Predictor or live allocator is called while candidates are constructed.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
 
-from dpp_scheduler.budget_resolver import (
-    BudgetResolution,
-    BudgetResolver,
-    NullBudgetResolver,
-    RESOLUTION_NO_DECODE_USE_MAX,
+from dpp_scheduler.contracts import (
+    BatchPlan,
+    DecodeRequest,
+    PrefillRequest,
+    StateSnapshot,
 )
-from dpp_scheduler.contracts import BatchPlan, PrefillRequest, StateSnapshot
 from dpp_scheduler.settings import SchedulerSettings
 
 
-# ---------------------------------------------------------------------------
-# Decode ordering
-# ---------------------------------------------------------------------------
+FRACTION_LABELS: tuple[str, ...] = tuple(
+    f"P{index * 10}" for index in range(1, 11)
+)
+BUDGET_FRACTIONS: tuple[float, ...] = tuple(index / 10 for index in range(1, 11))
 
 
-def rank_decode_requests(snapshot: StateSnapshot) -> tuple:
-    """Stable EDF-friendly arrival-time ordering for active Decode requests."""
+def rank_decode_requests(snapshot: StateSnapshot) -> tuple[DecodeRequest, ...]:
+    """Return active Decode requests in stable FCFS order."""
     return tuple(
         sorted(
             snapshot.active_decode_requests,
@@ -42,55 +36,14 @@ def rank_decode_requests(snapshot: StateSnapshot) -> tuple:
     )
 
 
-# ---------------------------------------------------------------------------
-# Prefill ordering
-# ---------------------------------------------------------------------------
-
-
-def _urgency_score(request: PrefillRequest, t_now: float) -> float:
-    remaining = max(0, int(request.remaining_tokens))
-    deadline = request.ttft_deadline
-    if deadline is None:
-        return float(remaining)
-    slack = deadline - t_now
-    if slack <= 0:
-        return float(remaining) * 1.0e9
-    return float(remaining) / slack
-
-
-def _relative_urgency_tiers(scores: tuple[float, ...]) -> tuple[int, ...]:
-    """Split one frame into relative top/middle/bottom urgency thirds.
-
-    The raw urgency score has units of tokens/second, so fixed numeric
-    thresholds are not meaningful across workloads.  Tiers are instead based
-    on the score's descending empirical rank in the current Snapshot.  Equal
-    scores share the tier of their first rank and therefore are never split by
-    an unrelated stable tie key.
-    """
-    if not scores:
-        return ()
-    ordered = sorted(scores, reverse=True)
-    first_rank: dict[float, int] = {}
-    for rank, score in enumerate(ordered):
-        first_rank.setdefault(score, rank)
-    first_cut = math.ceil(len(scores) / 3)
-    second_cut = math.ceil(2 * len(scores) / 3)
-    return tuple(
-        0 if first_rank[score] < first_cut else (
-            1 if first_rank[score] < second_cut else 2
-        )
-        for score in scores
-    )
-
-
-def rank_prefill_continuation(snapshot: StateSnapshot) -> tuple[PrefillRequest, ...]:
-    """Continuation / running-first ordering; baseline priority policy."""
+def rank_prefill_requests(snapshot: StateSnapshot) -> tuple[PrefillRequest, ...]:
+    """Running Prefill first, then waiting Prefill in stable FCFS order."""
     return tuple(
         sorted(
             snapshot.waiting_prefill_requests,
             key=lambda item: (
                 0 if item.is_running else 1,
-                item.arrival_time,
+                item.ordinal if item.is_running else item.arrival_time,
                 item.ordinal,
                 item.request_id,
             ),
@@ -98,92 +51,23 @@ def rank_prefill_continuation(snapshot: StateSnapshot) -> tuple[PrefillRequest, 
     )
 
 
-def rank_prefill_urgency(snapshot: StateSnapshot) -> tuple[PrefillRequest, ...]:
-    """Urgency ordering: highest Prefill completion-rate first."""
-    t_now = float(snapshot.timestamp)
-    return tuple(
-        sorted(
-            snapshot.waiting_prefill_requests,
-            key=lambda item: (
-                -_urgency_score(item, t_now),
-                item.arrival_time,
-                item.ordinal,
-                item.request_id,
-            ),
-        )
-    )
-
-
-def rank_prefill_completion_aware(
-    snapshot: StateSnapshot,
-) -> tuple[PrefillRequest, ...]:
-    """Relative urgency tier, then smallest-remaining-first in each tier."""
-    t_now = float(snapshot.timestamp)
-    requests = tuple(snapshot.waiting_prefill_requests)
-    scores = tuple(_urgency_score(item, t_now) for item in requests)
-    tiers = _relative_urgency_tiers(scores)
-    scored = [
-        (
-            tier,
-            item.remaining_tokens,
-            0 if item.is_running else 1,
-            item.arrival_time,
-            item.ordinal,
-            item.request_id,
-            item,
-        )
-        for item, tier in zip(requests, tiers)
-    ]
-    scored.sort(
-        key=lambda entry: (
-            entry[0],
-            entry[1],
-            entry[2],
-            entry[3],
-            entry[4],
-            entry[5],
-        )
-    )
-    return tuple(entry[6] for entry in scored)
-
-
-def build_prefill_orders(
-    snapshot: StateSnapshot,
-) -> tuple[tuple[str, tuple[PrefillRequest, ...]], ...]:
-    """Return the three frozen priority policies in deterministic order."""
-    return (
-        ("URGENCY", rank_prefill_urgency(snapshot)),
-        ("COMPLETION_AWARE", rank_prefill_completion_aware(snapshot)),
-        ("CONTINUATION", rank_prefill_continuation(snapshot)),
-    )
-
-
-# Backwards-compatible alias: the old name remains importable.
-rank_prefill_requests = rank_prefill_continuation
-
-
-# ---------------------------------------------------------------------------
-# Resource clamps
-# ---------------------------------------------------------------------------
-
-
-def _highest_bindable_prefill(
-    snapshot: StateSnapshot,
-    prefill_order: tuple[PrefillRequest, ...],
-) -> PrefillRequest | None:
-    running = sum(item.is_running for item in snapshot.waiting_prefill_requests)
-    new_slots = max(
-        0,
-        snapshot.sequence_budget - len(snapshot.active_decode_requests) - running,
-    )
-    for request in prefill_order:
-        if request.is_running or new_slots > 0:
-            return request
-    return None
+# Backwards-compatible name for callers that used the former continuation policy.
+rank_prefill_continuation = rank_prefill_requests
 
 
 def highest_bindable_prefill(snapshot: StateSnapshot) -> PrefillRequest | None:
-    return _highest_bindable_prefill(snapshot, rank_prefill_continuation(snapshot))
+    """Return the first ordered Prefill that can occupy the current seq budget."""
+    running_count = sum(
+        request.is_running for request in snapshot.waiting_prefill_requests
+    )
+    waiting_slot_available = (
+        len(snapshot.active_decode_requests) + running_count
+        < snapshot.sequence_budget
+    )
+    for request in rank_prefill_requests(snapshot):
+        if request.is_running or waiting_slot_available:
+            return request
+    return None
 
 
 def _fill_prefill(
@@ -201,12 +85,32 @@ def _fill_prefill(
     )
     consumed = admitted = 0
     items: list[tuple[str, int]] = []
+    decode_items = tuple(
+        request.request_id for request in rank_decode_requests(snapshot)
+    )
+
+    def kv_clamp(request: PrefillRequest, requested: int) -> int:
+        """Return the largest token count that fits the current KV projection."""
+        low, high = 0, requested
+        while low < high:
+            midpoint = (low + high + 1) // 2
+            tentative = (*items, (request.request_id, midpoint))
+            if (
+                project_kv_blocks(snapshot, tentative, decode_items)
+                <= snapshot.total_kv_blocks
+            ):
+                low = midpoint
+            else:
+                high = midpoint - 1
+        return low
+
     for request in order:
         if not request.is_running and admitted >= new_slots:
             continue
         available = min(request.remaining_tokens, budget - consumed)
+        available = kv_clamp(request, available)
         if available <= 0:
-            break
+            continue
         if available < request.remaining_tokens:
             if not settings.allow_partial_prefill:
                 continue
@@ -271,214 +175,186 @@ def project_sequence_count(
     return active
 
 
-# ---------------------------------------------------------------------------
-# Budget neighborhood derivation
-# ---------------------------------------------------------------------------
-
-
-MULTIPLIER_LABELS: tuple[str, ...] = ("M050", "M075", "M100", "M125", "M150")
-BUDGET_MULTIPLIERS: tuple[float, ...] = (0.50, 0.75, 1.00, 1.25, 1.50)
+def _build_batch_plan(
+    snapshot: StateSnapshot,
+    prefill_items: tuple[tuple[str, int], ...],
+    decode_items: tuple[str, ...],
+    template_id: str,
+) -> BatchPlan:
+    return BatchPlan(
+        plan_id=f"plan-{template_id}",
+        snapshot_hash=snapshot.snapshot_hash,
+        template_id=template_id,
+        prefill_items=prefill_items,
+        decode_items=decode_items,
+        total_prefill_tokens=sum(tokens for _, tokens in prefill_items),
+        total_decode_tokens=len(decode_items),
+        total_sequences=project_sequence_count(snapshot, prefill_items),
+        projected_kv_blocks=project_kv_blocks(snapshot, prefill_items, decode_items),
+        mandatory_request_ids=(),
+    )
 
 
 def derive_candidate_budgets(
-    base_budget: int,
-    *,
-    token_budget: int,
-    decode_count: int,
-    total_prefill_backlog: int,
+    *, token_budget: int, decode_count: int, total_prefill_backlog: int
 ) -> tuple[tuple[str, int, float], ...]:
-    """Multiply ``base_budget`` by the frozen multipliers, floor, clamp, dedup.
-
-    Returns a sorted tuple of ``(multiplier_label, clamped_budget, multiplier)``
-    triples. The tuple length is at most ``len(BUDGET_MULTIPLIERS)`` and at
-    least one (the entry for multiplier 0.5 floored to zero is preserved).
-    """
-    if base_budget <= 0:
-        return ()
-    max_prefill = min(
-        max(0, total_prefill_backlog),
+    """Return P10..P100 budgets after floor, clamp, and budget deduplication."""
+    maximum = min(
+        max(0, int(total_prefill_backlog)),
         max(0, int(token_budget) - int(decode_count)),
     )
-    raw: list[tuple[str, int, float]] = []
-    for multiplier, label in zip(BUDGET_MULTIPLIERS, MULTIPLIER_LABELS):
-        raw_budget = math.floor(multiplier * float(base_budget))
-        clamped = max(0, min(max_prefill, int(raw_budget)))
-        raw.append((label, clamped, float(multiplier)))
     deduped: dict[int, tuple[str, float]] = {}
-    for label, budget, multiplier in raw:
-        deduped.setdefault(budget, (label, multiplier))
+    for label, fraction in zip(FRACTION_LABELS, BUDGET_FRACTIONS):
+        budget = max(0, min(maximum, math.floor(maximum * fraction)))
+        deduped.setdefault(budget, (label, fraction))
     return tuple(
-        (label, budget, multiplier)
-        for budget, (label, multiplier) in sorted(deduped.items())
+        (label, budget, fraction)
+        for budget, (label, fraction) in sorted(deduped.items())
     )
 
 
-# ---------------------------------------------------------------------------
-# Candidate Generator
-# ---------------------------------------------------------------------------
+def _stock_running_order(
+    snapshot: StateSnapshot,
+) -> tuple[PrefillRequest | DecodeRequest, ...]:
+    running: list[PrefillRequest | DecodeRequest] = [
+        item for item in snapshot.waiting_prefill_requests if item.is_running
+    ]
+    running.extend(snapshot.active_decode_requests)
+    return tuple(sorted(running, key=lambda item: (item.ordinal, item.request_id)))
+
+
+def build_stock_plan(snapshot: StateSnapshot) -> BatchPlan:
+    """Build the supported Stock request selection without mutating vLLM state."""
+    token_budget = max(0, int(snapshot.token_budget))
+    prefill_items: list[tuple[str, int]] = []
+    decode_items: list[str] = []
+
+    def fits(
+        candidate_prefill: list[tuple[str, int]], candidate_decode: list[str]
+    ) -> bool:
+        prefill_tuple = tuple(candidate_prefill)
+        return (
+            project_sequence_count(snapshot, prefill_tuple) <= snapshot.sequence_budget
+            and project_kv_blocks(snapshot, prefill_tuple, tuple(candidate_decode))
+            <= snapshot.total_kv_blocks
+        )
+
+    for request in _stock_running_order(snapshot):
+        if token_budget <= 0:
+            break
+        if isinstance(request, PrefillRequest):
+            scheduled = min(request.remaining_tokens, token_budget)
+            if scheduled <= 0:
+                continue
+            tentative = prefill_items + [(request.request_id, scheduled)]
+            if not fits(tentative, decode_items):
+                continue
+            prefill_items = tentative
+            token_budget -= scheduled
+        else:
+            tentative_decode = decode_items + [request.request_id]
+            if not fits(prefill_items, tentative_decode):
+                continue
+            decode_items = tentative_decode
+            token_budget -= 1
+
+    waiting = sorted(
+        (item for item in snapshot.waiting_prefill_requests if not item.is_running),
+        key=lambda item: (item.arrival_time, item.ordinal, item.request_id),
+    )
+    for request in waiting:
+        if token_budget <= 0:
+            break
+        scheduled = min(request.remaining_tokens, token_budget)
+        if scheduled <= 0:
+            continue
+        tentative = prefill_items + [(request.request_id, scheduled)]
+        if not fits(tentative, decode_items):
+            break
+        prefill_items = tentative
+        token_budget -= scheduled
+
+    return _build_batch_plan(
+        snapshot,
+        tuple(prefill_items),
+        tuple(decode_items),
+        template_id="STOCK",
+    )
 
 
 @dataclass(frozen=True)
-class _GeneratorDiagnostics:
-    """Per-frame diagnostic summary exposed via ``CandidateGenerator.last_diagnostic``."""
-
-    resolution: BudgetResolution
+class GeneratorDiagnostics:
+    maximum_prefill_budget: int
     raw_candidate_count: int
     deduplicated_candidate_count: int
     candidate_budget_values: tuple[int, ...]
-    multiplier_budgets: tuple[tuple[str, int], ...]
-    distinct_allocations_by_multiplier: tuple[tuple[str, int], ...]
+    fraction_budgets: tuple[tuple[str, int], ...]
+    stock_prefill_budget: int
 
 
 class CandidateGenerator:
-    """Generate up to 16 raw candidates: 1 ZERO + 5 multipliers × 3 policies.
+    """Generate ZERO, P10..P100, and one Stock-like candidate."""
 
-    The Generator depends on a :class:`BudgetResolver` (Predictor inversion) for
-    the slack-centered base budget ``P``. With the default ``NullBudgetResolver``
-    only the ZERO candidate is emitted, preserving the G2 contract test that
-    asserts no Predictor / Safe-Set coupling.
-    """
-
-    def __init__(
-        self,
-        settings: SchedulerSettings | None = None,
-        *,
-        budget_resolver: BudgetResolver | None = None,
-    ) -> None:
+    def __init__(self, settings: SchedulerSettings | None = None) -> None:
         self.settings = settings or SchedulerSettings.provisional()
-        self.budget_resolver: BudgetResolver = budget_resolver or NullBudgetResolver()
-        self._last_diagnostic: _GeneratorDiagnostics | None = None
+        self._last_diagnostic: GeneratorDiagnostics | None = None
 
     @property
-    def last_diagnostic(self) -> _GeneratorDiagnostics | None:
-        """Diagnostic summary from the most recent :meth:`generate` call.
-
-        Consumed by the Adapter's per-frame diagnostic logger. ``None`` until
-        the first ``generate`` invocation.
-        """
+    def last_diagnostic(self) -> GeneratorDiagnostics | None:
         return self._last_diagnostic
 
-    @staticmethod
-    def _build_batch_plan(
-        snapshot: StateSnapshot,
-        prefill_items: tuple[tuple[str, int], ...],
-        decode_items: tuple[str, ...],
-        template_id: str,
-    ) -> BatchPlan:
-        return BatchPlan(
-            plan_id=f"plan-{template_id}",
-            snapshot_hash=snapshot.snapshot_hash,
-            template_id=template_id,
-            prefill_items=prefill_items,
-            decode_items=decode_items,
-            total_prefill_tokens=sum(tokens for _, tokens in prefill_items),
-            total_decode_tokens=len(decode_items),
-            total_sequences=project_sequence_count(snapshot, prefill_items),
-            projected_kv_blocks=project_kv_blocks(
-                snapshot, prefill_items, decode_items
-            ),
-            mandatory_request_ids=(),
-        )
+    def build_stock_plan(self, snapshot: StateSnapshot) -> BatchPlan:
+        return build_stock_plan(snapshot)
 
     def generate(self, snapshot: StateSnapshot) -> tuple[BatchPlan, ...]:
         if not snapshot.waiting_prefill_requests and not snapshot.active_decode_requests:
             self._last_diagnostic = None
             return ()
-        decode_ids = tuple(
-            item.request_id for item in rank_decode_requests(snapshot)
-        )
-        backlog = sum(
-            item.remaining_tokens for item in snapshot.waiting_prefill_requests
-        )
 
-        # Always-emitted ZERO candidate.
-        zero_plan = self._build_batch_plan(
-            snapshot,
-            prefill_items=(),
-            decode_items=decode_ids,
-            template_id="ALL_DECODE:ZERO",
-        )
-        plans: list[BatchPlan] = [zero_plan]
-        raw_count = 1
-        multiplier_budgets: tuple[tuple[str, int], ...] = ()
-        allocations_by_multiplier: dict[
-            str, set[tuple[tuple[str, int], ...]]
-        ] = {}
+        decode_ids = tuple(item.request_id for item in rank_decode_requests(snapshot))
+        prefill_order = rank_prefill_requests(snapshot)
+        backlog = sum(item.remaining_tokens for item in prefill_order)
+        maximum = min(backlog, max(0, snapshot.token_budget - len(decode_ids)))
+        plans: list[BatchPlan] = [_build_batch_plan(snapshot, (), decode_ids, "ZERO")]
+        fraction_budgets: list[tuple[str, int]] = []
+        for label, budget, _fraction in derive_candidate_budgets(
+            token_budget=snapshot.token_budget,
+            decode_count=len(decode_ids),
+            total_prefill_backlog=backlog,
+        ):
+            if budget <= 0:
+                continue
+            fraction_budgets.append((label, budget))
+            prefill_items = _fill_prefill(snapshot, budget, prefill_order, self.settings)
+            plans.append(_build_batch_plan(snapshot, prefill_items, decode_ids, label))
 
-        resolution = self.budget_resolver.resolve(snapshot)
-        if resolution.base_prefill_budget > 0:
-            budgets = derive_candidate_budgets(
-                resolution.base_prefill_budget,
-                token_budget=snapshot.token_budget,
-                decode_count=len(decode_ids),
-                total_prefill_backlog=backlog,
-            )
-            multiplier_budgets = tuple(
-                (label, budget) for label, budget, _ in budgets if budget > 0
-            )
-            orders = build_prefill_orders(snapshot)
-            for multiplier_label, budget, _multiplier in budgets:
-                if budget <= 0:
-                    # Zero-budget Mixed candidate would degenerate to ZERO;
-                    # skip and rely on the canonical ZERO plan above.
-                    continue
-                for policy_name, order in orders:
-                    prefill_items = _fill_prefill(
-                        snapshot, budget, order, self.settings
-                    )
-                    allocations_by_multiplier.setdefault(
-                        multiplier_label, set()
-                    ).add(prefill_items)
-                    template_id = (
-                        f"ALL_DECODE:SLACK_BUDGET:{multiplier_label}:{policy_name}"
-                    )
-                    plans.append(
-                        self._build_batch_plan(
-                            snapshot,
-                            prefill_items=prefill_items,
-                            decode_items=decode_ids,
-                            template_id=template_id,
-                        )
-                    )
-                    raw_count += 1
+        stock_plan = self.build_stock_plan(snapshot)
+        plans.append(stock_plan)
+        raw_count = len(plans)
 
-        # Canonical dedup on (prefill_items, decode_items).
-        seen: dict[tuple[tuple[tuple[str, int], ...], tuple[str, ...]], BatchPlan] = {}
+        seen: set[tuple[tuple[tuple[str, int], ...], tuple[str, ...]]] = set()
         deduplicated: list[BatchPlan] = []
-        for plan in plans:
+        # Preserve STOCK identity if its material work duplicates a fraction plan.
+        for plan in (stock_plan, *plans[:-1]):
             key = (plan.prefill_items, plan.decode_items)
             if key in seen:
                 continue
-            seen[key] = plan
+            seen.add(key)
             deduplicated.append(plan)
-
         if len(deduplicated) > self.settings.maximum_seed_candidates:
             raise RuntimeError(
                 f"Candidate Generator produced {len(deduplicated)} candidates "
                 f"exceeding maximum_seed_candidates={self.settings.maximum_seed_candidates}"
             )
 
-        candidate_budget_values = _budgets_from_plans(plans)
-        distinct_allocations_by_multiplier = tuple(
-            (label, len(allocations_by_multiplier.get(label, set())))
-            for label, _ in multiplier_budgets
-        )
-        self._last_diagnostic = _GeneratorDiagnostics(
-            resolution=resolution,
+        self._last_diagnostic = GeneratorDiagnostics(
+            maximum_prefill_budget=maximum,
             raw_candidate_count=raw_count,
             deduplicated_candidate_count=len(deduplicated),
-            candidate_budget_values=candidate_budget_values,
-            multiplier_budgets=multiplier_budgets,
-            distinct_allocations_by_multiplier=(
-                distinct_allocations_by_multiplier
+            candidate_budget_values=tuple(
+                sorted({plan.total_prefill_tokens for plan in plans})
             ),
+            fraction_budgets=tuple(fraction_budgets),
+            stock_prefill_budget=stock_plan.total_prefill_tokens,
         )
         return tuple(deduplicated)
-
-
-def _budgets_from_plans(plans: list[BatchPlan]) -> tuple[int, ...]:
-    """Return the sorted unique budget values actually emitted across plans."""
-    seen: set[int] = set()
-    for plan in plans:
-        seen.add(int(plan.total_prefill_tokens))
-    return tuple(sorted(seen))
