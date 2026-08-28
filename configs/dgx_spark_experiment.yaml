@@ -310,7 +310,7 @@ fallback:
   must_pass_hard_filters: true
 
 dpp:
-  algorithm: two_stage_tbt_ttft_v1
+  algorithm: two_stage_tbt_ttft_absolute_v1
   parameter_status: provisional_for_development_nonformal_validation
   formal_benchmark_eligible: false
   reference_concurrency:
@@ -336,7 +336,7 @@ dpp:
   ttft_stage:
     use_variable_frame_rate: true
     completion_resets_debt: true
-  score: negative_ttft_lyapunov_drift_per_effective_second
+  score: negative_ttft_lyapunov_drift_absolute
   score_tie_tolerance:
     relative: 1.0e-9
     absolute: 1.0e-12
@@ -344,7 +344,7 @@ dpp:
     nonnegative_minimum: 0.0
     finite_absolute_maximum: 1.7976931348623157e+308
   tie_break:
-    - ttft_score_desc
+    - ttft_score_absolute_new_desc
     - completed_prefill_count_desc
     - prefill_progress_desc
     - effective_duration_asc
@@ -352,7 +352,7 @@ dpp:
     - plan_id_asc
   diagnosis:
     enabled: false
-    schema_version: 1
+    schema_version: 2
     enable_env: DPP_SELECTOR_DIAGNOSIS
     output_path_env: DPP_SELECTOR_DIAGNOSIS_PATH
   updates_from_actual_observation_only: true

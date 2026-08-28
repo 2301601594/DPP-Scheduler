@@ -1590,6 +1590,10 @@ def get_modular_scheduler_class() -> type:
                             "ood_distance": prediction.ood_distance,
                             "normalized_ttft_drift": score.normalized_ttft_drift,
                             "score": score.score,
+                            "ttft_score_rate_old": score.ttft_score_rate_old,
+                            "ttft_score_absolute_new": (
+                                score.ttft_score_absolute_new
+                            ),
                             "prefill_reference_concurrency": (
                                 score.prefill_reference_concurrency
                             ),
@@ -1599,6 +1603,8 @@ def get_modular_scheduler_class() -> type:
                             "prefill_progress_utility": score.prefill_progress,
                             "score_tied_with_winner": score.plan_id in winner_tie,
                             "selection_rank": score.rank,
+                            "rank_rate_old": score.rank_rate_old,
+                            "rank_absolute_new": score.rank_absolute_new,
                             "selected": (
                                 score.plan_id == selected_scored_plan_id
                             ),
@@ -1608,7 +1614,7 @@ def get_modular_scheduler_class() -> type:
                                 else None
                             ),
                             "tie_break_key": {
-                                "score_desc": score.score,
+                                "ttft_score_absolute_new_desc": score.score,
                                 "completed_prefill_count_desc": (
                                     score.completed_prefill_count
                                 ),

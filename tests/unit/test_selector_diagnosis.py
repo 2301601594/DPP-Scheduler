@@ -10,7 +10,9 @@ from dpp_scheduler.dpp_selector import DPPSelector
 from dpp_scheduler.selector_diagnosis import (
     DPP_SELECTOR_DIAGNOSIS_ENV,
     DPP_SELECTOR_DIAGNOSIS_PATH_ENV,
+    SELECTOR_DIAGNOSIS_SCHEMA_VERSION,
     SelectorDiagnosisWriter,
+    counterfactual_record,
     replay_file,
     replay_record,
     resolve_selector_diagnosis,
@@ -34,7 +36,7 @@ class SelectorDiagnosisTests(unittest.TestCase):
             path,
             config_sha256="c" * 64,
             predictor_version="predictor-test",
-            schema_version=1,
+            schema_version=SELECTOR_DIAGNOSIS_SCHEMA_VERSION,
         )
         record = writer.write(
             snapshot=state,
@@ -54,12 +56,13 @@ class SelectorDiagnosisTests(unittest.TestCase):
         )
         control = ControlState(state.snapshot_hash, (("p", 0.5),))
         candidates = (
-            candidate(state, "zero", duration=0.1),
+            candidate(state, "zero", duration=0.1, template_id="ZERO"),
             candidate(
                 state,
                 "partial",
                 prefill_items=(("p", 20),),
                 duration=0.1,
+                template_id="P20",
             ),
         )
         decision, audit = DPPSelector(settings()).select_with_audit(
@@ -69,7 +72,7 @@ class SelectorDiagnosisTests(unittest.TestCase):
             root / "prefill.jsonl",
             config_sha256="e" * 64,
             predictor_version="predictor-test",
-            schema_version=1,
+            schema_version=SELECTOR_DIAGNOSIS_SCHEMA_VERSION,
         )
         record = writer.write(
             snapshot=state,
@@ -110,7 +113,7 @@ class SelectorDiagnosisTests(unittest.TestCase):
                 path,
                 config_sha256="d" * 64,
                 predictor_version="predictor-test",
-                schema_version=1,
+                schema_version=SELECTOR_DIAGNOSIS_SCHEMA_VERSION,
             )
             writer.write(
                 snapshot=state,
@@ -156,6 +159,63 @@ class SelectorDiagnosisTests(unittest.TestCase):
             )
             stage2["score"] = float(stage2["score"]) + 1.0
             self.assertGreater(replay_record(record)["stage2_score_mismatch"], 0)
+
+    def test_records_absolute_and_legacy_rate_scores_and_zero_diagnosis(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            record = self._prefill_record(Path(root))
+            zero = next(
+                item["stage2_ttft"]
+                for item in record["candidates"]
+                if item["template_id"] == "ZERO"
+            )
+            self.assertEqual(zero["score"], zero["ttft_score_absolute_new"])
+            self.assertEqual(zero["rank"], zero["rank_absolute_new"])
+            self.assertIn("ttft_score_rate_old", zero)
+            self.assertIn("rank_rate_old", zero)
+            diagnosis = record["zero_diagnosis"]
+            self.assertTrue(diagnosis["has_prefill_backlog"])
+            self.assertTrue(diagnosis["zero_candidate_present"])
+            self.assertTrue(diagnosis["nonzero_passed_stage1"])
+
+    def test_counterfactual_reports_rate_and_absolute_winners(self) -> None:
+        state = snapshot(
+            prefill=(PrefillRequest("p", 0.0, 100, 0, ttft_slo_seconds=2.0),)
+        )
+        control = ControlState(state.snapshot_hash, (("p", 0.0),))
+        candidates = (
+            candidate(state, "zero", duration=0.1, template_id="ZERO"),
+            candidate(
+                state,
+                "partial",
+                prefill_items=(("p", 4),),
+                duration=0.2,
+                template_id="P10",
+            ),
+        )
+        decision, audit = DPPSelector(settings()).select_with_audit(
+            state, control, candidates, capture_request_details=True
+        )
+        with tempfile.TemporaryDirectory() as root:
+            writer = SelectorDiagnosisWriter(
+                Path(root) / "counterfactual.jsonl",
+                config_sha256="a" * 64,
+                predictor_version="predictor-test",
+                schema_version=SELECTOR_DIAGNOSIS_SCHEMA_VERSION,
+            )
+            record = writer.write(
+                snapshot=state,
+                control=control,
+                safe_candidates=candidates,
+                audit=audit,
+                selector_decision=decision,
+                controller_decision=decision,
+                executed_plan_id=decision.selected_plan.plan_id,
+            )
+            writer.close()
+        counterfactual = counterfactual_record(record)
+        self.assertEqual(counterfactual["old_winner_plan_id"], "partial")
+        self.assertEqual(counterfactual["new_winner_plan_id"], "zero")
+        self.assertTrue(counterfactual["nonzero_to_zero"])
 
     def test_tampered_winner_is_detected(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -217,7 +277,7 @@ class SelectorDiagnosisTests(unittest.TestCase):
                     path,
                     config_sha256="c" * 64,
                     predictor_version="p",
-                    schema_version=1,
+                    schema_version=SELECTOR_DIAGNOSIS_SCHEMA_VERSION,
                 )
 
 

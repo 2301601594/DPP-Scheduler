@@ -1,5 +1,37 @@
 # Active research decisions
 
+## 2026-08-28: use absolute TTFT drift as a single-variable ablation
+
+- The completed QPS 0.25, seed 1001, n=150 development run for
+  `two_stage_tbt_ttft_v1` retained 1,421 Prefill-backlog frames and selected
+  ZERO in 1,175 of them. TTFT regressed severely while the Stage-1 TBT filter
+  reduced some interval tails. This is retained negative evidence, not a
+  formal Scheduler conclusion.
+- Stage 2 changes only from `-Delta_F/effective_duration` to `-Delta_F` under
+  algorithm identity `two_stage_tbt_ttft_absolute_v1`. Duration remains in
+  next-debt through `effective_duration/ttft_slo`. Candidate Generator,
+  Predictor, Safe-Set, Stage 1, `delta_D=0.020s`, debt state, fallback, trace,
+  SLO, and subordinate tie-break fields remain frozen for this ablation.
+- Selector Diagnosis schema v2 records both legacy rate and active absolute
+  scores/ranks plus ZERO-specific fields. Historical schema v1 remains
+  replayable. A counterfactual replay gate must show materially fewer ZERO
+  winners when a non-ZERO candidate passed Stage 1, predominantly
+  ZERO-to-non-ZERO changes, and no systematic Stock-rank regression before a
+  new n=150 performance run is authorized.
+- For nonnegative TTFT debt, the requested synthetic fixture in which a
+  shorter ZERO loses only after removing `/effective_duration` is not
+  generally constructible: when the longer non-ZERO candidate has lower
+  absolute nonnegative drift, it also has no worse drift rate; when its drift
+  is negative, both objectives prefer it. Tests and replay therefore preserve
+  the actual mathematical direction instead of manufacturing that outcome.
+- The only retained schema-v1 diagnosis is the n=10 smoke: all 2,030 frames
+  replay with zero mismatches, but its 26 backlog frames contain zero legacy
+  ZERO winners. Absolute ranking changes 12 winners and improves the Stock
+  mean rank from 4.85 to 1.0 in those frames, but cannot demonstrate a
+  ZERO-to-non-ZERO reduction. The counterfactual gate is therefore
+  inconclusive, not passed; a representative diagnosis covering the observed
+  starvation regime is required before the next n=150 performance run.
+
 ## 2026-08-28: replace weighted drift with a two-stage Selector
 
 - This decision supersedes only the Selector, Selector configuration,

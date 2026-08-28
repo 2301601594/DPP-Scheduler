@@ -16,9 +16,9 @@ from dpp_scheduler.contracts import (
 from dpp_scheduler.settings import DPPSettings
 
 
-TWO_STAGE_ALGORITHM = "two_stage_tbt_ttft_v1"
+TWO_STAGE_ALGORITHM = "two_stage_tbt_ttft_absolute_v1"
 TIE_BREAK_ORDER = (
-    "ttft_score_desc",
+    "ttft_score_absolute_new_desc",
     "completed_prefill_count_desc",
     "prefill_progress_desc",
     "effective_duration_asc",
@@ -89,10 +89,23 @@ class DPPScore:
     completed_prefill_count: int
     request_results: tuple[TTFTRequestResult, ...] = ()
     rank: int = 0
+    rank_rate_old: int = 0
 
     @property
     def normalized_ttft_drift(self) -> float:
         return self.prefill_drift
+
+    @property
+    def ttft_score_rate_old(self) -> float:
+        return -self.prefill_drift / self.effective_duration
+
+    @property
+    def ttft_score_absolute_new(self) -> float:
+        return self.score
+
+    @property
+    def rank_absolute_new(self) -> int:
+        return self.rank
 
 
 @dataclass(frozen=True)
@@ -136,7 +149,7 @@ def effective_duration(candidate: SafeCandidate, maximum: float) -> float:
 
 
 class DPPSelector:
-    """Filter by live TBT time, then maximize TTFT drift reduction rate."""
+    """Filter by live TBT time, then minimize post-decision TTFT debt."""
 
     def __init__(self, settings: DPPSettings) -> None:
         self.settings = settings
@@ -431,7 +444,7 @@ class DPPSelector:
         prefill_drift = math.fsum(contributions) / (
             2.0 * self.settings.prefill_reference_concurrency
         )
-        score = -prefill_drift / tau
+        score = -prefill_drift
         prefill_progress = math.fsum(progress_terms)
         if not all(
             math.isfinite(value)
@@ -462,10 +475,16 @@ class DPPSelector:
             score.plan_id,
         )
 
-    def _rank_scores(
-        self, scores: tuple[DPPScore, ...]
+    def _rank_scores_for(
+        self,
+        scores: tuple[DPPScore, ...],
+        *,
+        score_value: str,
     ) -> tuple[tuple[DPPScore, ...], tuple[str, ...]]:
-        remaining = sorted(scores, key=lambda score: (-score.score, score.plan_id))
+        remaining = sorted(
+            scores,
+            key=lambda score: (-float(getattr(score, score_value)), score.plan_id),
+        )
         ranked: list[DPPScore] = []
         winner_tie: tuple[str, ...] = ()
         while remaining:
@@ -474,8 +493,8 @@ class DPPSelector:
                 score
                 for score in remaining
                 if math.isclose(
-                    score.score,
-                    leader.score,
+                    float(getattr(score, score_value)),
+                    float(getattr(leader, score_value)),
                     rel_tol=self.settings.score_rel_tol,
                     abs_tol=self.settings.score_abs_tol,
                 )
@@ -490,6 +509,26 @@ class DPPSelector:
             for score in ordered_group:
                 ranked.append(replace(score, rank=len(ranked) + 1))
         return tuple(ranked), winner_tie
+
+    def _rank_scores(
+        self, scores: tuple[DPPScore, ...]
+    ) -> tuple[tuple[DPPScore, ...], tuple[str, ...]]:
+        absolute_ranked, winner_tie = self._rank_scores_for(
+            scores, score_value="ttft_score_absolute_new"
+        )
+        rate_ranked, _ = self._rank_scores_for(
+            scores, score_value="ttft_score_rate_old"
+        )
+        rate_rank_by_id = {
+            score.plan_id: rank for rank, score in enumerate(rate_ranked, start=1)
+        }
+        return (
+            tuple(
+                replace(score, rank_rate_old=rate_rank_by_id[score.plan_id])
+                for score in absolute_ranked
+            ),
+            winner_tie,
+        )
 
     def _run(
         self,

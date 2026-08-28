@@ -15,7 +15,18 @@ from dpp_scheduler.settings import DPPSettings
 
 DPP_SELECTOR_DIAGNOSIS_ENV = "DPP_SELECTOR_DIAGNOSIS"
 DPP_SELECTOR_DIAGNOSIS_PATH_ENV = "DPP_SELECTOR_DIAGNOSIS_PATH"
-SELECTOR_DIAGNOSIS_SCHEMA_VERSION = 1
+SELECTOR_DIAGNOSIS_SCHEMA_VERSION = 2
+SUPPORTED_SELECTOR_DIAGNOSIS_SCHEMA_VERSIONS = frozenset({1, 2})
+
+
+def _is_zero_template(template_id: object) -> bool:
+    value = str(template_id)
+    return value == "ZERO" or value.startswith("ZERO:")
+
+
+def _is_stock_template(template_id: object) -> bool:
+    value = str(template_id)
+    return value == "STOCK" or value.startswith("STOCK:")
 
 
 def resolve_selector_diagnosis(
@@ -98,6 +109,10 @@ class SelectorDiagnosisWriter:
             raise ValueError("diagnosis Selector audit/Decision mismatch")
         stage1_by_id = {item.plan_id: item for item in audit.stage1.candidates}
         stage2_by_id = {item.plan_id: item for item in audit.stage2_scores}
+        template_by_id = {
+            candidate.plan.plan_id: candidate.plan.template_id
+            for candidate in safe_candidates
+        }
         candidates: list[dict[str, Any]] = []
         for candidate in safe_candidates:
             plan = candidate.plan
@@ -106,6 +121,16 @@ class SelectorDiagnosisWriter:
             stage2 = stage2_by_id.get(plan.plan_id)
             stage2_payload = asdict(stage2) if stage2 is not None else None
             if stage2_payload is not None:
+                stage2_payload.update(
+                    {
+                        "ttft_score_rate_old": stage2.ttft_score_rate_old,
+                        "ttft_score_absolute_new": (
+                            stage2.ttft_score_absolute_new
+                        ),
+                        "rank_rate_old": stage2.rank_rate_old,
+                        "rank_absolute_new": stage2.rank_absolute_new,
+                    }
+                )
                 stage2_payload["tie_break_key"] = {
                     "completed_prefill_count_desc": stage2.completed_prefill_count,
                     "prefill_progress_desc": stage2.prefill_progress,
@@ -136,6 +161,118 @@ class SelectorDiagnosisWriter:
                     "selected": audit.selected_plan_id == plan.plan_id,
                 }
             )
+        zero_candidates = [
+            candidate
+            for candidate in safe_candidates
+            if _is_zero_template(candidate.plan.template_id)
+        ]
+        nonzero_candidates = [
+            candidate
+            for candidate in safe_candidates
+            if not _is_zero_template(candidate.plan.template_id)
+        ]
+        zero_score = next(
+            (
+                stage2_by_id[candidate.plan.plan_id]
+                for candidate in zero_candidates
+                if candidate.plan.plan_id in stage2_by_id
+            ),
+            None,
+        )
+        nonzero_scores = [
+            stage2_by_id[candidate.plan.plan_id]
+            for candidate in nonzero_candidates
+            if candidate.plan.plan_id in stage2_by_id
+        ]
+        best_nonzero = min(
+            nonzero_scores,
+            key=lambda score: score.rank_absolute_new,
+            default=None,
+        )
+        best_nonzero_rate_old = min(
+            nonzero_scores,
+            key=lambda score: score.rank_rate_old,
+            default=None,
+        )
+        rate_winner = min(
+            audit.stage2_scores,
+            key=lambda score: score.rank_rate_old,
+            default=None,
+        )
+        zero_present = bool(zero_candidates)
+        nonzero_present = bool(nonzero_candidates)
+        zero_passed = any(
+            stage1_by_id[candidate.plan.plan_id].passed
+            for candidate in zero_candidates
+        )
+        nonzero_passed = any(
+            stage1_by_id[candidate.plan.plan_id].passed
+            for candidate in nonzero_candidates
+        )
+        old_winner_is_zero = bool(
+            rate_winner is not None
+            and _is_zero_template(template_by_id[rate_winner.plan_id])
+        )
+        new_winner_is_zero = bool(
+            audit.selected_plan_id is not None
+            and _is_zero_template(template_by_id[audit.selected_plan_id])
+        )
+        zero_diagnosis = {
+            "has_prefill_backlog": bool(snapshot.waiting_prefill_requests),
+            "prefill_backlog_depth": len(snapshot.waiting_prefill_requests),
+            "zero_candidate_present": zero_present,
+            "zero_passed_stage1": zero_passed,
+            "zero_selected": new_winner_is_zero,
+            "nonzero_candidate_present": nonzero_present,
+            "nonzero_passed_stage1": nonzero_passed,
+            "best_nonzero_plan_id": (
+                best_nonzero.plan_id if best_nonzero is not None else None
+            ),
+            "best_nonzero_plan_id_rate_old": (
+                best_nonzero_rate_old.plan_id
+                if best_nonzero_rate_old is not None
+                else None
+            ),
+            "old_winner_plan_id": (
+                rate_winner.plan_id if rate_winner is not None else None
+            ),
+            "new_winner_plan_id": audit.selected_plan_id,
+            "zero_prefill_drift": (
+                zero_score.prefill_drift if zero_score is not None else None
+            ),
+            "zero_score_old": (
+                zero_score.ttft_score_rate_old if zero_score is not None else None
+            ),
+            "zero_score_new": (
+                zero_score.ttft_score_absolute_new
+                if zero_score is not None
+                else None
+            ),
+            "best_nonzero_prefill_drift": (
+                best_nonzero.prefill_drift if best_nonzero is not None else None
+            ),
+            "best_nonzero_score_old": (
+                best_nonzero.ttft_score_rate_old
+                if best_nonzero is not None
+                else None
+            ),
+            "best_nonzero_score_new": (
+                best_nonzero.ttft_score_absolute_new
+                if best_nonzero is not None
+                else None
+            ),
+            "all_nonzero_filtered_by_stage1": (
+                nonzero_present and not nonzero_passed
+            ),
+            "old_score_selected_zero_with_nonzero_passed": (
+                nonzero_passed and old_winner_is_zero
+            ),
+            "new_score_selected_zero_with_nonzero_passed": (
+                nonzero_passed and new_winner_is_zero
+            ),
+            "zero_to_nonzero": old_winner_is_zero and not new_winner_is_zero,
+            "nonzero_to_zero": not old_winner_is_zero and new_winner_is_zero,
+        }
         record = {
             "schema_version": self.schema_version,
             "frame_id": snapshot.frame_id,
@@ -168,6 +305,7 @@ class SelectorDiagnosisWriter:
             },
             "stage1": asdict(audit.stage1),
             "candidates": candidates,
+            "zero_diagnosis": zero_diagnosis,
             "decision": {
                 "selector_selected_plan_id": audit.selected_plan_id,
                 "selector_reason": selector_decision.reason,
@@ -195,6 +333,49 @@ def _close(first: float, second: float, *, rel_tol: float, abs_tol: float) -> bo
     return math.isclose(first, second, rel_tol=rel_tol, abs_tol=abs_tol)
 
 
+def _rank_candidates(
+    scores: list[dict[str, Any]],
+    *,
+    score_key: str,
+    rel_tol: float,
+    abs_tol: float,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    ranked: list[dict[str, Any]] = []
+    remaining = sorted(
+        scores, key=lambda item: (-float(item[score_key]), item["plan_id"])
+    )
+    winner_tie: list[str] = []
+    while remaining:
+        leader = remaining[0]
+        group = [
+            item
+            for item in remaining
+            if _close(
+                float(item[score_key]),
+                float(leader[score_key]),
+                rel_tol=rel_tol,
+                abs_tol=abs_tol,
+            )
+        ]
+        group_ids = {item["plan_id"] for item in group}
+        remaining = [
+            item for item in remaining if item["plan_id"] not in group_ids
+        ]
+        group.sort(
+            key=lambda item: (
+                -item["completed"],
+                -item["progress"],
+                item["duration"],
+                item["budget"],
+                item["plan_id"],
+            )
+        )
+        if not ranked:
+            winner_tie = [item["plan_id"] for item in group]
+        ranked.extend(group)
+    return ranked, winner_tie
+
+
 def replay_record(record: Mapping[str, Any]) -> dict[str, int]:
     counters = {
         "stage1_mismatch": 0,
@@ -203,7 +384,8 @@ def replay_record(record: Mapping[str, Any]) -> dict[str, int]:
         "winner_mismatch": 0,
         "tie_break_mismatch": 0,
     }
-    if record.get("schema_version") != SELECTOR_DIAGNOSIS_SCHEMA_VERSION:
+    schema_version = record.get("schema_version")
+    if schema_version not in SUPPORTED_SELECTOR_DIAGNOSIS_SCHEMA_VERSIONS:
         raise ValueError("Selector diagnosis schema version mismatch")
     selector = record["selector"]
     state = record["state"]
@@ -380,7 +562,11 @@ def replay_record(record: Mapping[str, Any]) -> dict[str, int]:
             if bool(request["completion_this_frame"]) != completion:
                 counters["ttft_debt_mismatch"] += 1
         drift = math.fsum(contributions) / (2.0 * int(prefill_ref))
-        score = -drift / tau
+        score_rate_old = -drift / tau
+        score_absolute_new = -drift
+        online_score = (
+            score_rate_old if schema_version == 1 else score_absolute_new
+        )
         replayed_progress = math.fsum(progress)
         if not _close(
             drift,
@@ -388,12 +574,24 @@ def replay_record(record: Mapping[str, Any]) -> dict[str, int]:
             rel_tol=rel_tol,
             abs_tol=abs_tol,
         ) or not _close(
-            score,
+            online_score,
             float(details["score"]),
             rel_tol=rel_tol,
             abs_tol=abs_tol,
         ):
             counters["stage2_score_mismatch"] += 1
+        if schema_version == 2:
+            for replayed, field in (
+                (score_rate_old, "ttft_score_rate_old"),
+                (score_absolute_new, "ttft_score_absolute_new"),
+            ):
+                if field not in details or not _close(
+                    replayed,
+                    float(details[field]),
+                    rel_tol=rel_tol,
+                    abs_tol=abs_tol,
+                ):
+                    counters["stage2_score_mismatch"] += 1
         if int(details["completed_prefill_count"]) != completed or not _close(
             replayed_progress,
             float(details["prefill_progress"]),
@@ -424,47 +622,52 @@ def replay_record(record: Mapping[str, Any]) -> dict[str, int]:
         replayed_scores.append(
             {
                 "plan_id": str(candidate["plan_id"]),
-                "score": score,
+                "score": online_score,
+                "score_rate_old": score_rate_old,
+                "score_absolute_new": score_absolute_new,
                 "completed": completed,
                 "progress": replayed_progress,
                 "duration": tau,
                 "budget": int(candidate["plan"]["total_prefill_tokens"]),
                 "recorded_rank": int(details["rank"]),
+                "recorded_rank_rate_old": int(
+                    details.get("rank_rate_old", details["rank"])
+                ),
+                "recorded_rank_absolute_new": int(
+                    details.get("rank_absolute_new", details["rank"])
+                ),
             }
         )
 
-    ranked: list[dict[str, Any]] = []
-    remaining_scores = sorted(
-        replayed_scores, key=lambda item: (-item["score"], item["plan_id"])
+    ranked, winner_tie = _rank_candidates(
+        replayed_scores,
+        score_key="score",
+        rel_tol=rel_tol,
+        abs_tol=abs_tol,
     )
-    winner_tie: list[str] = []
-    while remaining_scores:
-        leader = remaining_scores[0]
-        group = [
-            item
-            for item in remaining_scores
-            if _close(
-                item["score"], leader["score"], rel_tol=rel_tol, abs_tol=abs_tol
-            )
-        ]
-        group_ids = {item["plan_id"] for item in group}
-        remaining_scores = [
-            item for item in remaining_scores if item["plan_id"] not in group_ids
-        ]
-        group.sort(
-            key=lambda item: (
-                -item["completed"],
-                -item["progress"],
-                item["duration"],
-                item["budget"],
-                item["plan_id"],
-            )
-        )
-        if not ranked:
-            winner_tie = [item["plan_id"] for item in group]
-        ranked.extend(group)
     if any(item["recorded_rank"] != rank for rank, item in enumerate(ranked, 1)):
         counters["tie_break_mismatch"] += 1
+    if schema_version == 2:
+        rate_ranked, _ = _rank_candidates(
+            replayed_scores,
+            score_key="score_rate_old",
+            rel_tol=rel_tol,
+            abs_tol=abs_tol,
+        )
+        absolute_ranked, _ = _rank_candidates(
+            replayed_scores,
+            score_key="score_absolute_new",
+            rel_tol=rel_tol,
+            abs_tol=abs_tol,
+        )
+        if any(
+            item["recorded_rank_rate_old"] != rank
+            for rank, item in enumerate(rate_ranked, 1)
+        ) or any(
+            item["recorded_rank_absolute_new"] != rank
+            for rank, item in enumerate(absolute_ranked, 1)
+        ):
+            counters["tie_break_mismatch"] += 1
     if winner_tie != list(decision["winner_tie_plan_ids"]):
         counters["tie_break_mismatch"] += 1
     replayed_winner = ranked[0]["plan_id"] if ranked else None
@@ -494,3 +697,227 @@ def replay_file(path: Path) -> dict[str, int]:
             for key, value in result.items():
                 summary[key] += value
     return summary
+
+
+def _backlog_stratum(depth: int) -> str:
+    if depth <= 0:
+        return "none"
+    if depth == 1:
+        return "1"
+    if depth <= 4:
+        return "2-4"
+    if depth <= 8:
+        return "5-8"
+    return ">8"
+
+
+def _slack_stratum(value: object) -> str:
+    if value is None:
+        return "no_active_tbt_obligation"
+    slack_ms = float(value) * 1000.0
+    if slack_ms <= 0:
+        return "<=0ms"
+    if slack_ms <= 50:
+        return "0-50ms"
+    if slack_ms <= 100:
+        return "50-100ms"
+    if slack_ms <= 200:
+        return "100-200ms"
+    return ">200ms"
+
+
+def counterfactual_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Rank one recorded Stage-2 set under rate and absolute TTFT scores."""
+
+    schema_version = record.get("schema_version")
+    if schema_version not in SUPPORTED_SELECTOR_DIAGNOSIS_SCHEMA_VERSIONS:
+        raise ValueError("Selector diagnosis schema version mismatch")
+    selector = record["selector"]
+    rel_tol = float(selector["score_rel_tol"])
+    abs_tol = float(selector["score_abs_tol"])
+    candidates: list[dict[str, Any]] = []
+    nonzero_passed = False
+    nonzero_present = False
+    for candidate in record["candidates"]:
+        template_id = str(candidate["template_id"])
+        is_zero = _is_zero_template(template_id)
+        nonzero_present = nonzero_present or not is_zero
+        nonzero_passed = nonzero_passed or (
+            not is_zero and bool(candidate["stage1_tbt"]["passed"])
+        )
+        details = candidate["stage2_ttft"]
+        if details is None:
+            continue
+        drift = float(details["prefill_drift"])
+        duration = float(candidate["duration"]["effective"])
+        candidates.append(
+            {
+                "plan_id": str(candidate["plan_id"]),
+                "template_id": template_id,
+                "is_zero": is_zero,
+                "is_stock": _is_stock_template(template_id),
+                "score_rate_old": -drift / duration,
+                "score_absolute_new": -drift,
+                "completed": int(details["completed_prefill_count"]),
+                "progress": float(details["prefill_progress"]),
+                "duration": duration,
+                "budget": int(candidate["plan"]["total_prefill_tokens"]),
+            }
+        )
+    rate_ranked, _ = _rank_candidates(
+        candidates,
+        score_key="score_rate_old",
+        rel_tol=rel_tol,
+        abs_tol=abs_tol,
+    )
+    absolute_ranked, _ = _rank_candidates(
+        candidates,
+        score_key="score_absolute_new",
+        rel_tol=rel_tol,
+        abs_tol=abs_tol,
+    )
+    rate_rank = {
+        item["plan_id"]: rank for rank, item in enumerate(rate_ranked, start=1)
+    }
+    absolute_rank = {
+        item["plan_id"]: rank
+        for rank, item in enumerate(absolute_ranked, start=1)
+    }
+    old_winner = rate_ranked[0] if rate_ranked else None
+    new_winner = absolute_ranked[0] if absolute_ranked else None
+    old_zero = bool(old_winner and old_winner["is_zero"])
+    new_zero = bool(new_winner and new_winner["is_zero"])
+    stock = next((item for item in candidates if item["is_stock"]), None)
+    depth = int(record["state"]["waiting_prefill_count"])
+    return {
+        "frame_id": int(record["frame_id"]),
+        "has_prefill_backlog": depth > 0,
+        "backlog_depth": depth,
+        "backlog_stratum": _backlog_stratum(depth),
+        "slack_stratum": _slack_stratum(
+            record["state"]["min_tbt_slack_seconds"]
+        ),
+        "nonzero_candidate_present": nonzero_present,
+        "nonzero_passed_stage1": nonzero_passed,
+        "all_nonzero_filtered_by_stage1": (
+            nonzero_present and not nonzero_passed
+        ),
+        "old_winner_plan_id": old_winner["plan_id"] if old_winner else None,
+        "new_winner_plan_id": new_winner["plan_id"] if new_winner else None,
+        "old_zero_selected": old_zero,
+        "new_zero_selected": new_zero,
+        "winner_changed": bool(
+            old_winner
+            and new_winner
+            and old_winner["plan_id"] != new_winner["plan_id"]
+        ),
+        "zero_to_nonzero": old_zero and not new_zero,
+        "nonzero_to_zero": not old_zero and new_zero,
+        "old_zero_with_nonzero_passed_stage1": old_zero and nonzero_passed,
+        "new_zero_with_nonzero_passed_stage1": new_zero and nonzero_passed,
+        "stock_rank_old": rate_rank.get(stock["plan_id"]) if stock else None,
+        "stock_rank_new": (
+            absolute_rank.get(stock["plan_id"]) if stock else None
+        ),
+    }
+
+
+def _new_counterfactual_bucket() -> dict[str, Any]:
+    return {
+        "frames": 0,
+        "old_zero_selected": 0,
+        "new_zero_selected": 0,
+        "winner_changed": 0,
+        "zero_to_nonzero": 0,
+        "nonzero_to_zero": 0,
+        "all_nonzero_filtered_by_stage1": 0,
+        "old_zero_with_nonzero_passed_stage1": 0,
+        "new_zero_with_nonzero_passed_stage1": 0,
+        "stock_rank_old_sum": 0,
+        "stock_rank_new_sum": 0,
+        "stock_rank_count": 0,
+    }
+
+
+def _add_counterfactual_frame(bucket: dict[str, Any], frame: Mapping[str, Any]) -> None:
+    bucket["frames"] += 1
+    for field in (
+        "old_zero_selected",
+        "new_zero_selected",
+        "winner_changed",
+        "zero_to_nonzero",
+        "nonzero_to_zero",
+        "all_nonzero_filtered_by_stage1",
+        "old_zero_with_nonzero_passed_stage1",
+        "new_zero_with_nonzero_passed_stage1",
+    ):
+        bucket[field] += int(bool(frame[field]))
+    if frame["stock_rank_old"] is not None and frame["stock_rank_new"] is not None:
+        bucket["stock_rank_old_sum"] += int(frame["stock_rank_old"])
+        bucket["stock_rank_new_sum"] += int(frame["stock_rank_new"])
+        bucket["stock_rank_count"] += 1
+
+
+def _finalize_counterfactual_bucket(bucket: Mapping[str, Any]) -> dict[str, Any]:
+    result = dict(bucket)
+    frames = int(result["frames"])
+    stock_count = int(result.pop("stock_rank_count"))
+    stock_old_sum = int(result.pop("stock_rank_old_sum"))
+    stock_new_sum = int(result.pop("stock_rank_new_sum"))
+    result["old_zero_ratio"] = (
+        int(result["old_zero_selected"]) / frames if frames else None
+    )
+    result["new_zero_ratio"] = (
+        int(result["new_zero_selected"]) / frames if frames else None
+    )
+    result["stock_rank_old_mean"] = (
+        stock_old_sum / stock_count if stock_count else None
+    )
+    result["stock_rank_new_mean"] = (
+        stock_new_sum / stock_count if stock_count else None
+    )
+    result["stock_rank_count"] = stock_count
+    return result
+
+
+def counterfactual_replay_file(path: Path) -> dict[str, Any]:
+    overall = _new_counterfactual_bucket()
+    backlog = _new_counterfactual_bucket()
+    by_backlog: dict[str, dict[str, Any]] = {}
+    by_slack: dict[str, dict[str, Any]] = {}
+    total_frames = 0
+    with path.open("r", encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, start=1):
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if not isinstance(record, dict):
+                raise ValueError(f"diagnosis row {line_number} is not an object")
+            frame = counterfactual_record(record)
+            total_frames += 1
+            _add_counterfactual_frame(overall, frame)
+            if not frame["has_prefill_backlog"]:
+                continue
+            _add_counterfactual_frame(backlog, frame)
+            backlog_bucket = by_backlog.setdefault(
+                str(frame["backlog_stratum"]), _new_counterfactual_bucket()
+            )
+            slack_bucket = by_slack.setdefault(
+                str(frame["slack_stratum"]), _new_counterfactual_bucket()
+            )
+            _add_counterfactual_frame(backlog_bucket, frame)
+            _add_counterfactual_frame(slack_bucket, frame)
+    return {
+        "total_frames": total_frames,
+        "prefill_backlog_frames": int(backlog["frames"]),
+        "overall": _finalize_counterfactual_bucket(overall),
+        "prefill_backlog": _finalize_counterfactual_bucket(backlog),
+        "by_backlog_depth": {
+            key: _finalize_counterfactual_bucket(value)
+            for key, value in sorted(by_backlog.items())
+        },
+        "by_min_tbt_slack": {
+            key: _finalize_counterfactual_bucket(value)
+            for key, value in sorted(by_slack.items())
+        },
+    }

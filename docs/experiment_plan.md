@@ -160,11 +160,18 @@ TTFT/TBT, a nonterminal token creates the next TBT deadline, and a terminal
 event creates none. Snapshot now carries these obligations and Recovery state.
 The former combined Prefill/Decode drift Selector is superseded by the
 two-stage design: active TBT obligation slack filters candidate duration, then
-fixed-reference TTFT drift rate selects the winner. Decode service debt remains
+fixed-reference absolute TTFT drift selects the winner. Decode service debt remains
 available for actual-feedback diagnostics but no longer participates in
-selection. The temporary 20 ms allowance and replayable Diagnosis remain
-development-only; remote model-free tests and a real-model integration run are
-still required before G5/G6 can be claimed complete.
+selection. The earlier rate-normalized n=150 development run is retained as
+negative evidence because it exhibited Prefill starvation. The current
+absolute-drift change must first pass schema-v2 model-free tests and the
+rate-versus-absolute counterfactual replay gate. The retained n=10 diagnosis
+replays exactly but has no legacy ZERO winner among its 26 backlog frames, so
+that gate remains inconclusive until a representative starvation-regime
+diagnosis is collected. The temporary 20 ms allowance
+and replayable Diagnosis remain development-only; a new real-model integration
+run and n=150 comparison require separate approval and are still required
+before G5/G6 can be claimed complete.
 
 ### G7: Evaluation
 

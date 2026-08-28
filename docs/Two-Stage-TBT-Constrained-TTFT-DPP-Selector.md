@@ -75,8 +75,16 @@ Candidate duration 沿用 Predictor 的 `effective_duration`：interpolation 使
 \Delta_F(a)=\frac{1}{2N_F^{ref}}\sum_i
 \left[(\widehat Z_{i,k+1}^F(a))^2-(Z_{i,k}^F)^2\right],
 \qquad
-Score_F(a)=-\frac{\Delta_F(a)}{\hat\tau_k(a)}.
+Score_F(a)=-\Delta_F(a).
 \]
+
+因此 Stage 2 等价于在 Stage 1 admissible set 内直接最小化预测的
+post-decision debt 平方和。`effective_duration` 没有从 TTFT 预测中删除；它仍
+通过 `effective_duration / ttft_slo` 增加所有未完成 Prefill 请求的下一 debt。
+2026-08-28 的 n=150 development/non-formal 负面运行显示旧的
+`-Delta_F/effective_duration` 与大量 ZERO 选择、Prefill starvation 同时出现；
+当前 `two_stage_tbt_ttft_absolute_v1` 是只去除最终 rate normalization 的单变量
+消融，不是已验证的性能结论。
 
 Selector 不读取 TBT service debt、Decode reference concurrency、预测 violation、
 deadline margin、Goodput utility 或经验权重。TBT debt 可继续由 StateStore
@@ -112,10 +120,13 @@ DPP_SELECTOR_DIAGNOSIS_PATH=<unique-jsonl-path>
 fail-closed。Writer 对每个 normal Selector frame 写入并 flush 一行，直接
 序列化实际 Stage 1/Stage 2 audit 对象，不重新计算日志值。
 
-Schema version 1 至少保存：Snapshot/config/Predictor/Selector identity、完整
+Schema version 2 至少保存：Snapshot/config/Predictor/Selector identity、完整
 TBT slack、所有 SafeCandidate 的 plan/Prediction/Stage 1 结果、进入 Stage 2
-候选的逐请求 debt 计算、drift/score/rank、winner tie set，以及彼此分离的
-Selector、Controller 和实际执行结果。
+候选的逐请求 debt 计算、`prefill_drift`、旧 rate score/rank、新 absolute
+score/rank、winner tie set、ZERO 专项字段，以及彼此分离的 Selector、
+Controller 和实际执行结果。在线决策只使用 absolute score；旧 rate score
+只用于 diagnosis counterfactual。Replay 继续读取历史 schema version 1，
+但新 writer 只生成 schema version 2。
 
 `scripts/replay_dpp_selector_diagnosis.py` 独立重算 effective duration、slack、
 Stage 1、逐请求 debt、score、rank 和 winner，并报告：
@@ -128,6 +139,12 @@ stage2_score_mismatch
 winner_mismatch
 tie_break_mismatch
 ```
+
+使用 `--counterfactual` 时还对同一 Stage-2 candidate set 分别执行旧 rate 与
+新 absolute 排名，报告 ZERO winner 转移、Stock 平均排名，并按 Prefill
+backlog 深度 `1/2-4/5-8/>8` 和最小 TBT slack
+`<=0/0-50/50-100/100-200/>200ms` 分层。该 replay 只能回答已有记录中的
+选择反事实，不能替代真实执行时间和性能测量。
 
 Diagnosis run 只有在所有 mismatch 为零时才有效。JSONL、replay summary 和
 各自 SHA-256 进入 append-only run manifest。正式 benchmark 默认关闭该

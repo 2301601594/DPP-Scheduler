@@ -69,11 +69,12 @@ def candidate(
     prefill_items: tuple[tuple[str, int], ...] = (),
     duration: float = 0.1,
     extrapolated: bool = False,
+    template_id: str = "test",
 ) -> SafeCandidate:
     plan = BatchPlan(
         plan_id=plan_id,
         snapshot_hash=state.snapshot_hash,
-        template_id="test",
+        template_id=template_id,
         prefill_items=prefill_items,
         decode_items=tuple(item.request_id for item in state.active_decode_requests),
         total_prefill_tokens=sum(tokens for _, tokens in prefill_items),
@@ -123,7 +124,7 @@ def manual_score(
 ) -> DPPScore:
     return DPPScore(
         plan_id=plan_id,
-        prefill_drift=-score * duration,
+        prefill_drift=-score,
         effective_duration=duration,
         score=score,
         prefill_budget=budget,
@@ -239,6 +240,77 @@ class TwoStageSelectorTests(unittest.TestCase):
         )
         self.assertAlmostEqual(score.request_results[0].predicted_next_debt, 0.5)
 
+    def test_score_is_negative_absolute_prefill_drift(self) -> None:
+        state = snapshot(prefill=(PrefillRequest("p", 0.0, 100, 0),))
+        item = candidate(state, "partial", prefill_items=(("p", 10),), duration=0.2)
+        score = DPPSelector(settings()).score_candidate(
+            state,
+            ControlState(state.snapshot_hash, (("p", 0.5),)),
+            item,
+            capture_request_details=True,
+        )
+        self.assertAlmostEqual(score.score, -score.prefill_drift)
+        self.assertAlmostEqual(
+            score.ttft_score_rate_old,
+            -score.prefill_drift / score.effective_duration,
+        )
+
+    def test_duration_still_increases_next_debt(self) -> None:
+        state = snapshot(prefill=(PrefillRequest("p", 0.0, 100, 0),))
+        control = ControlState(state.snapshot_hash, (("p", 0.2),))
+        short = DPPSelector(settings()).score_candidate(
+            state,
+            control,
+            candidate(state, "short", prefill_items=(("p", 5),), duration=0.1),
+            capture_request_details=True,
+        )
+        long = DPPSelector(settings()).score_candidate(
+            state,
+            control,
+            candidate(state, "long", prefill_items=(("p", 5),), duration=0.3),
+            capture_request_details=True,
+        )
+        self.assertLess(
+            short.request_results[0].predicted_next_debt,
+            long.request_results[0].predicted_next_debt,
+        )
+
+    def test_short_zero_vs_longer_nonzero_exposes_counterfactual_direction(self) -> None:
+        state = snapshot(prefill=(PrefillRequest("p", 0.0, 100, 0),))
+        control = ControlState(state.snapshot_hash, (("p", 0.0),))
+        selector = DPPSelector(settings())
+        zero_candidate = candidate(
+            state, "zero", duration=0.1, template_id="ZERO"
+        )
+        nonzero_candidate = candidate(
+            state,
+            "nonzero",
+            prefill_items=(("p", 4),),
+            duration=0.2,
+            template_id="P10",
+        )
+        zero = selector.score_candidate(
+            state,
+            control,
+            zero_candidate,
+        )
+        nonzero = selector.score_candidate(
+            state,
+            control,
+            nonzero_candidate,
+        )
+        self.assertGreater(nonzero.ttft_score_rate_old, zero.ttft_score_rate_old)
+        self.assertGreater(
+            zero.ttft_score_absolute_new,
+            nonzero.ttft_score_absolute_new,
+        )
+        self.assertEqual(
+            selector.select(
+                state, control, (zero_candidate, nonzero_candidate)
+            ).selected_plan,
+            zero_candidate.plan,
+        )
+
     def test_prefill_pressure_can_choose_completion(self) -> None:
         state = snapshot(prefill=(PrefillRequest("p", 0.0, 100, 0),))
         control = ControlState(state.snapshot_hash, (("p", 5.0),))
@@ -338,10 +410,10 @@ class TwoStageConfigTests(unittest.TestCase):
         runtime = load_active_runtime(REPOSITORY_ROOT / ACTIVE_CONFIG_RELATIVE)
         dpp = load_dpp_settings(runtime)
         self.assertTrue(dpp.live_v2_ready)
-        self.assertEqual(dpp.algorithm, "two_stage_tbt_ttft_v1")
+        self.assertEqual(dpp.algorithm, "two_stage_tbt_ttft_absolute_v1")
         self.assertEqual(dpp.tbt_delta_seconds, 0.020)
         self.assertFalse(dpp.diagnosis_enabled_default)
-        self.assertEqual(dpp.diagnosis_schema_version, 1)
+        self.assertEqual(dpp.diagnosis_schema_version, 2)
 
 
 if __name__ == "__main__":

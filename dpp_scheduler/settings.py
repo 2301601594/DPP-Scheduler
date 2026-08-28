@@ -370,12 +370,12 @@ class DPPSettings:
     reference_parameter_status: str = "provisional_pending_stock_profiling"
     score_rel_tol: float = 1e-9
     score_abs_tol: float = 1e-12
-    algorithm: str = "two_stage_tbt_ttft_v1"
+    algorithm: str = "two_stage_tbt_ttft_absolute_v1"
     reference_artifact_path: str | None = None
     reference_artifact_sha256: str | None = None
     tbt_delta_seconds: float = 0.020
     diagnosis_enabled_default: bool = False
-    diagnosis_schema_version: int = 1
+    diagnosis_schema_version: int = 2
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -386,8 +386,10 @@ class DPPSettings:
                 raise ValueError(f"{label} must be a positive integer")
         if not math.isfinite(self.maximum_numeric) or self.maximum_numeric <= 0:
             raise ValueError("maximum_numeric must be finite and positive")
-        if self.algorithm != "two_stage_tbt_ttft_v1":
-            raise ValueError("DPP algorithm must be two_stage_tbt_ttft_v1")
+        if self.algorithm != "two_stage_tbt_ttft_absolute_v1":
+            raise ValueError(
+                "DPP algorithm must be two_stage_tbt_ttft_absolute_v1"
+            )
         if self.reference_parameter_status not in {
             "provisional_pending_stock_profiling",
             "frozen_from_stock_positive_frame_p50",
@@ -415,8 +417,8 @@ class DPPSettings:
             raise ValueError("tbt_delta_seconds must be finite and non-negative")
         if not isinstance(self.diagnosis_enabled_default, bool):
             raise ValueError("diagnosis_enabled_default must be boolean")
-        if self.diagnosis_schema_version != 1:
-            raise ValueError("DPP Selector diagnosis schema version must be 1")
+        if self.diagnosis_schema_version != 2:
+            raise ValueError("DPP Selector diagnosis schema version must be 2")
 
     @property
     def live_v2_ready(self) -> bool:
@@ -460,7 +462,7 @@ class DPPSettings:
         if reference.get("statistic") != "p50_positive_frames":
             raise ValueError("reference concurrency statistic mismatch")
         if tuple(value.get("tie_break", ())) != (
-            "ttft_score_desc",
+            "ttft_score_absolute_new_desc",
             "completed_prefill_count_desc",
             "prefill_progress_desc",
             "effective_duration_asc",
@@ -470,7 +472,7 @@ class DPPSettings:
             raise ValueError("two-stage DPP tie-break contract mismatch")
         if tbt_stage.get("empty_policy") != "minimum_effective_duration":
             raise ValueError("DPP TBT empty policy mismatch")
-        if value.get("score") != "negative_ttft_lyapunov_drift_per_effective_second":
+        if value.get("score") != "negative_ttft_lyapunov_drift_absolute":
             raise ValueError("two-stage DPP score contract mismatch")
         return cls(
             prefill_reference_concurrency=reference.get("prefill"),
