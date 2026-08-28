@@ -122,6 +122,15 @@ conservative-coverage criterion. Its use with the explicit `kappa_ood=0`
 development default is therefore diagnostic only and does not supersede that
 negative result.
 
+The 2026-08-28 n=150 diagnostic exposed a separate online-calibration defect:
+a large positive Decode-only residual made the mean-centered online P95
+negative, which violated `conservative >= expected` and caused persistent
+Predictor-invalid fallback. The runtime online policy now uses a symmetric 5%
+trimmed residual center and an untrimmed raw residual P95 with an explicit
+expected-duration floor. Artifact OOF cold start remains unchanged. This repair
+requires fresh remote model-free tests and diagnostic replay before another
+performance run; it does not advance G3 or any later gate.
+
 ### G4: Safety
 
 Apply token, sequence, current KV, Rolling-KV, and Predictor-support hard

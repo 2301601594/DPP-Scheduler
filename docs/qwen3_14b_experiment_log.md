@@ -266,3 +266,107 @@
   retry dry-run resolved 300 requests, QPS 0.25, seed 1001, and
   `DPP_EXECUTION_SCOPE=development_nonformal` without enabling detailed
   iteration logging.
+
+## 2026-08-28 — online Predictor calibration repair and n=150 diagnostic
+
+- Limited the runtime change to Predictor online residual calibration. The
+  online center is now the symmetric 5%-per-tail trimmed mean, the upper tail
+  is the untrimmed higher-method residual P95, and conservative duration is
+  floored at expected duration. The offline Ridge models, cold-start artifact,
+  Candidate Generator, Safe-Set, Selector, Controller fallback, and actual-only
+  feedback semantics were not changed.
+- Remote model-free checks passed 67/67 across the targeted Predictor,
+  artifact/config, runner, Safe-Set, fallback, exact-plan, and evaluation-path
+  suites.
+- Completed the append-only development run
+  `predictor_online_trimmed_calibration_qps0p25_n150_seed1001_v1/runs/`
+  `predictor_online_trimmed_calibration_n150_qps0p25_seed1001_attempt01` on the
+  unchanged QPS 0.25, seed 1001, n=150 trace with trace SHA-256
+  `203e7ed43522f71e44b7ee99a5cf3d5593f2e2d31215f010f67afd5ee2819e31`.
+  It completed 150/150 requests with zero request failures and zero token
+  accounting mismatches. The run is `development_nonformal`, used detailed
+  iteration logging, and is not formal comparison evidence.
+- The repair removed the diagnosed failure chain. The pre-repair diagnostic
+  had 4,463 frames containing a `PREDICTION_INVALID` rejection, 4,219 empty
+  Safe-Sets, and 4,218 `LIVENESS_ESCAPE_DECODE` fallbacks. The repaired run had
+  no workload fallback and no workload-empty Safe-Set. Its only invalid
+  rejection was the expected empty `plan-ZERO` on frame 1 while ten valid
+  candidates remained; its only fallback was the final empty-queue idle frame.
+  Across 6,354 logged valid candidate predictions, no
+  `conservative_duration < expected_duration` violation occurred.
+- Scheduler performance did not pass. TTFT mean/p50/p90 were
+  19,093/2,121/59,530 ms versus 716/545/1,496 ms for Stock on the same trace;
+  throughput was 0.1723 versus 0.1865 requests/s. TBT mean improved slightly
+  from 191.8 to 188.1 ms, but TBT P99 worsened from 648.7 to 821.6 ms.
+- Observed mechanism: 1,253 Scheduler frames had a Prefill backlog; 1,087
+  (86.75%) selected `ZERO`, every one of those frames admitted only that one
+  candidate to Selector Stage 2, and the longest consecutive backlog-`ZERO`
+  streak was 452 frames. This supports the inference that the old Predictor
+  failure and decode-liveness fallback masked a separate Stage-1/Selector
+  Prefill-starvation behavior. No Selector change or gate advance was made.
+
+## 2026-08-29 — full Selector Diagnosis rerun after Predictor repair
+
+- Repeated the unchanged QPS 0.25, seed 1001, n=150 development trace with
+  both the per-iteration log and full Selector Diagnosis enabled. The unique
+  append-only run is
+  `predictor_online_trimmed_calibration_selector_diagnosis_qps0p25_n150_seed1001_v1/runs/selector_diagnosis_n150_qps0p25_seed1001_attempt01`.
+- The run completed 150/150 requests with zero request failures and zero token
+  accounting mismatches. The 4,573-frame Selector replay reported zero Stage
+  1, service-rate invariant, Stage 2 score, debt, tie-break, and winner
+  mismatches. `selector_diagnosis_valid` is true. The retained 77,175,969-byte
+  JSONL has SHA-256
+  `16bd5ca4fe921a4b8a98ab3cbf10b321ce7b086263539d70aca455fa305162d5`.
+- Full Stage-1 data confirmed the starvation mechanism. Among 1,611 frames
+  with both an active TBT constraint and Prefill backlog, Stock passed in 41
+  and was selected in all 41. Stock was filtered in 1,570 frames: `ZERO` won
+  1,527 and a partial-Prefill plan won 43. In the `ZERO` cases, Stock effective
+  duration was 305.75--988.77 ms (P50 871.19 ms), while the per-frame limit was
+  268.77--269.67 ms and `ZERO` duration was 167.63--190.72 ms.
+- Across all frames, Stock entered Stage 2 3,002 times and was selected 2,997
+  times. Its five losses all occurred with no active TBT obligation and went
+  to P70/P80/P90 plans with a strictly higher Prefill service rate. No
+  Selector change or gate advance was made; this remains
+  `development_nonformal` diagnostic evidence.
+
+## 2026-08-29 — executed-plan Predictor accuracy replay
+
+- Replayed the exact Predictor durations recorded in the preceding n=150
+  Selector Diagnosis against the aligned actual batch durations in its
+  `startup.log`. Source manifest, Diagnosis, and startup-log hashes matched;
+  the prior Selector replay remained zero-mismatch. Of 4,573 frames, 4,572
+  non-empty executions joined by frame and exact plan token composition with
+  zero alignment mismatch. The excluded final frame was the audited
+  `IDLE_EMPTY_QUEUE` zero-token execution, not a Predictor observation.
+- Across the 4,572 executed batches, expected-duration MAE/RMSE/bias were
+  1.861/6.749/-0.299 ms; P95/P99 absolute error was 3.801/36.040 ms. The
+  expected estimate was within 10 ms for 96.74% and within 10% for 98.91% of
+  frames. All selected plans were in-support interpolation, so effective
+  duration equalled expected duration throughout this run.
+- The aggregate is decode-dominated: 4,416 decode-only frames had 0.993 ms
+  expected MAE and 2.688 ms P95 absolute error, while 155 mixed frames had
+  26.507 ms MAE, 66.537 ms P95 absolute error, and -7.044 ms bias. The sole
+  Prefill-only frame is not an estimable stratum. The largest expected
+  underprediction was 162.788 ms on mixed frame 2,489.
+- Conservative coverage was 93.26% overall (4,264/4,572), 93.46% for
+  decode-only (4,127/4,416), and 87.74% for mixed (136/155). Within the 123
+  mixed frames after the replayed online window became active, coverage was
+  84.55% and expected-duration bias was -17.074 ms. Thus this trace does not
+  support a 95% conservative-coverage claim, especially for mixed batches.
+- Processed evidence is retained remotely at
+  `results/processed/qwen3_14b_dgx_spark/`
+  `predictor_accuracy_replay_selector_diagnosis_n150_seed1001_v1/`.
+  The replay script SHA-256 is
+  `aa7cd5f05d34e168724399c2bf8067852f30c1ace6e7c31c2c390c4cc546b624`.
+  `per_frame_accuracy.csv` SHA-256 is
+  `5c6031409de915b20dc5180edca86843f264d8014334a49da5f63d9735509e83`,
+  `summary.json` SHA-256 is
+  `bdd7043abd8945ad4202a990cb4e4789108a459b96c9a177cc60249ddc7141e0`,
+  and `artifact_manifest.json` SHA-256 is
+  `42e44d49826e9340c49fe2fc3a448f129ad18ccf0e98737072bc5ead2b679fb3`.
+- This is selected-plan, single-trace, development/non-formal evidence. The
+  Diagnosis does not store Ridge base duration, so the replay cannot isolate
+  the online calibration improvement versus the base model. Calibration
+  source is reconstructed from the frozen 32-sample threshold, 128-sample
+  per-kind window, and prior actual-only in-support executions. No Predictor,
+  Selector, gate, or formal claim was changed by this analysis.

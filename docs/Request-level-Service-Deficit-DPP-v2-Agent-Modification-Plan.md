@@ -511,27 +511,31 @@ d_{OOD}
 }.
 $$
 
-Expected：
+在线窗口达到最小样本数后，定义原始 residual 窗口 $r$。Expected 使用双侧
+各裁剪 5%（每侧裁剪数为 $\lfloor0.05|r|\rfloor$）的中心估计：
 
 $$
+r_c=\operatorname{TrimmedMean}_{5\%}(r),
+\qquad
+r_{95}=Q_{0.95}^{\mathrm{higher}}(r),
+$$
+
+其中 $r_{95}$ 必须从未裁剪的原始窗口计算。于是：
+
+$$
+\begin{aligned}
 \widehat\tau
-=
-\tau_{base}^{ext}
-+
-\mu_{residual}.
-$$
-
-Conservative：
-
-$$
+&=\tau_{base}^{ext}+r_c,\\
 \overline\tau
-=
-\widehat\tau
-+
-Q_{0.95}(e)
-+
-\kappa_{OOD}d_{OOD}.
+&=\max\left[
+\widehat\tau,
+\tau_{base}^{ext}+r_{95}+\kappa_{OOD}d_{OOD}
+\right].
+\end{aligned}
 $$
+
+少于最小在线样本数时，继续使用现有 artifact 的同 batch-kind offline OOF
+cold-start mean 和 centered-P95；本次修复不改写历史 artifact。
 
 其中：
 
@@ -539,7 +543,8 @@ $$
 \kappa_{OOD}\ge0
 $$
 
-必须来自配置。
+必须来自配置；在线 trimmed-mean 比例、quantile 方法和 conservative floor
+也必须由 active config 显式固定。
 
 不要写死。
 

@@ -278,6 +278,8 @@ class PredictorSettings:
     calibration_artifact_path: str | None = None
     calibration_artifact_sha256: str | None = None
     development_default_acknowledged: bool = False
+    online_trim_fraction_each_tail: float = 0.05
+    online_upper_quantile: float = 0.95
 
     def __post_init__(self) -> None:
         value = self.ood_uncertainty_coefficient
@@ -295,6 +297,10 @@ class PredictorSettings:
             "fixed_default_for_development_nonformal_comparison",
         }:
             raise ValueError("unknown OOD uncertainty parameter status")
+        if self.online_trim_fraction_each_tail != 0.05:
+            raise ValueError("online residual trim fraction is fixed at 0.05 per tail")
+        if self.online_upper_quantile != 0.95:
+            raise ValueError("online residual upper quantile is fixed at 0.95")
         if self.parameter_status in {
             "frozen_from_held_out_ood_calibration",
             "frozen_from_development_held_out_ood_calibration",
@@ -343,6 +349,21 @@ class PredictorSettings:
             raise ValueError("Predictor extrapolation strategy mismatch")
         if extrapolation.get("allow_extrapolation") is not True:
             raise ValueError("Predictor extrapolation must be enabled")
+        online = value.get("online_calibration")
+        if not isinstance(online, Mapping):
+            raise ValueError("predictor.online_calibration must be a mapping")
+        required_online_contract = {
+            "applies_after_minimum_samples": True,
+            "center_statistic": "symmetric_trimmed_mean",
+            "trim_count_rounding": "floor",
+            "upper_quantile_method": "higher",
+            "upper_quantile_input": "untrimmed_window",
+            "conservative_floor": "expected_duration",
+            "cold_start_policy": "artifact_offline_oof_unchanged",
+        }
+        for key, expected in required_online_contract.items():
+            if online.get(key) != expected:
+                raise ValueError(f"Predictor online calibration contract mismatch: {key}")
         return cls(
             ood_uncertainty_coefficient=extrapolation.get(
                 "ood_uncertainty_coefficient"
@@ -357,6 +378,10 @@ class PredictorSettings:
             development_default_acknowledged=(
                 extrapolation.get("development_default_acknowledged") is True
             ),
+            online_trim_fraction_each_tail=online.get(
+                "trim_fraction_each_tail"
+            ),
+            online_upper_quantile=online.get("upper_quantile"),
         )
 
 

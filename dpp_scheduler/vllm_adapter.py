@@ -2304,6 +2304,8 @@ def get_predictor_evaluation_scheduler_class() -> type:
                 "centered_residual_p95_seconds": (
                     audit.centered_residual_p95_seconds
                 ),
+                "residual_center_seconds": audit.residual_center_seconds,
+                "residual_p95_seconds": audit.residual_p95_seconds,
                 "conservative_duration_seconds": (
                     audit.prediction.conservative_duration
                 ),

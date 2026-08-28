@@ -15,6 +15,8 @@ from dpp_scheduler.contracts import BatchPlan, Prediction, StateSnapshot
 
 
 BATCH_KINDS = ("decode_only", "mixed", "prefill_only")
+ONLINE_TRIM_FRACTION_EACH_TAIL = 0.05
+ONLINE_UPPER_QUANTILE = 0.95
 FEATURE_NAMES = tuple(f"x_{index}" for index in range(1, 9))
 MIXED_CROSS_FEATURE_NAMES = (*FEATURE_NAMES, "x_9", "x_10")
 ACTIVE_FEATURES = {
@@ -71,6 +73,26 @@ def _higher_quantile(values: Iterable[float], quantile: float) -> float:
     if not 0.0 <= quantile <= 1.0:
         raise ValueError("quantile must be in [0, 1]")
     return ordered[math.ceil(quantile * (len(ordered) - 1))]
+
+
+def _symmetric_trimmed_mean(
+    values: Iterable[float], proportion_each_tail: float
+) -> float:
+    """Return a deterministic two-sided trimmed mean using floor rounding."""
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        raise ValueError("trimmed mean requires at least one value")
+    if not 0.0 <= proportion_each_tail < 0.5:
+        raise ValueError("trim fraction must be in [0, 0.5)")
+    trim_count = math.floor(proportion_each_tail * len(ordered))
+    retained = (
+        ordered[trim_count : len(ordered) - trim_count]
+        if trim_count
+        else ordered
+    )
+    if not retained:
+        raise ValueError("trimmed mean removed every value")
+    return sum(retained) / len(retained)
 
 
 def classify_batch(plan: BatchPlan) -> str | None:
@@ -155,6 +177,8 @@ class PredictionAudit:
     base_duration_seconds: float | None
     calibration_source: str | None
     calibration_sample_count: int
+    residual_center_seconds: float | None = None
+    residual_p95_seconds: float | None = None
     centered_residual_p95_seconds: float | None = None
     predictor_cpu_seconds: float | None = None
     rejection_reason: str | None = None
@@ -364,20 +388,26 @@ class OnlineResidualCalibrator:
         self._last_observed_frame = -1
 
     def values(self, kind: str) -> tuple[float, float, str, int]:
+        """Return residual center and raw P95 for the next prediction.
+
+        The artifact-backed cold start remains unchanged. Once the live window
+        reaches its minimum sample count, only the center uses symmetric 5%
+        trimming; the upper-tail quantile always sees the original window.
+        """
         setting = self._settings[kind]
         window = self._windows[kind]
         if len(window) < setting.minimum_samples:
             return (
                 setting.cold_mean,
-                setting.cold_centered_p95,
+                setting.cold_mean + setting.cold_centered_p95,
                 "offline_oof_cold_start",
                 len(window),
             )
-        mean = sum(window) / len(window)
-        centered_p95 = _higher_quantile(
-            (value - mean for value in window), 0.95
+        center = _symmetric_trimmed_mean(
+            window, ONLINE_TRIM_FRACTION_EACH_TAIL
         )
-        return mean, centered_p95, "online_window", len(window)
+        residual_p95 = _higher_quantile(window, ONLINE_UPPER_QUANTILE)
+        return center, residual_p95, "online_window", len(window)
 
     def observe(self, *, frame_id: int, kind: str, residual: float) -> CalibrationUpdate:
         if frame_id <= self._last_observed_frame:
@@ -516,14 +546,15 @@ class RidgeDurationPredictor(DurationPredictor):
             )
             if not math.isfinite(base) or base <= 0:
                 raise ValueError("base duration prediction is non-positive or non-finite")
-            residual_mean, centered_p95, source, sample_count = (
+            residual_center, residual_p95, source, sample_count = (
                 self._calibrator.values(kind)
             )
-            expected = base + residual_mean
-            conservative = (
-                expected
-                + centered_p95
-                + self.ood_uncertainty_coefficient * ood_distance
+            expected = base + residual_center
+            conservative = max(
+                expected,
+                base
+                + residual_p95
+                + self.ood_uncertainty_coefficient * ood_distance,
             )
             if (
                 not math.isfinite(expected)
@@ -551,7 +582,11 @@ class RidgeDurationPredictor(DurationPredictor):
                 base_duration_seconds=base,
                 calibration_source=source,
                 calibration_sample_count=sample_count,
-                centered_residual_p95_seconds=centered_p95,
+                residual_center_seconds=residual_center,
+                residual_p95_seconds=residual_p95,
+                centered_residual_p95_seconds=(
+                    residual_p95 - residual_center
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             return PredictionAudit(
@@ -568,6 +603,8 @@ class RidgeDurationPredictor(DurationPredictor):
                 base_duration_seconds=None,
                 calibration_source=None,
                 calibration_sample_count=0,
+                residual_center_seconds=None,
+                residual_p95_seconds=None,
                 centered_residual_p95_seconds=None,
                 rejection_reason=f"{type(error).__name__}: {error}",
             )

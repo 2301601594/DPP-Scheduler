@@ -1,5 +1,24 @@
 # Active research decisions
 
+## 2026-08-28: make online residual calibration robust to outliers
+
+- This change is limited to Predictor online calibration. The offline Ridge
+  weights, support domains, artifact identity, per-kind window sizes, minimum
+  sample count, OOD policy, Candidate Generator, Safe-Set, Selector, Fallback,
+  and actual-only feedback semantics are unchanged.
+- Before a live residual window reaches 32 samples, the existing artifact OOF
+  cold-start mean and centered-P95 remain unchanged. Afterwards, expected
+  duration uses a symmetric trimmed mean that removes
+  `floor(0.05 * window_size)` values from each tail. Conservative duration is
+  the maximum of expected duration and base duration plus the higher-method raw
+  residual P95 plus `kappa_ood * d_ood`; the raw quantile is computed before
+  trimming.
+- This supersedes the online-window mean/centered-P95 runtime rule, but does not
+  rewrite historical Predictor artifacts or results. The triggering n=150
+  diagnosis completed all requests but is invalid for performance conclusions
+  because its Selector replay reported Stage-1 mismatches; its retained raw
+  log is used only to diagnose the negative online centered-P95 failure.
+
 ## 2026-08-28: replace TTFT debt winner scoring with Prefill service rate
 
 - The Rate and Absolute TTFT-debt selectors are retained as negative evidence.

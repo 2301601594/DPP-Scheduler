@@ -72,6 +72,7 @@ def _artifact(
     support_max: float = 1e9,
     segmented_mixed: bool = False,
     cross_feature_mixed: bool = False,
+    window_size: int = 32,
 ) -> Path:
     models = {}
     calibration = {}
@@ -103,7 +104,7 @@ def _artifact(
             },
         }
         calibration[kind] = {
-            "window_size": 32,
+            "window_size": window_size,
             "minimum_samples": 32,
             "cold_start_mean_seconds": 0.0,
             "cold_start_centered_p95_seconds": 0.02,
@@ -167,7 +168,107 @@ def _artifact(
     return root
 
 
+def _observe_decode_residuals(
+    predictor: RidgeDurationPredictor, residuals: list[float]
+) -> None:
+    for frame, residual in enumerate(residuals, start=1):
+        snapshot = _snapshot(frame)
+        plan = _plan(snapshot, "decode_only")
+        audit = predictor.predict_with_audit(snapshot, plan)
+        assert audit.base_duration_seconds is not None
+        predictor.observe_actual(
+            snapshot,
+            plan,
+            audit.base_duration_seconds + residual,
+            base_duration_seconds=audit.base_duration_seconds,
+        )
+
+
 class OnlinePredictorTests(unittest.TestCase):
+    def test_single_huge_positive_residual_keeps_prediction_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            predictor = RidgeDurationPredictor.from_artifact(
+                _artifact(Path(directory) / "artifact", window_size=128)
+            )
+            _observe_decode_residuals(predictor, [0.01] * 127 + [100.0])
+            snapshot = _snapshot(129)
+            audit = predictor.predict_with_audit(
+                snapshot, _plan(snapshot, "decode_only")
+            )
+            self.assertEqual(audit.prediction.prediction_mode, "INTERPOLATION")
+            self.assertIsNotNone(audit.prediction.expected_duration)
+            self.assertIsNotNone(audit.prediction.conservative_duration)
+
+    def test_conservative_duration_is_never_below_expected(self) -> None:
+        windows = (
+            [0.0] * 128,
+            [0.01] * 127 + [100.0],
+            [0.0] * 121 + [1.0] * 6 + [100.0],
+            [-0.09] + [0.01] * 127,
+        )
+        for index, residuals in enumerate(windows):
+            with self.subTest(window=index), tempfile.TemporaryDirectory() as directory:
+                predictor = RidgeDurationPredictor.from_artifact(
+                    _artifact(Path(directory) / "artifact", window_size=128)
+                )
+                _observe_decode_residuals(predictor, list(residuals))
+                snapshot = _snapshot(129)
+                prediction = predictor.predict_with_audit(
+                    snapshot, _plan(snapshot, "decode_only")
+                ).prediction
+                self.assertIsNotNone(prediction.expected_duration)
+                self.assertIsNotNone(prediction.conservative_duration)
+                self.assertGreaterEqual(
+                    prediction.conservative_duration,
+                    prediction.expected_duration,
+                )
+
+    def test_single_outlier_does_not_materially_change_expected(self) -> None:
+        with tempfile.TemporaryDirectory() as baseline_directory:
+            baseline = RidgeDurationPredictor.from_artifact(
+                _artifact(
+                    Path(baseline_directory) / "artifact", window_size=128
+                )
+            )
+            _observe_decode_residuals(baseline, [0.01] * 128)
+            baseline_snapshot = _snapshot(129)
+            baseline_expected = baseline.predict_with_audit(
+                baseline_snapshot, _plan(baseline_snapshot, "decode_only")
+            ).prediction.expected_duration
+
+        with tempfile.TemporaryDirectory() as outlier_directory:
+            with_outlier = RidgeDurationPredictor.from_artifact(
+                _artifact(
+                    Path(outlier_directory) / "artifact", window_size=128
+                )
+            )
+            _observe_decode_residuals(
+                with_outlier, [0.01] * 127 + [100.0]
+            )
+            outlier_snapshot = _snapshot(129)
+            outlier_expected = with_outlier.predict_with_audit(
+                outlier_snapshot, _plan(outlier_snapshot, "decode_only")
+            ).prediction.expected_duration
+
+        self.assertAlmostEqual(outlier_expected, baseline_expected, places=12)
+
+    def test_upper_quantile_uses_untrimmed_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            predictor = RidgeDurationPredictor.from_artifact(
+                _artifact(Path(directory) / "artifact", window_size=128)
+            )
+            # Raw higher-Q95 is 1.0. If the six upper-tail observations were
+            # silently removed before the quantile, the result would be 0.0.
+            _observe_decode_residuals(
+                predictor, [0.0] * 121 + [1.0] * 6 + [100.0]
+            )
+            snapshot = _snapshot(129)
+            audit = predictor.predict_with_audit(
+                snapshot, _plan(snapshot, "decode_only")
+            )
+            self.assertAlmostEqual(audit.residual_p95_seconds, 1.0)
+            self.assertAlmostEqual(audit.residual_center_seconds, 1.0 / 116.0)
+
     def test_feature_definitions_match_all_three_scenarios(self) -> None:
         snapshot = _snapshot()
         kind, features = build_plan_features(snapshot, _plan(snapshot, "mixed"))

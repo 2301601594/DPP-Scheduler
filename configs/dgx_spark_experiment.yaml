@@ -240,8 +240,8 @@ predictor:
   residual_definition: actual_duration_seconds_minus_base_duration_seconds
   duration_timing_boundary: >-
     vllm_official_after_execute_model_submission_through_model_result_and_sampling
-  expected_duration_calibration: per_batch_kind_online_window_mean
-  conservative_duration_calibration: online_window_centered_p95_higher
+  expected_duration_calibration: per_batch_kind_online_window_trimmed_mean_5pct_each_tail
+  conservative_duration_calibration: max_expected_or_base_plus_raw_residual_p95_plus_ood
   residual_groups:
     - prefill_only
     - decode_only
@@ -255,6 +255,16 @@ predictor:
     mixed: 128
     prefill_only: 128
   insufficient_window_fallback: offline_oof_same_batch_kind
+  online_calibration:
+    applies_after_minimum_samples: true
+    center_statistic: symmetric_trimmed_mean
+    trim_fraction_each_tail: 0.05
+    trim_count_rounding: floor
+    upper_quantile: 0.95
+    upper_quantile_method: higher
+    upper_quantile_input: untrimmed_window
+    conservative_floor: expected_duration
+    cold_start_policy: artifact_offline_oof_unchanged
   support_domain: artifact_train_marginal_box
   artifact_path: predictors/qwen3_14b/ridge_mixed_decode_three_segment_online_v2
   artifact_manifest_sha256: 50bf60d3e09c1c8ff65982af251d0e1d6377a4c0f95de80c905f05f01cbaa8ad
@@ -266,7 +276,8 @@ predictor:
     allow_extrapolation: true
     strategy: clipped_monotonic_ridge
     lower_bound_policy: clip_without_optimistic_downward_extrapolation
-    centered_residual_p95: true
+    centered_residual_p95: false
+    raw_residual_p95: true
     ood_uncertainty_coefficient: 0.0
     parameter_status: fixed_default_for_development_nonformal_comparison
     development_default_acknowledged: true
