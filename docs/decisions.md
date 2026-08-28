@@ -1,5 +1,38 @@
 # Active research decisions
 
+## 2026-08-28: replace weighted drift with a two-stage Selector
+
+- This decision supersedes only the Selector, Selector configuration,
+  Diagnosis, Replay, and associated tests in the 2026-08-27 TTFT-weight
+  decision and the request-level Service-Deficit v2 plan. The dedicated
+  `Two-Stage-TBT-Constrained-TTFT-DPP-Selector.md` is authoritative.
+- Stage 1 constrains `effective_duration` by the minimum slack from unsettled
+  active TBT obligations. Decode requests without such an obligation do not
+  receive a synthetic deadline. The temporary `delta_D=0.020s` value is
+  user-directed, development-only, non-formal, and not a G5 freeze.
+- Stage 2 ranks only by fixed-reference TTFT drift per effective second.
+  Decode debt, Decode reference concurrency, predicted violation metadata,
+  and TTFT/TBT weights do not participate in selection.
+- The not-yet-run TTFT weight grid is retired. Its active config, launcher,
+  driver, and dedicated tests are removed; historical design records and any
+  retained evidence are not deleted.
+- Replayable Selector Diagnosis is disabled by default and requires an
+  explicit switch plus a unique output path. A diagnosis run is valid only
+  when replay reports zero stage, debt, score, winner, and tie mismatches.
+
+## 2026-08-28: temporarily disable forward Rolling-KV in development
+
+- At the user's direction, the active development Safe-Set uses `H=0` and
+  `R0=0`. The current projected-KV capacity check remains active, but no
+  future Decode-growth horizon or fixed reserve margin is added.
+- Setting only `H=0` would have retained the existing 64-block reserve and
+  would not implement the requested current-round-only semantics; therefore
+  both provisional values are zeroed together.
+- The eight-iteration zero-progress watchdog remains an independent diagnostic
+  guard. This temporary setting is non-formal, does not complete G4, and does
+  not replace the need to diagnose Safe-Set rejection reasons before a formal
+  freeze.
+
 ## 2026-08-27: use fixed Prefill fractions, a Stock plan, and one TTFT weight
 
 - This decision supersedes the 2026-08-26 Predictor-inversion multiplier and

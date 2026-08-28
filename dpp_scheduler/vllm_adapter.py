@@ -16,7 +16,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,10 @@ from dpp_scheduler.contracts import (
     SafeSetResult,
     StateSnapshot,
     validate_snapshot_hash,
+)
+from dpp_scheduler.selector_diagnosis import (
+    SelectorDiagnosisWriter,
+    resolve_selector_diagnosis,
 )
 from dpp_scheduler.candidate_generator import (
     project_kv_blocks,
@@ -73,31 +77,18 @@ def resolve_dpp_runtime_overrides(
     execution_scope: str,
     environment: Mapping[str, str],
 ) -> tuple[DPPSettings, str]:
-    """Resolve development-only selection and TTFT-weight overrides."""
+    """Resolve selection mode and reject the retired weighted-DPP override."""
     selection_mode = environment.get(DPP_SELECTION_MODE_ENV, "normal")
     if selection_mode not in DPP_SELECTION_MODES:
         raise ValueError(
             f"{DPP_SELECTION_MODE_ENV} must be one of {sorted(DPP_SELECTION_MODES)}"
         )
-    weight_override = environment.get(DPP_TTFT_DRIFT_WEIGHT_ENV)
-    if (selection_mode != "normal" or weight_override is not None) and (
-        execution_scope != "development_nonformal"
-    ):
+    if DPP_TTFT_DRIFT_WEIGHT_ENV in environment:
         raise ValueError(
-            "DPP selection/weight overrides are development_nonformal only"
+            f"{DPP_TTFT_DRIFT_WEIGHT_ENV} is obsolete for two-stage DPP"
         )
-    if weight_override is not None:
-        try:
-            parsed_weight = float(weight_override)
-        except ValueError as error:
-            raise ValueError(
-                f"{DPP_TTFT_DRIFT_WEIGHT_ENV} must be numeric"
-            ) from error
-        if not math.isfinite(parsed_weight) or parsed_weight <= 0:
-            raise ValueError(
-                f"{DPP_TTFT_DRIFT_WEIGHT_ENV} must be finite and positive"
-            )
-        settings = replace(settings, ttft_drift_weight=parsed_weight)
+    if selection_mode != "normal" and execution_scope != "development_nonformal":
+        raise ValueError("DPP selection override is development_nonformal only")
     return settings, selection_mode
 
 
@@ -1165,6 +1156,22 @@ def get_modular_scheduler_class() -> type:
             self._dpp_selector = DPPSelector(dpp_settings)
             self._dpp_selection_mode = selection_mode
             self._dpp_state_store = InMemoryStateStore(settings=dpp_settings)
+            diagnosis_enabled, diagnosis_path = resolve_selector_diagnosis(
+                dpp_settings,
+                selection_mode=selection_mode,
+                environment=os.environ,
+            )
+            self._dpp_selector_diagnosis_enabled = diagnosis_enabled
+            self._dpp_selector_diagnosis_writer = (
+                SelectorDiagnosisWriter(
+                    diagnosis_path,
+                    config_sha256=runtime.config_sha256,
+                    predictor_version=self._dpp_predictor.predictor_version,
+                    schema_version=dpp_settings.diagnosis_schema_version,
+                )
+                if diagnosis_path is not None
+                else None
+            )
             if (
                 diagnostics_settings.performance_logging_enable_env
                 != DPP_DIAGNOSTIC_ITERATION_LOG_ENV
@@ -1308,10 +1315,11 @@ def get_modular_scheduler_class() -> type:
                 return
             agg = self._dpp_aggregate
             payload = {
-                "schema_version": 3,
+                "schema_version": 4,
                 "kind": "dpp_diagnostic_aggregate",
                 "selection_mode": self._dpp_selection_mode,
-                "ttft_drift_weight": self._dpp_selector.settings.ttft_drift_weight,
+                "selector_algorithm": self._dpp_selector.settings.algorithm,
+                "tbt_delta_seconds": self._dpp_selector.settings.tbt_delta_seconds,
                 "selection_histogram": agg["selection_histogram"],
                 "tie_selected_histogram": agg["tie_selected_histogram"],
                 "prefill_backlog_frame_count": agg["prefill_backlog_frame_count"],
@@ -1504,6 +1512,8 @@ def get_modular_scheduler_class() -> type:
             predictor_in_support: bool,
             scheduler_cpu_seconds: float,
             candidate_scores: tuple[Any, ...] = (),
+            selector_audit: Any = None,
+            selector_decision: Decision | None = None,
         ) -> None:
             pipeline_counts = self._dpp_aggregate["pipeline_call_counts"]
             if self._dpp_selection_mode == "normal":
@@ -1512,35 +1522,42 @@ def get_modular_scheduler_class() -> type:
                 pipeline_counts["selector"] += 1
             if fallback_result is not None:
                 pipeline_counts["fallback"] += 1
+            if self._dpp_selector_diagnosis_writer is not None:
+                if selector_audit is None or selector_decision is None:
+                    raise RuntimeError("Selector diagnosis is missing the Selector audit")
+                self._dpp_selector_diagnosis_writer.write(
+                    snapshot=snapshot,
+                    control=control,
+                    safe_candidates=safe_result.safe_candidates,
+                    audit=selector_audit,
+                    selector_decision=selector_decision,
+                    controller_decision=decision,
+                    executed_plan_id=plan.plan_id,
+                )
             candidate_score_records: list[dict[str, Any]] | None = None
             if self._dpp_diagnostic_iteration_log:
                 candidates_by_plan_id = {
                     candidate.plan.plan_id: candidate
                     for candidate in safe_result.safe_candidates
                 }
-                ranked_scores = sorted(
-                    candidate_scores,
-                    key=lambda score: (
-                        -score.score,
-                        -score.prefill_progress,
-                        score.effective_duration,
-                        score.prefill_budget,
-                        score.plan_id,
-                    ),
-                )
-                rank_by_plan_id = {
-                    score.plan_id: rank
-                    for rank, score in enumerate(ranked_scores, start=1)
-                }
                 selected_scored_plan_id = (
-                    decision.selected_plan.plan_id
-                    if decision.reason == "DPP_V2_MAX_DRIFT_RATE"
-                    and decision.selected_plan is not None
+                    selector_audit.selected_plan_id
+                    if selector_audit is not None
                     else None
                 )
-                winner_score = max(
-                    (score.score for score in candidate_scores), default=None
+                winner_tie = set(
+                    selector_audit.winner_tie_plan_ids
+                    if selector_audit is not None
+                    else ()
                 )
+                stage1_by_id = {
+                    item.plan_id: item
+                    for item in (
+                        selector_audit.stage1.candidates
+                        if selector_audit is not None
+                        else ()
+                    )
+                }
                 candidate_score_records = []
                 for score in candidate_scores:
                     candidate = candidates_by_plan_id[score.plan_id]
@@ -1572,33 +1589,29 @@ def get_modular_scheduler_class() -> type:
                             "prediction_mode": prediction.prediction_mode,
                             "ood_distance": prediction.ood_distance,
                             "normalized_ttft_drift": score.normalized_ttft_drift,
-                            "ttft_drift_weight": score.ttft_drift_weight,
-                            "weighted_ttft_drift": score.weighted_ttft_drift,
-                            "normalized_tbt_drift": score.normalized_tbt_drift,
-                            "total_drift": score.total_drift,
                             "score": score.score,
                             "prefill_reference_concurrency": (
                                 score.prefill_reference_concurrency
                             ),
-                            "decode_reference_concurrency": (
-                                score.decode_reference_concurrency
+                            "completed_prefill_count": (
+                                score.completed_prefill_count
                             ),
                             "prefill_progress_utility": score.prefill_progress,
-                            "score_tied_with_winner": (
-                                winner_score is not None
-                                and math.isclose(
-                                    score.score,
-                                    winner_score,
-                                    rel_tol=self._dpp_selector.settings.score_rel_tol,
-                                    abs_tol=self._dpp_selector.settings.score_abs_tol,
-                                )
-                            ),
-                            "selection_rank": rank_by_plan_id[score.plan_id],
+                            "score_tied_with_winner": score.plan_id in winner_tie,
+                            "selection_rank": score.rank,
                             "selected": (
                                 score.plan_id == selected_scored_plan_id
                             ),
+                            "tbt_stage": (
+                                stage1_by_id[score.plan_id].__dict__
+                                if score.plan_id in stage1_by_id
+                                else None
+                            ),
                             "tie_break_key": {
                                 "score_desc": score.score,
+                                "completed_prefill_count_desc": (
+                                    score.completed_prefill_count
+                                ),
                                 "prefill_progress_desc": score.prefill_progress,
                                 "effective_duration_asc": score.effective_duration,
                                 "prefill_budget_asc": score.prefill_budget,
@@ -1610,17 +1623,11 @@ def get_modular_scheduler_class() -> type:
             selected_bucket = self._dpp_aggregate_bucket(plan.template_id)
             selected_prefill_progress: float | None = None
             frame_tie: dict[str, Any]
-            if candidate_scores and decision.reason == "DPP_V2_MAX_DRIFT_RATE":
-                winner_score = max(score.score for score in candidate_scores)
+            if candidate_scores and selector_audit is not None:
                 tie_set = [
                     score
                     for score in candidate_scores
-                    if math.isclose(
-                        score.score,
-                        winner_score,
-                        rel_tol=self._dpp_selector.settings.score_rel_tol,
-                        abs_tol=self._dpp_selector.settings.score_abs_tol,
-                    )
+                    if score.plan_id in selector_audit.winner_tie_plan_ids
                 ]
                 old_t0_winner = min(
                     tie_set,
@@ -1641,10 +1648,10 @@ def get_modular_scheduler_class() -> type:
                 if selected_score is not None:
                     selected_prefill_progress = selected_score.prefill_progress
                 frame_tie = {
-                    "winner_tie_size": len(tie_set),
+                    "winner_tie_size": len(selector_audit.winner_tie_plan_ids),
                     "winner_tie": len(tie_set) >= 2,
                     "tie_break_changed_winner": (
-                        old_t0_winner.plan_id != plan.plan_id
+                        old_t0_winner.plan_id != selector_audit.selected_plan_id
                     ),
                 }
             else:
@@ -1664,8 +1671,14 @@ def get_modular_scheduler_class() -> type:
                 diagnostic={
                     "frame_id": snapshot.frame_id,
                     "selection_mode": self._dpp_selection_mode,
-                    "ttft_drift_weight": (
-                        self._dpp_selector.settings.ttft_drift_weight
+                    "selector_algorithm": self._dpp_selector.settings.algorithm,
+                    "tbt_delta_seconds": (
+                        self._dpp_selector.settings.tbt_delta_seconds
+                    ),
+                    "tbt_stage_status": (
+                        selector_audit.stage1.status
+                        if selector_audit is not None
+                        else None
                     ),
                     "predictor_called": self._dpp_selection_mode == "normal",
                     "safe_set_called": self._dpp_selection_mode == "normal",
@@ -1716,7 +1729,8 @@ def get_modular_scheduler_class() -> type:
                     "rejected_candidates_scoring_status": "not_scored",
                     "candidate_scores": candidate_score_records,
                     "selection_tie_break_order": (
-                        "score_desc_with_isclose,prefill_progress_desc,"
+                        "score_desc_with_isclose,completed_prefill_count_desc,"
+                        "prefill_progress_desc,"
                         "effective_duration_asc,prefill_budget_asc,plan_id_asc"
                     ),
                     "winner_tie_size": frame_tie["winner_tie_size"],
@@ -1799,9 +1813,14 @@ def get_modular_scheduler_class() -> type:
             # Candidate scores are always computed: the bounded diagnostic
             # aggregate needs them even when per-frame logging is disabled,
             # and scoring is pure arithmetic over at most six candidates.
-            decision, candidate_scores = self._dpp_selector.select_with_audit(
-                snapshot, control, safe_result.safe_candidates
+            decision, selector_audit = self._dpp_selector.select_with_audit(
+                snapshot,
+                control,
+                safe_result.safe_candidates,
+                capture_request_details=self._dpp_selector_diagnosis_enabled,
             )
+            selector_decision = decision
+            candidate_scores = selector_audit.stage2_scores
             fallback_result = None
             if decision.selected_plan is None:
                 fallback_result = resolve_fallback(
@@ -1860,6 +1879,8 @@ def get_modular_scheduler_class() -> type:
                         time.perf_counter() - scheduler_cpu_started
                     ),
                     candidate_scores=candidate_scores,
+                    selector_audit=selector_audit,
+                    selector_decision=selector_decision,
                 )
                 return scheduler_output
 
@@ -1908,6 +1929,8 @@ def get_modular_scheduler_class() -> type:
                 predictor_in_support=predictor_in_support,
                 scheduler_cpu_seconds=time.perf_counter() - scheduler_cpu_started,
                 candidate_scores=candidate_scores,
+                selector_audit=selector_audit,
+                selector_decision=selector_decision,
             )
             return scheduler_output
 
@@ -2041,6 +2064,9 @@ def get_modular_scheduler_class() -> type:
                 logger.exception(
                     "ModularDPPScheduler diagnostic aggregate write failed"
                 )
+            finally:
+                if self._dpp_selector_diagnosis_writer is not None:
+                    self._dpp_selector_diagnosis_writer.close()
             super().shutdown()
 
     ModularDPPScheduler.__module__ = "dpp_scheduler.vllm_scheduler"

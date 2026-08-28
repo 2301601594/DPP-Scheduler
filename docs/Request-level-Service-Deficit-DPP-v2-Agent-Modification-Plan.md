@@ -1,5 +1,10 @@
 # Request-level Service-Deficit DPP v2 修改方案
 
+> **Selector supersession:** 当前 Selector、Selector 配置、Diagnosis、Replay
+> 和相应测试以 `Two-Stage-TBT-Constrained-TTFT-DPP-Selector.md` 为准。本文件
+> 中的 Prefill + Decode weighted drift 内容保留为历史设计；其余 v2 组件仍
+> 按本文档执行。
+
 ## 0. 修改目标
 
 对当前 `DPP-Scheduler` 做一次结构性重构。

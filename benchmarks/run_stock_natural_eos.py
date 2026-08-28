@@ -34,10 +34,14 @@ from benchmarks.qwen3_runtime import (
     build_dpp_server_command,
     build_stock_server_command,
     load_active_runtime,
-    load_dpp_settings,
     require_frozen_for_execution,
     resolve_under,
     sha256_file,
+)
+from dpp_scheduler.selector_diagnosis import (
+    DPP_SELECTOR_DIAGNOSIS_ENV,
+    DPP_SELECTOR_DIAGNOSIS_PATH_ENV,
+    replay_file,
 )
 
 
@@ -55,7 +59,6 @@ SCHEDULER_POLICIES = ("stock", "dpp")
 DPP_DIAGNOSTIC_ITERATION_LOG_ENV = "DPP_DIAGNOSTIC_ITERATION_LOG"
 DPP_DIAGNOSTIC_AGGREGATE_PATH_ENV = "DPP_DIAGNOSTIC_AGGREGATE_PATH"
 DPP_EXECUTION_SCOPE_ENV = "DPP_EXECUTION_SCOPE"
-DPP_TTFT_DRIFT_WEIGHT_ENV = "DPP_TTFT_DRIFT_WEIGHT"
 DPP_SELECTION_MODE_ENV = "DPP_SELECTION_MODE"
 
 
@@ -503,8 +506,8 @@ def _resolved_preview(
     diagnostic_iteration_log: bool,
     campaign_id: str | None,
     comparison_scope: str,
-    dpp_ttft_drift_weight: float | None = None,
     dpp_selection_mode: str = "normal",
+    dpp_selector_diagnosis: bool = False,
 ) -> dict[str, Any]:
     return {
         "config": str(runtime.config_path),
@@ -522,8 +525,13 @@ def _resolved_preview(
         "campaign_id": campaign_id,
         "comparison_scope": comparison_scope,
         "dpp_diagnostic_iteration_log": diagnostic_iteration_log,
-        "dpp_ttft_drift_weight": dpp_ttft_drift_weight,
         "dpp_selection_mode": dpp_selection_mode,
+        "dpp_selector_diagnosis": dpp_selector_diagnosis,
+        "dpp_selector_diagnosis_path": (
+            str(output_dir / "selector_diagnosis.jsonl")
+            if dpp_selector_diagnosis
+            else None
+        ),
         "client_safety_ceiling_tokens": runtime.client_safety_ceiling_tokens,
         "scheduler_receives_safety_ceiling": False,
         "output_dir": str(output_dir),
@@ -565,7 +573,11 @@ def main() -> int:
         action="store_true",
         help="enable per-iteration DPP INFO logs for a diagnostic run only",
     )
-    parser.add_argument("--dpp-ttft-drift-weight", type=float)
+    parser.add_argument(
+        "--dpp-selector-diagnosis",
+        action="store_true",
+        help="write and replay the detailed two-stage Selector JSONL artifact",
+    )
     parser.add_argument(
         "--dpp-selection-mode",
         choices=("normal", "forced_stock_plan"),
@@ -623,26 +635,18 @@ def main() -> int:
             "DPP diagnostic iteration logging requires --policy dpp"
         )
     if args.policy != "dpp" and (
-        args.dpp_ttft_drift_weight is not None
-        or args.dpp_selection_mode != "normal"
+        args.dpp_selection_mode != "normal" or args.dpp_selector_diagnosis
     ):
-        raise ActiveConfigError("DPP weight/selection overrides require --policy dpp")
-    if args.dpp_ttft_drift_weight is not None and (
-        not math.isfinite(args.dpp_ttft_drift_weight)
-        or args.dpp_ttft_drift_weight <= 0
+        raise ActiveConfigError("DPP selection/diagnosis requires --policy dpp")
+    if args.policy == "dpp" and args.dpp_selection_mode != "normal" and (
+        comparison_scope != "development_nonformal"
     ):
-        raise ActiveConfigError("DPP TTFT drift weight must be finite and positive")
-    if args.policy == "dpp" and (
-        args.dpp_ttft_drift_weight is not None
-        or args.dpp_selection_mode != "normal"
-    ) and comparison_scope != "development_nonformal":
-        raise ActiveConfigError("DPP weight/selection overrides are development-only")
-    resolved_weight = None
-    if args.policy == "dpp":
-        resolved_weight = (
-            args.dpp_ttft_drift_weight
-            if args.dpp_ttft_drift_weight is not None
-            else load_dpp_settings(runtime).ttft_drift_weight
+        raise ActiveConfigError("DPP selection override is development-only")
+    if args.dpp_selector_diagnosis and args.dpp_selection_mode != "normal":
+        raise ActiveConfigError("Selector diagnosis requires normal selection mode")
+    if "DPP_TTFT_DRIFT_WEIGHT" in os.environ:
+        raise ActiveConfigError(
+            "DPP_TTFT_DRIFT_WEIGHT is obsolete for two-stage DPP"
         )
     command_builder = (
         build_dpp_server_command if args.policy == "dpp" else build_stock_server_command
@@ -660,8 +664,8 @@ def main() -> int:
         diagnostic_iteration_log=args.dpp_diagnostic_iteration_log,
         campaign_id=args.campaign_id,
         comparison_scope=comparison_scope,
-        dpp_ttft_drift_weight=resolved_weight,
         dpp_selection_mode=args.dpp_selection_mode,
+        dpp_selector_diagnosis=args.dpp_selector_diagnosis,
     )
     execution_scope = resolve_execution_scope(
         policy=args.policy,
@@ -676,9 +680,12 @@ def main() -> int:
         preview["runner_env_overrides"][DPP_SELECTION_MODE_ENV] = (
             args.dpp_selection_mode
         )
-        if args.dpp_ttft_drift_weight is not None:
-            preview["runner_env_overrides"][DPP_TTFT_DRIFT_WEIGHT_ENV] = str(
-                resolved_weight
+        preview["runner_env_overrides"][DPP_SELECTOR_DIAGNOSIS_ENV] = (
+            "1" if args.dpp_selector_diagnosis else "0"
+        )
+        if args.dpp_selector_diagnosis:
+            preview["runner_env_overrides"][DPP_SELECTOR_DIAGNOSIS_PATH_ENV] = str(
+                output_dir / "selector_diagnosis.jsonl"
             )
     if args.dry_run:
         print(json.dumps(preview, ensure_ascii=False, indent=2, sort_keys=True))
@@ -691,8 +698,9 @@ def main() -> int:
     output_dir.mkdir(parents=True)
 
     environment = os.environ.copy()
-    environment.pop(DPP_TTFT_DRIFT_WEIGHT_ENV, None)
     environment.pop(DPP_SELECTION_MODE_ENV, None)
+    environment.pop(DPP_SELECTOR_DIAGNOSIS_ENV, None)
+    environment.pop(DPP_SELECTOR_DIAGNOSIS_PATH_ENV, None)
     environment.update(dict(runtime.required_env))
     environment["PATH"] = f"{runtime.python.parent}:{environment.get('PATH', '')}"
     environment[DPP_DIAGNOSTIC_ITERATION_LOG_ENV] = (
@@ -704,8 +712,13 @@ def main() -> int:
             output_dir / "dpp_diagnostic_aggregate.json"
         )
         environment[DPP_SELECTION_MODE_ENV] = args.dpp_selection_mode
-        if args.dpp_ttft_drift_weight is not None:
-            environment[DPP_TTFT_DRIFT_WEIGHT_ENV] = str(resolved_weight)
+        environment[DPP_SELECTOR_DIAGNOSIS_ENV] = (
+            "1" if args.dpp_selector_diagnosis else "0"
+        )
+        if args.dpp_selector_diagnosis:
+            environment[DPP_SELECTOR_DIAGNOSIS_PATH_ENV] = str(
+                output_dir / "selector_diagnosis.jsonl"
+            )
     manifest: dict[str, Any] = {
         "schema_version": 2,
         "kind": "qwen3_14b_scheduler_natural_output",
@@ -727,6 +740,7 @@ def main() -> int:
     _atomic_json(manifest_path_out, manifest)
 
     process: subprocess.Popen[str] | None = None
+    run_error: Exception | None = None
     startup_log = output_dir / "startup.log"
     try:
         with startup_log.open("w", encoding="utf-8") as log_stream:
@@ -757,7 +771,7 @@ def main() -> int:
     except Exception as error:
         manifest["status"] = "failed"
         manifest["error"] = f"{type(error).__name__}: {error}"
-        raise
+        run_error = error
     finally:
         if process is not None and process.poll() is None:
             process.terminate()
@@ -766,10 +780,47 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=10)
+        if args.dpp_selector_diagnosis:
+            diagnosis_path = output_dir / "selector_diagnosis.jsonl"
+            replay_path = output_dir / "selector_diagnosis_replay.json"
+            try:
+                replay_summary = replay_file(diagnosis_path)
+                _atomic_json(replay_path, replay_summary)
+                manifest["selector_diagnosis_sha256"] = sha256_file(diagnosis_path)
+                manifest["selector_diagnosis_replay_sha256"] = sha256_file(replay_path)
+                manifest["selector_diagnosis_replay"] = replay_summary
+                mismatches = sum(
+                    value
+                    for key, value in replay_summary.items()
+                    if key.endswith("_mismatch")
+                )
+                if mismatches:
+                    raise RuntimeError(
+                        f"Selector diagnosis replay found {mismatches} mismatches"
+                    )
+                manifest["selector_diagnosis_valid"] = True
+            except Exception as diagnosis_error:
+                manifest["status"] = "failed"
+                manifest["selector_diagnosis_valid"] = False
+                manifest["selector_diagnosis_replay_error"] = (
+                    f"{type(diagnosis_error).__name__}: {diagnosis_error}"
+                )
+                if diagnosis_path.exists():
+                    manifest["selector_diagnosis_sha256"] = sha256_file(
+                        diagnosis_path
+                    )
+                if run_error is None:
+                    manifest["error"] = manifest[
+                        "selector_diagnosis_replay_error"
+                    ]
+                    run_error = diagnosis_error
         manifest["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
         if startup_log.exists():
             manifest["startup_log_sha256"] = sha256_file(startup_log)
         _atomic_json(manifest_path_out, manifest)
+
+    if run_error is not None:
+        raise run_error
 
     print(json.dumps(manifest["summary"], ensure_ascii=False, indent=2, sort_keys=True))
     print(f"Wrote append-only run: {output_dir}")

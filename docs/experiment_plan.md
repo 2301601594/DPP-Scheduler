@@ -34,12 +34,11 @@ Safe-Set, and DPP values are versioned. The remaining formal-gate inputs are a
 Recovery-age rule and measured replacements for the explicitly
 integration-only G4/DPP values if they are to support formal benchmark claims.
 
-The active non-formal engineering comparison now uses fixed Prefill fractions
-plus a Stock-like BatchPlan. A planned nine-run matrix at QPS 0.25, seed 1001,
-and 150 requests compares one native Stock run, one forced-Stock-plan DPP run,
-and seven TTFT drift weights. It shares one length-blind trace and one Stock
-baseline. No result exists yet, no weight is selected, and this work does not
-complete a gate or become formal evidence.
+The active non-formal implementation uses fixed Prefill fractions plus a
+Stock-like BatchPlan and the two-stage TBT-constrained TTFT Selector. The
+unexecuted nine-run TTFT weight grid is retired without selecting a weight.
+The temporary TBT allowance is `delta_D=0.020s`; it is user-directed,
+non-formal, and does not complete a gate or establish a Scheduler claim.
 
 ## Gate sequence
 
@@ -130,14 +129,13 @@ physical/Predictor-feasible candidate reaches DPP; the legacy Top-K field is
 inactive. Keep the independent Fallback and liveness/preemption/empty-Idle
 paths deterministic and audited.
 
-For end-to-end Scheduler integration only, the active config provisionally
-uses `H=8` Decode iterations and `R0=64` KV blocks. The legacy `Top-K=3` field
-is retained only for schema compatibility and is inactive. These are
-design-derived scaffolding values: 16-token KV blocks and at most one Decode
-token per request make eight iterations half a block period, while 64 reserve
-blocks provide one extra block per maximum active sequence and consume about
-0.21% of the observed 30,149-block capacity. They are not a measured G4
-freeze, do not make G4 complete, and are ineligible for formal DPP results.
+For the current development-only diagnostic, the active config temporarily
+uses `H=0` Decode iterations and `R0=0` KV blocks. This disables forward
+Rolling-KV and fixed reserve margins while retaining the current projected-KV
+hard check. The setting is user-directed, does not supersede the earlier
+conservative integration rationale, does not make G4 complete, and is
+ineligible for formal DPP results. The legacy `Top-K=3` field is retained only
+for schema compatibility and is inactive.
 Fallback integration provisionally uses a 6-token minimum Prefill chunk, equal
 to the frozen Prefill-only Predictor support-domain lower bound for total
 scheduled Prefill tokens. A completion chunk may be smaller, but it must still
@@ -160,16 +158,13 @@ The live obligation ledger is implemented before the DPP score: request
 arrival creates TTFT, an actual locked-vLLM `EngineCoreOutput` token settles
 TTFT/TBT, a nonterminal token creates the next TBT deadline, and a terminal
 event creates none. Snapshot now carries these obligations and Recovery state.
-The normalized DPP Selector and actual-feedback `Q^P/Z^F/Z^D` updates are now
-implemented and wired into the live modular Scheduler. For integration,
-`epsilon^F=epsilon^D=0.05` is frozen from the retained Stock miss ratios,
-token terms are normalized by `C_tok=2048`, obligation terms by `C_seq=64`,
-and `weight_v=0.0` disables the obligation-level utility during this integration
-repair. The freeze is versioned and runtime hash-checked but explicitly ineligible
-for a formal benchmark parameter-optimality claim. Remote model-free
-tests establish the deterministic score, ties, one-time feedback, and live
-factory wiring; a real model integration run remains required before G6 can be
-claimed complete.
+The former combined Prefill/Decode drift Selector is superseded by the
+two-stage design: active TBT obligation slack filters candidate duration, then
+fixed-reference TTFT drift rate selects the winner. Decode service debt remains
+available for actual-feedback diagnostics but no longer participates in
+selection. The temporary 20 ms allowance and replayable Diagnosis remain
+development-only; remote model-free tests and a real-model integration run are
+still required before G5/G6 can be claimed complete.
 
 ### G7: Evaluation
 

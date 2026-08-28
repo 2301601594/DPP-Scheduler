@@ -362,7 +362,7 @@ class PredictorSettings:
 
 @dataclass(frozen=True)
 class DPPSettings:
-    """Request-level service-deficit v2 scoring settings."""
+    """Two-stage TBT-constrained TTFT-DPP settings."""
 
     prefill_reference_concurrency: int
     decode_reference_concurrency: int
@@ -370,10 +370,12 @@ class DPPSettings:
     reference_parameter_status: str = "provisional_pending_stock_profiling"
     score_rel_tol: float = 1e-9
     score_abs_tol: float = 1e-12
-    algorithm: str = "request_service_deficit_v2"
+    algorithm: str = "two_stage_tbt_ttft_v1"
     reference_artifact_path: str | None = None
     reference_artifact_sha256: str | None = None
-    ttft_drift_weight: float = 1.0
+    tbt_delta_seconds: float = 0.020
+    diagnosis_enabled_default: bool = False
+    diagnosis_schema_version: int = 1
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -384,8 +386,8 @@ class DPPSettings:
                 raise ValueError(f"{label} must be a positive integer")
         if not math.isfinite(self.maximum_numeric) or self.maximum_numeric <= 0:
             raise ValueError("maximum_numeric must be finite and positive")
-        if self.algorithm != "request_service_deficit_v2":
-            raise ValueError("DPP algorithm must be request_service_deficit_v2")
+        if self.algorithm != "two_stage_tbt_ttft_v1":
+            raise ValueError("DPP algorithm must be two_stage_tbt_ttft_v1")
         if self.reference_parameter_status not in {
             "provisional_pending_stock_profiling",
             "frozen_from_stock_positive_frame_p50",
@@ -403,14 +405,18 @@ class DPPSettings:
             raise ValueError("frozen reference artifact path/hash is incomplete")
         if self.score_rel_tol != 1e-9 or self.score_abs_tol != 1e-12:
             raise ValueError("DPP score tie tolerance is fixed")
-        weight = self.ttft_drift_weight
+        delta = self.tbt_delta_seconds
         if (
-            isinstance(weight, bool)
-            or not isinstance(weight, (int, float))
-            or not math.isfinite(weight)
-            or weight <= 0
+            isinstance(delta, bool)
+            or not isinstance(delta, (int, float))
+            or not math.isfinite(delta)
+            or delta < 0
         ):
-            raise ValueError("ttft_drift_weight must be finite and positive")
+            raise ValueError("tbt_delta_seconds must be finite and non-negative")
+        if not isinstance(self.diagnosis_enabled_default, bool):
+            raise ValueError("diagnosis_enabled_default must be boolean")
+        if self.diagnosis_schema_version != 1:
+            raise ValueError("DPP Selector diagnosis schema version must be 1")
 
     @property
     def live_v2_ready(self) -> bool:
@@ -433,18 +439,39 @@ class DPPSettings:
         reference = value.get("reference_concurrency")
         ranges = value.get("score_numeric_ranges")
         tolerance = value.get("score_tie_tolerance")
+        tbt_stage = value.get("tbt_stage")
+        diagnosis = value.get("diagnosis")
         if not isinstance(reference, Mapping):
             raise ValueError("dpp.reference_concurrency must be a mapping")
         if not isinstance(ranges, Mapping) or not isinstance(tolerance, Mapping):
             raise ValueError("DPP numeric range/tolerance must be mappings")
+        if not isinstance(tbt_stage, Mapping):
+            raise ValueError("dpp.tbt_stage must be a mapping")
+        if not isinstance(diagnosis, Mapping):
+            raise ValueError("dpp.diagnosis must be a mapping")
+        obsolete = {"ttft_drift_weight", "development_override_env"}.intersection(
+            value
+        )
+        if obsolete:
+            raise ValueError(
+                "obsolete weighted-DPP fields are no longer accepted: "
+                + ", ".join(sorted(obsolete))
+            )
         if reference.get("statistic") != "p50_positive_frames":
             raise ValueError("reference concurrency statistic mismatch")
         if tuple(value.get("tie_break", ())) != (
-            "smaller_effective_duration",
-            "smaller_prefill_budget",
-            "smaller_plan_id",
+            "ttft_score_desc",
+            "completed_prefill_count_desc",
+            "prefill_progress_desc",
+            "effective_duration_asc",
+            "prefill_budget_asc",
+            "plan_id_asc",
         ):
-            raise ValueError("DPP v2 tie-break contract mismatch")
+            raise ValueError("two-stage DPP tie-break contract mismatch")
+        if tbt_stage.get("empty_policy") != "minimum_effective_duration":
+            raise ValueError("DPP TBT empty policy mismatch")
+        if value.get("score") != "negative_ttft_lyapunov_drift_per_effective_second":
+            raise ValueError("two-stage DPP score contract mismatch")
         return cls(
             prefill_reference_concurrency=reference.get("prefill"),
             decode_reference_concurrency=reference.get("decode"),
@@ -455,5 +482,7 @@ class DPPSettings:
             algorithm=str(value.get("algorithm", "")),
             reference_artifact_path=reference.get("artifact_path"),
             reference_artifact_sha256=reference.get("artifact_sha256"),
-            ttft_drift_weight=float(value.get("ttft_drift_weight", 1.0)),
+            tbt_delta_seconds=float(tbt_stage.get("delta_seconds")),
+            diagnosis_enabled_default=diagnosis.get("enabled"),
+            diagnosis_schema_version=diagnosis.get("schema_version"),
         )

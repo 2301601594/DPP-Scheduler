@@ -22,6 +22,7 @@ Read only the documents relevant to the task:
 | --- | --- |
 | Baseline Scheduler scope, architecture, public contracts, algorithms, and acceptance criteria | [`docs/Qwen3-14B-DGX-Spark-Modular-DPP-Scheduler.md`](docs/Qwen3-14B-DGX-Spark-Modular-DPP-Scheduler.md) |
 | Request-level Service-Deficit DPP v2 changes, formulas, implementation phases, and tests | [`docs/Request-level-Service-Deficit-DPP-v2-Agent-Modification-Plan.md`](docs/Request-level-Service-Deficit-DPP-v2-Agent-Modification-Plan.md) |
+| Current two-stage TBT-constrained TTFT Selector, diagnosis, replay, and tests | [`docs/Two-Stage-TBT-Constrained-TTFT-DPP-Selector.md`](docs/Two-Stage-TBT-Constrained-TTFT-DPP-Selector.md) |
 | Current Candidate Generator V3 budget search, Prefill allocation policies, and diagnostics | [`docs/Candidate-Generator-V3.md`](docs/Candidate-Generator-V3.md) |
 | Current stage, G0–G7 gates, evidence requirements, and experiment milestones | [`docs/experiment_plan.md`](docs/experiment_plan.md) |
 | Frozen or superseding research decisions and their rationale | [`docs/decisions.md`](docs/decisions.md) |
@@ -31,8 +32,10 @@ Read only the documents relevant to the task:
 | Result namespaces, retention, and cleanup rules | [`results/README.md`](results/README.md) |
 
 The Candidate Generator V3 document takes precedence for that component. The
-v2 modification plan takes precedence over the baseline design only for other
-components it explicitly changes. Use the baseline design for everything else.
+two-stage Selector document takes precedence for Selector, Selector settings,
+diagnosis, replay, and their tests. The v2 modification plan takes precedence
+over the baseline design only for other components it explicitly changes. Use
+the baseline design for everything else.
 Do not infer current status from a design document; use the experiment plan,
 decisions, active configuration, and recorded artifacts.
 
@@ -40,8 +43,9 @@ When instructions conflict, use this order:
 
 1. the user's current explicit request;
 2. reviewed frozen configurations, manifests, and artifacts;
-3. the Candidate Generator V3 contract, then the applicable v2 modification
-   plan, then the unaffected baseline design;
+3. the Candidate Generator V3 contract and two-stage Selector contract for
+   their components, then the applicable v2 modification plan, then the
+   unaffected baseline design;
 4. active decisions and the experiment plan;
 5. this repository-level operating guide; and
 6. external papers or upstream documentation.

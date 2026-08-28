@@ -281,20 +281,19 @@ safe_set:
   parameter_status: provisional_for_scheduler_integration
   formal_benchmark_eligible: false
   provisional_basis: >-
-    Design-derived integration values, not a measured G4 freeze. With a
-    16-token KV block, at most one Decode token per request per iteration,
-    max_num_seqs=64, and 30149 usable blocks, H=8 covers half a block period;
-    R0=64 reserves one additional block per maximum active sequence. The
-    legacy Top-K=3 field is retained for schema compatibility but inactive:
-    SLO risk is metadata and every hard-feasible candidate reaches DPP.
+    User-directed temporary development setting, not a measured G4 freeze.
+    H=0 and R0=0 disable forward Rolling-KV and fixed reserve margins so the
+    Safe-Set rejects KV only when the candidate's current-round projection
+    exceeds capacity. The legacy Top-K=3 field is retained for schema
+    compatibility but inactive: SLO risk is metadata and every
+    hard-feasible candidate reaches DPP.
   hard_filters:
     - total_token_budget
     - sequence_budget
     - current_projected_kv
-    - rolling_kv
     - prediction_numerical_validity
-  rolling_kv_horizon_iterations: 8
-  reserve_blocks_r0: 64
+  rolling_kv_horizon_iterations: 0
+  reserve_blocks_r0: 0
   full_output_length_reservation: forbidden
   slo_risk_is_hard_filter: false
   top_k_when_all_risky: 3
@@ -311,8 +310,8 @@ fallback:
   must_pass_hard_filters: true
 
 dpp:
-  algorithm: request_service_deficit_v2
-  parameter_status: frozen_for_development_nonformal_validation
+  algorithm: two_stage_tbt_ttft_v1
+  parameter_status: provisional_for_development_nonformal_validation
   formal_benchmark_eligible: false
   reference_concurrency:
     statistic: p50_positive_frames
@@ -330,9 +329,14 @@ dpp:
   effective_duration:
     interpolation: expected_duration
     constrained_extrapolation: conservative_duration
-  score: negative_fixed_reference_lyapunov_drift_per_effective_second
-  ttft_drift_weight: 1.0
-  development_override_env: DPP_TTFT_DRIFT_WEIGHT
+  tbt_stage:
+    delta_seconds: 0.020
+    empty_policy: minimum_effective_duration
+    parameter_status: provisional_user_directed_development_nonformal
+  ttft_stage:
+    use_variable_frame_rate: true
+    completion_resets_debt: true
+  score: negative_ttft_lyapunov_drift_per_effective_second
   score_tie_tolerance:
     relative: 1.0e-9
     absolute: 1.0e-12
@@ -340,15 +344,25 @@ dpp:
     nonnegative_minimum: 0.0
     finite_absolute_maximum: 1.7976931348623157e+308
   tie_break:
-    - smaller_effective_duration
-    - smaller_prefill_budget
-    - smaller_plan_id
+    - ttft_score_desc
+    - completed_prefill_count_desc
+    - prefill_progress_desc
+    - effective_duration_asc
+    - prefill_budget_asc
+    - plan_id_asc
+  diagnosis:
+    enabled: false
+    schema_version: 1
+    enable_env: DPP_SELECTOR_DIAGNOSIS
+    output_path_env: DPP_SELECTOR_DIAGNOSIS_PATH
   updates_from_actual_observation_only: true
   per_request_actual_prefill_feedback_required: true
   per_request_actual_decode_feedback_required: true
   first_token_initializes_tbt_debt_without_tbt_service: true
   ttft_prefill_debt_removed_at_prompt_completion: true
   legacy_compatibility_inactive:
+    decode_reference_concurrency: 36
+    tbt_service_debts_by_request: retained_for_diagnostics_only
     epsilon_ttft: 0.05
     epsilon_tbt: 0.05
     weight_v: 0.0
@@ -419,29 +433,6 @@ experiments:
     run_timeout_seconds: 5400
     campaign_timeout_seconds: 43200
     max_attempts_per_invocation: 2
-  ttft_weight_grid:
-    status: approved_for_nonformal_engineering_comparison
-    formal_benchmark_eligible: false
-    campaign_id: dpp_ttft_weight_grid_qps0p25_n150_seed1001_v1
-    tmux_session: dpp-ttft-grid-qps0p25-n150-s1001-v1
-    smoke_campaign_id: dpp_ttft_weight_grid_smoke_n1_seed1001_v1
-    smoke_tmux_session: dpp-ttft-grid-smoke-n1-s1001-v1
-    smoke_request_count: 1
-    smoke_request_timeout_seconds: 1200
-    smoke_run_timeout_seconds: 1800
-    smoke_campaign_timeout_seconds: 5400
-    offered_load_requests_per_second: 0.25
-    trace_seed: 1001
-    request_count_per_run: 150
-    ttft_drift_weights: [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
-    policies: [stock, dpp_forced_stock_plan, dpp_weight_grid]
-    shared_stock_run: true
-    performance_instrumentation: false
-    request_timeout_seconds: 3600
-    run_timeout_seconds: 5400
-    campaign_timeout_seconds: 43200
-    max_attempts_per_invocation: 2
-
 validity:
   selected_plan_must_equal_executed_plan: true
   failed_requests_max: null
@@ -460,9 +451,10 @@ scheduler_diagnostics:
   performance_logging_enable_env: DPP_DIAGNOSTIC_ITERATION_LOG
   source: >-
     bounded_records matches dpp_scheduler.observer.InMemoryObserver.max_records;
-    watchdog iterations match the current rolling_kv_horizon_iterations=8.
-    Performance diagnostics remain disabled by default and are enabled only by
-    the existing DPP_DIAGNOSTIC_ITERATION_LOG environment switch.
+    the watchdog remains an independent eight-iteration diagnostic guard and
+    is not derived from the temporarily disabled Rolling-KV horizon.
+    Performance diagnostics remain disabled by default and are enabled only
+    by the existing DPP_DIAGNOSTIC_ITERATION_LOG environment switch.
 
 input_isolation:
   active_result_namespace: results/raw/qwen3_14b_dgx_spark

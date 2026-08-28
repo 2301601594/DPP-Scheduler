@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import math
 import unittest
 
@@ -9,17 +8,12 @@ from benchmarks.qwen3_runtime import (
     REPOSITORY_ROOT,
     load_active_runtime,
     load_dpp_settings,
-    load_predictor_settings,
-)
-from dpp_scheduler.candidate_generator import (
-    build_stock_plan,
-    project_kv_blocks,
-    project_sequence_count,
 )
 from dpp_scheduler.contracts import (
     BatchPlan,
     ControlState,
     DecodeRequest,
+    Obligation,
     Prediction,
     PrefillRequest,
     SafeCandidate,
@@ -31,20 +25,16 @@ from dpp_scheduler.state_store import DuplicateLedgerEvent, InMemoryStateStore
 from dpp_scheduler.vllm_adapter import (
     DPP_SELECTION_MODE_ENV,
     DPP_TTFT_DRIFT_WEIGHT_ENV,
-    get_modular_scheduler_class,
-    materialize_forced_stock_plan,
     resolve_dpp_runtime_overrides,
 )
 
 
-def settings(
-    *, prefill_ref: int = 1, decode_ref: int = 1, ttft_weight: float = 1.0
-) -> DPPSettings:
+def settings(*, prefill_ref: int = 1, delta: float = 0.020) -> DPPSettings:
     return DPPSettings(
         prefill_ref,
-        decode_ref,
+        1,
         float.fromhex("0x1.fffffffffffffp+1023"),
-        ttft_drift_weight=ttft_weight,
+        tbt_delta_seconds=delta,
     )
 
 
@@ -52,15 +42,17 @@ def snapshot(
     *,
     prefill: tuple[PrefillRequest, ...] = (),
     decode: tuple[DecodeRequest, ...] = (),
+    obligations: tuple[Obligation, ...] = (),
     frame: int = 1,
+    timestamp: float = 10.0,
 ) -> StateSnapshot:
     return StateSnapshot.create(
         frame_id=frame,
-        timestamp=float(frame),
+        timestamp=timestamp,
         waiting_prefill_requests=prefill,
         active_decode_requests=decode,
         active_ttft_obligations=(),
-        active_tbt_obligations=(),
+        active_tbt_obligations=obligations,
         recovery_requests=(),
         free_kv_blocks=100,
         kv_block_size=16,
@@ -74,26 +66,20 @@ def candidate(
     state: StateSnapshot,
     plan_id: str,
     *,
-    prefill_tokens: int = 0,
+    prefill_items: tuple[tuple[str, int], ...] = (),
     duration: float = 0.1,
     extrapolated: bool = False,
 ) -> SafeCandidate:
-    prefill_items = (
-        ((state.waiting_prefill_requests[0].request_id, prefill_tokens),)
-        if prefill_tokens
-        else ()
-    )
-    decode_items = tuple(item.request_id for item in state.active_decode_requests)
     plan = BatchPlan(
         plan_id=plan_id,
         snapshot_hash=state.snapshot_hash,
         template_id="test",
         prefill_items=prefill_items,
-        decode_items=decode_items,
-        total_prefill_tokens=prefill_tokens,
-        total_decode_tokens=len(decode_items),
-        total_sequences=project_sequence_count(state, prefill_items),
-        projected_kv_blocks=project_kv_blocks(state, prefill_items, decode_items),
+        decode_items=tuple(item.request_id for item in state.active_decode_requests),
+        total_prefill_tokens=sum(tokens for _, tokens in prefill_items),
+        total_decode_tokens=len(state.active_decode_requests),
+        total_sequences=len(state.active_decode_requests) + len(prefill_items),
+        projected_kv_blocks=0,
         mandatory_request_ids=(),
     )
     prediction = Prediction(
@@ -118,114 +104,198 @@ def candidate(
     )
 
 
-class DPPSelectorV2Tests(unittest.TestCase):
-    def test_prefill_pressure_can_choose_larger_prefill(self) -> None:
+def deadline_snapshot(*, slack: float) -> StateSnapshot:
+    deadline = 10.0 + slack
+    return snapshot(
+        decode=(DecodeRequest("d", 0.0, 100, tbt_deadline=deadline),),
+        obligations=(Obligation("tbt:d", "d", "TBT", deadline, 9.0),),
+    )
+
+
+def manual_score(
+    plan_id: str,
+    *,
+    score: float = 0.0,
+    completed: int = 0,
+    progress: float = 0.0,
+    duration: float = 0.1,
+    budget: int = 0,
+) -> DPPScore:
+    return DPPScore(
+        plan_id=plan_id,
+        prefill_drift=-score * duration,
+        effective_duration=duration,
+        score=score,
+        prefill_budget=budget,
+        current_prefill_count=0,
+        current_decode_count=0,
+        prefill_reference_concurrency=1,
+        prefill_progress=progress,
+        completed_prefill_count=completed,
+    )
+
+
+class TwoStageSelectorTests(unittest.TestCase):
+    def test_no_safe_candidate_preserves_controller_fallback_contract(self) -> None:
+        state = snapshot()
+        decision, audit = DPPSelector(settings()).select_with_audit(
+            state, ControlState(state.snapshot_hash), ()
+        )
+        self.assertIsNone(decision.selected_plan)
+        self.assertEqual(decision.reason, "NO_SAFE_DECISION")
+        self.assertEqual(audit.stage1.status, "NO_SAFE_CANDIDATES")
+
+    def test_decode_without_live_obligation_does_not_create_deadline(self) -> None:
+        state = snapshot(decode=(DecodeRequest("d", 0.0, 100),))
+        slow = candidate(state, "slow", duration=0.2)
+        fast = candidate(state, "fast", duration=0.1)
+        decision, audit = DPPSelector(settings()).select_with_audit(
+            state, ControlState(state.snapshot_hash), (slow, fast)
+        )
+        self.assertEqual(audit.stage1.status, "NO_ACTIVE_TBT_OBLIGATION")
+        self.assertEqual(decision.selected_plan, fast.plan)
+
+    def test_tbt_stage_filters_by_inclusive_duration_limit(self) -> None:
+        state = deadline_snapshot(slack=0.15)
+        boundary = candidate(state, "boundary", duration=0.17)
+        long = candidate(state, "long", duration=0.171)
+        decision, audit = DPPSelector(settings()).select_with_audit(
+            state, ControlState(state.snapshot_hash), (long, boundary)
+        )
+        self.assertEqual(audit.stage1.status, "WITHIN_SLACK")
+        self.assertEqual(audit.stage1.eligible_plan_ids, ("boundary",))
+        self.assertEqual(decision.selected_plan, boundary.plan)
+        self.assertEqual(decision.reason, "TWO_STAGE_TBT_TTFT")
+
+    def test_negative_slack_falls_back_to_shortest_safe_candidate(self) -> None:
+        state = deadline_snapshot(slack=-0.05)
+        same_fast_large = candidate(state, "b", duration=0.1)
+        same_fast_small = candidate(state, "a", duration=0.1)
+        slow = candidate(state, "slow", duration=0.2)
+        decision, audit = DPPSelector(settings()).select_with_audit(
+            state,
+            ControlState(state.snapshot_hash),
+            (slow, same_fast_large, same_fast_small),
+        )
+        self.assertEqual(audit.stage1.status, "NO_CANDIDATE_WITHIN_SLACK")
+        self.assertEqual(audit.stage1.fallback_plan_id, "a")
+        self.assertEqual(decision.selected_plan, same_fast_small.plan)
+        self.assertEqual(decision.reason, "TBT_NO_CANDIDATE_MIN_DURATION")
+
+    def test_deadline_and_obligation_must_match_exactly(self) -> None:
         state = snapshot(
-            prefill=(
-                PrefillRequest(
-                    "p", 0.0, 100, 0, ttft_slo_seconds=2.0
-                ),
+            decode=(DecodeRequest("d", 0.0, 100, tbt_deadline=10.2),),
+            obligations=(Obligation("o", "d", "TBT", 10.3, 9.0),),
+        )
+        with self.assertRaisesRegex(ValueError, "deadline/obligation mismatch"):
+            DPPSelector(settings()).select(
+                state,
+                ControlState(state.snapshot_hash),
+                (candidate(state, "p"),),
             )
-        )
-        control = ControlState(state.snapshot_hash, (("p", 5.0),), ())
-        small = candidate(state, "small", duration=0.1)
-        large = candidate(state, "large", prefill_tokens=100, duration=0.5)
-        decision = DPPSelector(settings()).select(state, control, (small, large))
-        self.assertEqual(decision.selected_plan, large.plan)
 
-    def test_decode_pressure_prefers_shorter_iteration(self) -> None:
+    def test_duplicate_or_settled_tbt_obligation_fails_closed(self) -> None:
         state = snapshot(
-            prefill=(PrefillRequest("p", 0.0, 100, 0),),
-            decode=(DecodeRequest("d", 0.0, 100, tbt_slo_seconds=0.25),),
+            decode=(DecodeRequest("d", 0.0, 100, tbt_deadline=10.2),),
+            obligations=(Obligation("o", "d", "TBT", 10.2, 9.0, settled=True),),
         )
-        control = ControlState(state.snapshot_hash, (("p", 5.0),), (("d", 5.0),))
-        short = candidate(state, "short", duration=0.1)
-        long = candidate(state, "long", prefill_tokens=100, duration=0.5)
-        decision = DPPSelector(settings()).select(state, control, (long, short))
-        self.assertEqual(decision.selected_plan, short.plan)
+        with self.assertRaisesRegex(ValueError, "must not be settled"):
+            DPPSelector(settings()).select(
+                state, ControlState(state.snapshot_hash), (candidate(state, "p"),)
+            )
 
-    def test_fixed_reference_preserves_decode_overload_signal(self) -> None:
-        one = snapshot(
-            decode=(DecodeRequest("d0", 0.0, 100),),
-        )
-        two = snapshot(
-            decode=(DecodeRequest("d0", 0.0, 100), DecodeRequest("d1", 0.0, 100)),
-            frame=2,
-        )
-        selector = DPPSelector(settings(decode_ref=1))
-        one_score = selector.score_candidate(
-            one,
-            ControlState(one.snapshot_hash, (), (("d0", 1.0),)),
-            candidate(one, "one", duration=0.5),
-        )
-        two_score = selector.score_candidate(
-            two,
-            ControlState(two.snapshot_hash, (), (("d0", 1.0), ("d1", 1.0))),
-            candidate(two, "two", duration=0.5),
-        )
-        self.assertAlmostEqual(two_score.decode_drift, 2 * one_score.decode_drift)
-
-    def test_extrapolation_uses_conservative_effective_duration(self) -> None:
+    def test_extrapolation_uses_conservative_duration_in_both_stages(self) -> None:
         state = snapshot(prefill=(PrefillRequest("p", 0.0, 100, 0),))
         item = candidate(state, "ood", extrapolated=True, duration=0.1)
         score = DPPSelector(settings()).score_candidate(
-            state, ControlState(state.snapshot_hash, (("p", 0.0),), ()), item
+            state, ControlState(state.snapshot_hash, (("p", 0.0),)), item
         )
         self.assertAlmostEqual(score.effective_duration, 0.3)
 
-    def test_ttft_weight_scales_only_prefill_drift(self) -> None:
+    def test_completed_prefill_resets_predicted_debt(self) -> None:
+        state = snapshot(prefill=(PrefillRequest("p", 0.0, 100, 40),))
+        item = candidate(state, "finish", prefill_items=(("p", 60),), duration=0.2)
+        score = DPPSelector(settings()).score_candidate(
+            state,
+            ControlState(state.snapshot_hash, (("p", 2.0),)),
+            item,
+            capture_request_details=True,
+        )
+        detail = score.request_results[0]
+        self.assertTrue(detail.completion_this_frame)
+        self.assertEqual(detail.predicted_next_debt, 0.0)
+        self.assertEqual(detail.drift_contribution, -4.0)
+
+    def test_unfinished_prefill_uses_request_slo_and_prompt_normalization(self) -> None:
         state = snapshot(
-            prefill=(PrefillRequest("p", 0.0, 100, 0),),
-            decode=(DecodeRequest("d", 0.0, 100),),
+            prefill=(PrefillRequest("p", 0.0, 200, 40, ttft_slo_seconds=2.0),)
         )
-        control = ControlState(state.snapshot_hash, (("p", 1.0),), (("d", 1.0),))
-        item = candidate(state, "weighted", duration=0.2)
-        base = DPPSelector(settings(ttft_weight=1.0)).score_candidate(
-            state, control, item
+        item = candidate(state, "partial", prefill_items=(("p", 20),), duration=0.2)
+        score = DPPSelector(settings()).score_candidate(
+            state,
+            ControlState(state.snapshot_hash, (("p", 0.5),)),
+            item,
+            capture_request_details=True,
         )
-        weighted = DPPSelector(settings(ttft_weight=4.0)).score_candidate(
-            state, control, item
+        self.assertAlmostEqual(score.request_results[0].predicted_next_debt, 0.5)
+
+    def test_prefill_pressure_can_choose_completion(self) -> None:
+        state = snapshot(prefill=(PrefillRequest("p", 0.0, 100, 0),))
+        control = ControlState(state.snapshot_hash, (("p", 5.0),))
+        zero = candidate(state, "zero", duration=0.1)
+        finish = candidate(
+            state, "finish", prefill_items=(("p", 100),), duration=0.5
         )
-        self.assertEqual(weighted.prefill_drift, base.prefill_drift)
-        self.assertEqual(weighted.decode_drift, base.decode_drift)
-        self.assertAlmostEqual(
-            weighted.weighted_prefill_drift, 4.0 * base.prefill_drift
-        )
-        self.assertAlmostEqual(
-            weighted.total_drift,
-            4.0 * base.prefill_drift + base.decode_drift,
+        self.assertEqual(
+            DPPSelector(settings()).select(state, control, (zero, finish)).selected_plan,
+            finish.plan,
         )
 
-    def test_lambda_one_matches_unweighted_total(self) -> None:
-        state = snapshot(
-            prefill=(PrefillRequest("p", 0.0, 100, 0),),
-            decode=(DecodeRequest("d", 0.0, 100),),
+    def test_rank_groups_isclose_then_applies_complete_tie_break(self) -> None:
+        selector = DPPSelector(settings())
+        scores = (
+            manual_score("duration", score=4e-13, duration=0.05),
+            manual_score("progress", score=0.0, progress=0.8),
+            manual_score("complete", score=2e-13, completed=1),
         )
-        control = ControlState(state.snapshot_hash, (("p", 1.0),), (("d", 1.0),))
-        score = DPPSelector(settings(ttft_weight=1.0)).score_candidate(
-            state, control, candidate(state, "lambda-one", duration=0.2)
-        )
-        self.assertEqual(score.normalized_ttft_drift, score.prefill_drift)
-        self.assertEqual(score.normalized_tbt_drift, score.decode_drift)
-        self.assertAlmostEqual(
-            score.total_drift, score.prefill_drift + score.decode_drift
-        )
+        ranked, tie = selector._rank_scores(scores)
+        self.assertEqual([score.plan_id for score in ranked], ["complete", "progress", "duration"])
+        self.assertEqual(tie, ("complete", "progress", "duration"))
 
-    def test_invalid_ttft_weight_fails_closed(self) -> None:
+    def test_tie_break_finishes_with_budget_then_plan_id(self) -> None:
+        selector = DPPSelector(settings())
+        scores = (
+            manual_score("b", budget=1),
+            manual_score("z", budget=0),
+            manual_score("a", budget=1),
+        )
+        ranked, _ = selector._rank_scores(scores)
+        self.assertEqual([score.plan_id for score in ranked], ["z", "a", "b"])
+
+    def test_invalid_duration_and_debt_fail_closed(self) -> None:
+        state = snapshot(prefill=(PrefillRequest("p", 0.0, 10, 0),))
+        bad = candidate(state, "bad", duration=math.nan)
         with self.assertRaises(ValueError):
-            settings(ttft_weight=0.0)
+            DPPSelector(settings()).select(
+                state, ControlState(state.snapshot_hash, (("p", 0.0),)), (bad,)
+            )
+        with self.assertRaises(ValueError):
+            DPPSelector(settings()).select(
+                state,
+                ControlState(state.snapshot_hash, (("p", math.inf),)),
+                (candidate(state, "ok"),),
+            )
 
-    def test_development_runtime_overrides(self) -> None:
+
+class RuntimeOverrideTests(unittest.TestCase):
+    def test_forced_stock_remains_development_only(self) -> None:
         resolved, mode = resolve_dpp_runtime_overrides(
             settings(),
             execution_scope="development_nonformal",
-            environment={
-                DPP_SELECTION_MODE_ENV: "forced_stock_plan",
-                DPP_TTFT_DRIFT_WEIGHT_ENV: "0.125",
-            },
+            environment={DPP_SELECTION_MODE_ENV: "forced_stock_plan"},
         )
+        self.assertIs(resolved.__class__, DPPSettings)
         self.assertEqual(mode, "forced_stock_plan")
-        self.assertEqual(resolved.ttft_drift_weight, 0.125)
         with self.assertRaises(ValueError):
             resolve_dpp_runtime_overrides(
                 settings(),
@@ -233,246 +303,20 @@ class DPPSelectorV2Tests(unittest.TestCase):
                 environment={DPP_SELECTION_MODE_ENV: "forced_stock_plan"},
             )
 
-    def test_forced_stock_materializes_the_builder_plan_without_selection(self) -> None:
-        state = snapshot(decode=(DecodeRequest("d", 0.0, 15),))
-        built: list[BatchPlan] = []
-        materialized: list[BatchPlan] = []
-
-        def builder(value: StateSnapshot) -> BatchPlan:
-            plan = build_stock_plan(value)
-            built.append(plan)
-            return plan
-
-        def materialize(plan: BatchPlan) -> object:
-            materialized.append(plan)
-            return object()
-
-        plan, decision, _ = materialize_forced_stock_plan(
-            state, builder, materialize
-        )
-        self.assertEqual(built, [plan])
-        self.assertEqual(materialized, [plan])
-        self.assertIs(decision.selected_plan, plan)
-        self.assertEqual(decision.reason, "FORCED_STOCK_PLAN")
-
-    def test_forced_stock_fails_closed_on_nonempty_zero_plan(self) -> None:
-        state = snapshot(decode=(DecodeRequest("d", 0.0, 15),))
-        zero = BatchPlan(
-            plan_id="zero",
-            snapshot_hash=state.snapshot_hash,
-            template_id="STOCK",
-            prefill_items=(),
-            decode_items=(),
-            total_prefill_tokens=0,
-            total_decode_tokens=0,
-            total_sequences=1,
-            projected_kv_blocks=0,
-            mandatory_request_ids=(),
-        )
-        with self.assertRaises(RuntimeError):
-            materialize_forced_stock_plan(state, lambda _: zero, lambda _: object())
-
-    def test_isclose_tie_breaks_duration_budget_then_id(self) -> None:
-        state = snapshot()
-        control = ControlState(state.snapshot_hash)
-        selector = DPPSelector(settings())
-        slower = candidate(state, "a", duration=0.2)
-        faster = candidate(state, "z", duration=0.1)
-        self.assertEqual(
-            selector.select(state, control, (slower, faster)).selected_plan,
-            faster.plan,
-        )
-
-    def test_invalid_duration_fails_closed(self) -> None:
-        state = snapshot()
-        bad = candidate(state, "bad")
-        bad = SafeCandidate(
-            **{
-                **bad.__dict__,
-                "prediction": Prediction(
-                    **{**bad.prediction.__dict__, "expected_duration": math.nan}
-                ),
-            }
-        )
-        with self.assertRaises(ValueError):
-            DPPSelector(settings()).select(
-                state, ControlState(state.snapshot_hash), (bad,)
+    def test_retired_weight_override_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "obsolete"):
+            resolve_dpp_runtime_overrides(
+                settings(),
+                execution_scope="development_nonformal",
+                environment={DPP_TTFT_DRIFT_WEIGHT_ENV: "1"},
             )
-
-
-def multi_candidate(
-    state: StateSnapshot,
-    plan_id: str,
-    prefill_items: tuple[tuple[str, int], ...],
-    *,
-    duration: float = 0.1,
-) -> SafeCandidate:
-    decode_items = tuple(item.request_id for item in state.active_decode_requests)
-    plan = BatchPlan(
-        plan_id=plan_id,
-        snapshot_hash=state.snapshot_hash,
-        template_id="test",
-        prefill_items=prefill_items,
-        decode_items=decode_items,
-        total_prefill_tokens=sum(tokens for _, tokens in prefill_items),
-        total_decode_tokens=len(decode_items),
-        total_sequences=project_sequence_count(state, prefill_items),
-        projected_kv_blocks=project_kv_blocks(state, prefill_items, decode_items),
-        mandatory_request_ids=(),
-    )
-    prediction = Prediction(
-        plan_id=plan_id,
-        snapshot_hash=state.snapshot_hash,
-        expected_duration=duration,
-        conservative_duration=duration + 0.2,
-        in_support=True,
-        ood_distance=0.0,
-        prediction_mode="INTERPOLATION",
-        predictor_version="test",
-    )
-    return SafeCandidate(
-        snapshot_hash=state.snapshot_hash,
-        plan=plan,
-        prediction=prediction,
-        predicted_violation_count=0,
-        predicted_total_lateness_seconds=0.0,
-        conservative_deadline_margin_seconds=None,
-    )
-
-
-def manual_score(
-    plan_id: str,
-    *,
-    score: float,
-    prefill_progress: float,
-    duration: float = 0.1,
-    prefill_budget: int = 0,
-) -> DPPScore:
-    return DPPScore(
-        plan_id=plan_id,
-        ttft_drift_weight=1.0,
-        prefill_drift=0.0,
-        weighted_prefill_drift=0.0,
-        decode_drift=0.0,
-        total_drift=-score * duration,
-        effective_duration=duration,
-        score=score,
-        prefill_budget=prefill_budget,
-        current_prefill_count=0,
-        current_decode_count=0,
-        prefill_reference_concurrency=1,
-        decode_reference_concurrency=1,
-        prefill_progress=prefill_progress,
-    )
-
-
-class ProgressTieBreakTests(unittest.TestCase):
-    """T1 progress-first tie-break semantics (plan Phase B section 11)."""
-
-    def test_case1_identical_score_larger_progress_wins(self) -> None:
-        state = snapshot(
-            prefill=(PrefillRequest("p", 0.0, 100, 0, ttft_slo_seconds=2.0),)
-        )
-        control = ControlState(state.snapshot_hash, (("p", 0.0),), ())
-        p25 = candidate(state, "p25", prefill_tokens=50, duration=0.1)
-        max_plan = candidate(state, "max", prefill_tokens=100, duration=0.1)
-        decision = DPPSelector(settings()).select(state, control, (p25, max_plan))
-        self.assertEqual(decision.selected_plan, max_plan.plan)
-
-    def test_case2_isclose_range_score_uses_progress(self) -> None:
-        state = snapshot()
-        selector = DPPSelector(settings())
-        cand_a = candidate(state, "a")
-        cand_b = candidate(state, "b")
-        scored = (
-            (cand_a, manual_score("a", score=0.0, prefill_progress=0.20)),
-            (cand_b, manual_score("b", score=5e-13, prefill_progress=0.50)),
-        )
-        self.assertTrue(math.isclose(0.0, 5e-13, rel_tol=1e-9, abs_tol=1e-12))
-        decision = selector._decision_from_scored(state, scored)
-        self.assertEqual(decision.selected_plan, cand_b.plan)
-
-    def test_case3_clear_score_winner_not_overridden(self) -> None:
-        state = snapshot()
-        selector = DPPSelector(settings())
-        cand_a = candidate(state, "a")
-        cand_b = candidate(state, "b")
-        scored = (
-            (cand_a, manual_score("a", score=0.02, prefill_progress=0.10)),
-            (cand_b, manual_score("b", score=0.01, prefill_progress=0.90)),
-        )
-        self.assertFalse(math.isclose(0.02, 0.01, rel_tol=1e-9, abs_tol=1e-12))
-        decision = selector._decision_from_scored(state, scored)
-        self.assertEqual(decision.selected_plan, cand_a.plan)
-
-    def test_case4_equal_score_and_progress_uses_duration(self) -> None:
-        state = snapshot(
-            prefill=(PrefillRequest("p", 0.0, 100, 0, ttft_slo_seconds=2.0),)
-        )
-        control = ControlState(state.snapshot_hash, (("p", 0.0),), ())
-        slow = candidate(state, "slow", prefill_tokens=50, duration=0.22)
-        fast = candidate(state, "fast", prefill_tokens=50, duration=0.18)
-        decision = DPPSelector(settings()).select(state, control, (slow, fast))
-        self.assertEqual(decision.selected_plan, fast.plan)
-
-    def test_case5_budget_then_plan_id_remain_final_fallbacks(self) -> None:
-        state = snapshot(
-            prefill=(
-                PrefillRequest("r1", 0.0, 100, 0, ttft_slo_seconds=2.0),
-                PrefillRequest("r2", 0.0, 200, 0, ttft_slo_seconds=2.0),
-            )
-        )
-        control = ControlState(
-            state.snapshot_hash, (("r1", 0.0), ("r2", 0.0)), ()
-        )
-        smaller_budget = multi_candidate(state, "plan-a", (("r1", 50),))
-        larger_budget = multi_candidate(state, "plan-b", (("r2", 100),))
-        decision = DPPSelector(settings()).select(
-            state, control, (larger_budget, smaller_budget)
-        )
-        self.assertEqual(decision.selected_plan, smaller_budget.plan)
-
-        same_budget_a = multi_candidate(state, "plan-a", (("r1", 50),))
-        same_budget_b = multi_candidate(state, "plan-b", (("r1", 50),))
-        decision = DPPSelector(settings()).select(
-            state, control, (same_budget_b, same_budget_a)
-        )
-        self.assertEqual(decision.selected_plan, same_budget_a.plan)
-
-    def test_case6_decode_only_keeps_previous_behavior(self) -> None:
-        state = snapshot(decode=(DecodeRequest("d", 0.0, 100, tbt_slo_seconds=0.25),))
-        control = ControlState(state.snapshot_hash, (), (("d", 0.0),))
-        slow = candidate(state, "slow", duration=0.2)
-        fast = candidate(state, "fast", duration=0.1)
-        decision = DPPSelector(settings()).select(state, control, (slow, fast))
-        self.assertEqual(decision.selected_plan, fast.plan)
-
-    def test_case7_clear_winner_survives_large_progress_gap(self) -> None:
-        state = snapshot()
-        selector = DPPSelector(settings())
-        p25 = candidate(state, "p25")
-        max_plan = candidate(state, "max")
-        scored = (
-            (p25, manual_score("p25", score=0.01, prefill_progress=0.2)),
-            (max_plan, manual_score("max", score=-0.05, prefill_progress=1.0)),
-        )
-        decision = selector._decision_from_scored(state, scored)
-        self.assertEqual(decision.selected_plan, p25.plan)
 
 
 class RequestDebtStateTests(unittest.TestCase):
-    def test_prefill_initialization_and_completion_removal(self) -> None:
-        state = snapshot(
-            prefill=(
-                PrefillRequest(
-                    "p", 0.0, 100, 20, ttft_slo_seconds=2.0
-                ),
-            ),
-            frame=2,
-        )
+    def test_prefill_completion_remains_actual_only(self) -> None:
+        state = snapshot(prefill=(PrefillRequest("p", 0.0, 100, 20),), frame=2)
         store = InMemoryStateStore(settings=settings())
-        bound = store.bind_snapshot(state)
-        self.assertAlmostEqual(dict(bound.ttft_service_debts)["p"], 0.8)
+        store.bind_snapshot(state)
         updated = store.update_from_actual(
             previous_snapshot=state,
             actual_duration_seconds=0.2,
@@ -488,42 +332,16 @@ class RequestDebtStateTests(unittest.TestCase):
                 executed_decode_items=(),
             )
 
-    def test_first_token_initializes_then_second_token_services_tbt(self) -> None:
-        first = snapshot(decode=(DecodeRequest("d", 0.0, 100),), frame=1)
-        store = InMemoryStateStore(settings=settings())
-        store.bind_snapshot(first)
-        after_first = store.update_from_actual(
-            previous_snapshot=first,
-            actual_duration_seconds=0.2,
-            executed_prefill_items=(),
-            executed_decode_items=(),
-            initialized_tbt_request_ids=("d",),
-        )
-        self.assertEqual(after_first.tbt_service_debts, (("d", 0.0),))
 
-        second = snapshot(decode=(DecodeRequest("d", 0.0, 101),), frame=2)
-        store.bind_snapshot(second)
-        after_second = store.update_from_actual(
-            previous_snapshot=second,
-            actual_duration_seconds=0.5,
-            executed_prefill_items=(),
-            executed_decode_items=("d",),
-        )
-        self.assertAlmostEqual(dict(after_second.tbt_service_debts)["d"], 1.0)
-
-
-class V2ConfigTests(unittest.TestCase):
-    def test_active_development_config_passes_live_factory_input_gate(self) -> None:
+class TwoStageConfigTests(unittest.TestCase):
+    def test_active_config_loads_two_stage_contract(self) -> None:
         runtime = load_active_runtime(REPOSITORY_ROOT / ACTIVE_CONFIG_RELATIVE)
         dpp = load_dpp_settings(runtime)
-        predictor = load_predictor_settings(runtime)
         self.assertTrue(dpp.live_v2_ready)
-        self.assertTrue(predictor.live_v2_ready)
-        self.assertTrue(predictor.uses_development_default)
-        self.assertEqual(predictor.ood_uncertainty_coefficient, 0.0)
-        source = inspect.getsource(get_modular_scheduler_class)
-        self.assertIn("live v2 is disabled", source)
-        self.assertIn("DPPSelector(dpp_settings)", source)
+        self.assertEqual(dpp.algorithm, "two_stage_tbt_ttft_v1")
+        self.assertEqual(dpp.tbt_delta_seconds, 0.020)
+        self.assertFalse(dpp.diagnosis_enabled_default)
+        self.assertEqual(dpp.diagnosis_schema_version, 1)
 
 
 if __name__ == "__main__":

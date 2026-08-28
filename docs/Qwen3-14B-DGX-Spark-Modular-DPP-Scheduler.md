@@ -540,6 +540,10 @@ Fallback 仍不可执行且 workload 为空
 
 ## 7. DPP Selector
 
+> 本节记录 baseline Selector。当前 Selector 已由
+> `Two-Stage-TBT-Constrained-TTFT-DPP-Selector.md` 取代；Candidate Generator、
+> Predictor、Safe-Set、Fallback 和 actual-only 更新仍按各自当前权威文档执行。
+
 只维护三个控制量：
 
 $$
