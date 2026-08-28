@@ -1,5 +1,10 @@
 # Two-Stage TBT-Constrained TTFT-DPP Selector
 
+> **Superseded:** 当前实现改用
+> `Two-Stage-TBT-Constrained-Prefill-Service-Rate-Selector-V1.md`。本文保留
+> Rate/Absolute TTFT debt Selector 的历史契约和负面研究过程，不再定义当前
+> Selector、配置、Diagnosis、Replay 或测试。
+
 本文档定义当前 DPP Selector 和可重放 Diagnosis 的权威契约。它只取代
 `Request-level-Service-Deficit-DPP-v2-Agent-Modification-Plan.md` 与 baseline
 设计中的 Selector、Selector 配置、Selector 诊断和相应测试；Candidate

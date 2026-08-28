@@ -15,8 +15,8 @@ from dpp_scheduler.settings import DPPSettings
 
 DPP_SELECTOR_DIAGNOSIS_ENV = "DPP_SELECTOR_DIAGNOSIS"
 DPP_SELECTOR_DIAGNOSIS_PATH_ENV = "DPP_SELECTOR_DIAGNOSIS_PATH"
-SELECTOR_DIAGNOSIS_SCHEMA_VERSION = 2
-SUPPORTED_SELECTOR_DIAGNOSIS_SCHEMA_VERSIONS = frozenset({1, 2})
+SELECTOR_DIAGNOSIS_SCHEMA_VERSION = 3
+SUPPORTED_SELECTOR_DIAGNOSIS_SCHEMA_VERSIONS = frozenset({1, 2, 3})
 
 
 def _is_zero_template(template_id: object) -> bool:
@@ -109,10 +109,6 @@ class SelectorDiagnosisWriter:
             raise ValueError("diagnosis Selector audit/Decision mismatch")
         stage1_by_id = {item.plan_id: item for item in audit.stage1.candidates}
         stage2_by_id = {item.plan_id: item for item in audit.stage2_scores}
-        template_by_id = {
-            candidate.plan.plan_id: candidate.plan.template_id
-            for candidate in safe_candidates
-        }
         candidates: list[dict[str, Any]] = []
         for candidate in safe_candidates:
             plan = candidate.plan
@@ -121,20 +117,10 @@ class SelectorDiagnosisWriter:
             stage2 = stage2_by_id.get(plan.plan_id)
             stage2_payload = asdict(stage2) if stage2 is not None else None
             if stage2_payload is not None:
-                stage2_payload.update(
-                    {
-                        "ttft_score_rate_old": stage2.ttft_score_rate_old,
-                        "ttft_score_absolute_new": (
-                            stage2.ttft_score_absolute_new
-                        ),
-                        "rank_rate_old": stage2.rank_rate_old,
-                        "rank_absolute_new": stage2.rank_absolute_new,
-                    }
-                )
                 stage2_payload["tie_break_key"] = {
-                    "completed_prefill_count_desc": stage2.completed_prefill_count,
-                    "prefill_progress_desc": stage2.prefill_progress,
+                    "prefill_service_rate_desc": stage2.prefill_service_rate,
                     "effective_duration_asc": stage2.effective_duration,
+                    "prefill_service_tokens_desc": stage2.prefill_service_tokens,
                     "prefill_budget_asc": stage2.prefill_budget,
                     "plan_id_asc": stage2.plan_id,
                 }
@@ -157,121 +143,46 @@ class SelectorDiagnosisWriter:
                         "prediction_mode": prediction.prediction_mode,
                     },
                     "stage1_tbt": asdict(stage1),
-                    "stage2_ttft": stage2_payload,
+                    "stage2_prefill_service_rate": stage2_payload,
                     "selected": audit.selected_plan_id == plan.plan_id,
                 }
             )
-        zero_candidates = [
-            candidate
-            for candidate in safe_candidates
-            if _is_zero_template(candidate.plan.template_id)
+        backlog_tokens = sum(
+            request.remaining_tokens
+            for request in snapshot.waiting_prefill_requests
+        )
+        eligible_scores = list(audit.stage2_scores)
+        eligible_nonzero = [
+            score for score in eligible_scores if score.prefill_service_tokens > 0
         ]
-        nonzero_candidates = [
-            candidate
-            for candidate in safe_candidates
-            if not _is_zero_template(candidate.plan.template_id)
-        ]
-        zero_score = next(
-            (
-                stage2_by_id[candidate.plan.plan_id]
-                for candidate in zero_candidates
-                if candidate.plan.plan_id in stage2_by_id
-            ),
-            None,
+        selected_score = stage2_by_id.get(audit.selected_plan_id)
+        selected_is_zero = bool(
+            selected_score is not None
+            and selected_score.prefill_service_tokens == 0
         )
-        nonzero_scores = [
-            stage2_by_id[candidate.plan.plan_id]
-            for candidate in nonzero_candidates
-            if candidate.plan.plan_id in stage2_by_id
-        ]
-        best_nonzero = min(
-            nonzero_scores,
-            key=lambda score: score.rank_absolute_new,
-            default=None,
-        )
-        best_nonzero_rate_old = min(
-            nonzero_scores,
-            key=lambda score: score.rank_rate_old,
-            default=None,
-        )
-        rate_winner = min(
-            audit.stage2_scores,
-            key=lambda score: score.rank_rate_old,
-            default=None,
-        )
-        zero_present = bool(zero_candidates)
-        nonzero_present = bool(nonzero_candidates)
-        zero_passed = any(
-            stage1_by_id[candidate.plan.plan_id].passed
-            for candidate in zero_candidates
-        )
-        nonzero_passed = any(
-            stage1_by_id[candidate.plan.plan_id].passed
-            for candidate in nonzero_candidates
-        )
-        old_winner_is_zero = bool(
-            rate_winner is not None
-            and _is_zero_template(template_by_id[rate_winner.plan_id])
-        )
-        new_winner_is_zero = bool(
-            audit.selected_plan_id is not None
-            and _is_zero_template(template_by_id[audit.selected_plan_id])
-        )
-        zero_diagnosis = {
-            "has_prefill_backlog": bool(snapshot.waiting_prefill_requests),
-            "prefill_backlog_depth": len(snapshot.waiting_prefill_requests),
-            "zero_candidate_present": zero_present,
-            "zero_passed_stage1": zero_passed,
-            "zero_selected": new_winner_is_zero,
-            "nonzero_candidate_present": nonzero_present,
-            "nonzero_passed_stage1": nonzero_passed,
-            "best_nonzero_plan_id": (
-                best_nonzero.plan_id if best_nonzero is not None else None
-            ),
-            "best_nonzero_plan_id_rate_old": (
-                best_nonzero_rate_old.plan_id
-                if best_nonzero_rate_old is not None
+        zero_with_eligible_nonzero = bool(selected_is_zero and eligible_nonzero)
+        if zero_with_eligible_nonzero:
+            raise RuntimeError(
+                "Selector diagnosis detected ZERO with eligible Prefill service"
+            )
+        service_rate_diagnosis = {
+            "prefill_backlog_count": len(snapshot.waiting_prefill_requests),
+            "prefill_backlog_tokens": backlog_tokens,
+            "stage1_eligible_candidate_count": len(eligible_scores),
+            "stage1_eligible_nonzero_candidate_count": len(eligible_nonzero),
+            "selected_plan_id": audit.selected_plan_id,
+            "selected_prefill_service_tokens": (
+                selected_score.prefill_service_tokens
+                if selected_score is not None
                 else None
             ),
-            "old_winner_plan_id": (
-                rate_winner.plan_id if rate_winner is not None else None
-            ),
-            "new_winner_plan_id": audit.selected_plan_id,
-            "zero_prefill_drift": (
-                zero_score.prefill_drift if zero_score is not None else None
-            ),
-            "zero_score_old": (
-                zero_score.ttft_score_rate_old if zero_score is not None else None
-            ),
-            "zero_score_new": (
-                zero_score.ttft_score_absolute_new
-                if zero_score is not None
+            "selected_prefill_service_rate": (
+                selected_score.prefill_service_rate
+                if selected_score is not None
                 else None
             ),
-            "best_nonzero_prefill_drift": (
-                best_nonzero.prefill_drift if best_nonzero is not None else None
-            ),
-            "best_nonzero_score_old": (
-                best_nonzero.ttft_score_rate_old
-                if best_nonzero is not None
-                else None
-            ),
-            "best_nonzero_score_new": (
-                best_nonzero.ttft_score_absolute_new
-                if best_nonzero is not None
-                else None
-            ),
-            "all_nonzero_filtered_by_stage1": (
-                nonzero_present and not nonzero_passed
-            ),
-            "old_score_selected_zero_with_nonzero_passed": (
-                nonzero_passed and old_winner_is_zero
-            ),
-            "new_score_selected_zero_with_nonzero_passed": (
-                nonzero_passed and new_winner_is_zero
-            ),
-            "zero_to_nonzero": old_winner_is_zero and not new_winner_is_zero,
-            "nonzero_to_zero": not old_winner_is_zero and new_winner_is_zero,
+            "selected_is_zero": selected_is_zero,
+            "zero_with_eligible_nonzero": zero_with_eligible_nonzero,
         }
         record = {
             "schema_version": self.schema_version,
@@ -284,11 +195,6 @@ class SelectorDiagnosisWriter:
                 "algorithm": audit.algorithm,
                 "score_rel_tol": 1e-9,
                 "score_abs_tol": 1e-12,
-                "prefill_reference_concurrency": (
-                    audit.stage2_scores[0].prefill_reference_concurrency
-                    if audit.stage2_scores
-                    else None
-                ),
                 "tbt_delta_seconds": audit.stage1.delta_seconds,
                 "tie_break_order": list(audit.tie_break_order),
             },
@@ -296,6 +202,7 @@ class SelectorDiagnosisWriter:
                 "timestamp": snapshot.timestamp,
                 "active_decode_count": len(snapshot.active_decode_requests),
                 "waiting_prefill_count": len(snapshot.waiting_prefill_requests),
+                "waiting_prefill_tokens": backlog_tokens,
                 "tbt_request_slacks": [
                     asdict(item) for item in audit.stage1.request_slacks
                 ],
@@ -305,7 +212,7 @@ class SelectorDiagnosisWriter:
             },
             "stage1": asdict(audit.stage1),
             "candidates": candidates,
-            "zero_diagnosis": zero_diagnosis,
+            "service_rate_diagnosis": service_rate_diagnosis,
             "decision": {
                 "selector_selected_plan_id": audit.selected_plan_id,
                 "selector_reason": selector_decision.reason,
@@ -376,6 +283,51 @@ def _rank_candidates(
     return ranked, winner_tie
 
 
+def _rank_service_candidates(
+    scores: list[dict[str, Any]],
+    *,
+    rel_tol: float,
+    abs_tol: float,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    ranked: list[dict[str, Any]] = []
+    remaining = sorted(
+        scores, key=lambda item: (-float(item["score"]), item["plan_id"])
+    )
+    winner_tie: list[str] = []
+    while remaining:
+        leader = remaining[0]
+        group = [
+            item
+            for item in remaining
+            if (
+                (float(item["score"]) == 0.0)
+                == (float(leader["score"]) == 0.0)
+                and _close(
+                    float(item["score"]),
+                    float(leader["score"]),
+                    rel_tol=rel_tol,
+                    abs_tol=abs_tol,
+                )
+            )
+        ]
+        group_ids = {item["plan_id"] for item in group}
+        remaining = [
+            item for item in remaining if item["plan_id"] not in group_ids
+        ]
+        group.sort(
+            key=lambda item: (
+                item["duration"],
+                -item["service_tokens"],
+                item["budget"],
+                item["plan_id"],
+            )
+        )
+        if not ranked:
+            winner_tie = [item["plan_id"] for item in group]
+        ranked.extend(group)
+    return ranked, winner_tie
+
+
 def replay_record(record: Mapping[str, Any]) -> dict[str, int]:
     counters = {
         "stage1_mismatch": 0,
@@ -383,6 +335,7 @@ def replay_record(record: Mapping[str, Any]) -> dict[str, int]:
         "stage2_score_mismatch": 0,
         "winner_mismatch": 0,
         "tie_break_mismatch": 0,
+        "service_rate_invariant_mismatch": 0,
     }
     schema_version = record.get("schema_version")
     if schema_version not in SUPPORTED_SELECTOR_DIAGNOSIS_SCHEMA_VERSIONS:
@@ -498,6 +451,150 @@ def replay_record(record: Mapping[str, Any]) -> dict[str, int]:
         selected_by_fallback = plan_id == replayed_fallback
         if bool(stage1_candidate["selected_by_fallback"]) != selected_by_fallback:
             counters["stage1_mismatch"] += 1
+
+    if schema_version == 3:
+        replayed_scores: list[dict[str, Any]] = []
+        backlog_tokens = int(state["waiting_prefill_tokens"])
+        for candidate in candidates:
+            plan_id = str(candidate["plan_id"])
+            details = candidate["stage2_prefill_service_rate"]
+            if plan_id not in replayed_eligible:
+                if details is not None:
+                    counters["stage2_score_mismatch"] += 1
+                continue
+            if details is None:
+                counters["stage2_score_mismatch"] += 1
+                continue
+            tau = effective_by_id[plan_id]
+            service_tokens = int(candidate["plan"]["total_prefill_tokens"])
+            service_rate = service_tokens / tau
+            decode_items = list(candidate["plan"]["decode_items"])
+            decode_coverage = (
+                len(decode_items) == len(set(decode_items))
+                and len(decode_items) == int(state["active_decode_count"])
+            )
+            if (
+                int(details["prefill_service_tokens"]) != service_tokens
+                or not _close(
+                    service_rate,
+                    float(details["prefill_service_rate"]),
+                    rel_tol=rel_tol,
+                    abs_tol=abs_tol,
+                )
+                or not _close(
+                    service_rate,
+                    float(details["score"]),
+                    rel_tol=rel_tol,
+                    abs_tol=abs_tol,
+                )
+                or not _close(
+                    tau,
+                    float(details["effective_duration"]),
+                    rel_tol=rel_tol,
+                    abs_tol=abs_tol,
+                )
+                or int(details["prefill_budget"]) != service_tokens
+                or int(details["current_prefill_count"])
+                != int(state["waiting_prefill_count"])
+                or int(details["current_prefill_backlog_tokens"])
+                != backlog_tokens
+                or int(details["current_decode_count"])
+                != int(state["active_decode_count"])
+                or bool(details["decode_coverage_complete"]) != decode_coverage
+            ):
+                counters["stage2_score_mismatch"] += 1
+            tie_key = details["tie_break_key"]
+            if (
+                not _close(
+                    service_rate,
+                    float(tie_key["prefill_service_rate_desc"]),
+                    rel_tol=rel_tol,
+                    abs_tol=abs_tol,
+                )
+                or not _close(
+                    tau,
+                    float(tie_key["effective_duration_asc"]),
+                    rel_tol=rel_tol,
+                    abs_tol=abs_tol,
+                )
+                or int(tie_key["prefill_service_tokens_desc"])
+                != service_tokens
+                or int(tie_key["prefill_budget_asc"]) != service_tokens
+                or str(tie_key["plan_id_asc"]) != plan_id
+            ):
+                counters["tie_break_mismatch"] += 1
+            replayed_scores.append(
+                {
+                    "plan_id": plan_id,
+                    "score": service_rate,
+                    "duration": tau,
+                    "service_tokens": service_tokens,
+                    "budget": service_tokens,
+                    "recorded_rank": int(details["rank"]),
+                }
+            )
+
+        ranked, winner_tie = _rank_service_candidates(
+            replayed_scores, rel_tol=rel_tol, abs_tol=abs_tol
+        )
+        if any(
+            item["recorded_rank"] != rank
+            for rank, item in enumerate(ranked, start=1)
+        ):
+            counters["tie_break_mismatch"] += 1
+        if winner_tie != list(decision["winner_tie_plan_ids"]):
+            counters["tie_break_mismatch"] += 1
+        replayed_winner = ranked[0]["plan_id"] if ranked else None
+        if replayed_winner != decision["selector_selected_plan_id"]:
+            counters["winner_mismatch"] += 1
+
+        diagnosis = record["service_rate_diagnosis"]
+        eligible_nonzero = sum(
+            int(item["service_tokens"] > 0) for item in replayed_scores
+        )
+        selected = ranked[0] if ranked else None
+        selected_is_zero = bool(
+            selected is not None and selected["service_tokens"] == 0
+        )
+        invariant = bool(selected_is_zero and eligible_nonzero)
+        selected_tokens = selected["service_tokens"] if selected is not None else None
+        selected_rate = selected["score"] if selected is not None else None
+        recorded_selected_tokens = diagnosis["selected_prefill_service_tokens"]
+        recorded_selected_rate = diagnosis["selected_prefill_service_rate"]
+        selected_value_mismatch = (
+            (selected_tokens is None) != (recorded_selected_tokens is None)
+            or (
+                selected_tokens is not None
+                and int(recorded_selected_tokens) != selected_tokens
+            )
+            or (selected_rate is None) != (recorded_selected_rate is None)
+            or (
+                selected_rate is not None
+                and not _close(
+                    selected_rate,
+                    float(recorded_selected_rate),
+                    rel_tol=rel_tol,
+                    abs_tol=abs_tol,
+                )
+            )
+        )
+        if (
+            int(diagnosis["prefill_backlog_count"])
+            != int(state["waiting_prefill_count"])
+            or int(diagnosis["prefill_backlog_tokens"]) != backlog_tokens
+            or int(diagnosis["stage1_eligible_candidate_count"])
+            != len(replayed_scores)
+            or int(diagnosis["stage1_eligible_nonzero_candidate_count"])
+            != eligible_nonzero
+            or diagnosis["selected_plan_id"] != replayed_winner
+            or bool(diagnosis["selected_is_zero"]) != selected_is_zero
+            or bool(diagnosis["zero_with_eligible_nonzero"]) != invariant
+            or selected_value_mismatch
+        ):
+            counters["stage2_score_mismatch"] += 1
+        if invariant:
+            counters["service_rate_invariant_mismatch"] += 1
+        return counters
 
     prefill_ref = selector["prefill_reference_concurrency"]
     replayed_scores: list[dict[str, Any]] = []
@@ -684,6 +781,7 @@ def replay_file(path: Path) -> dict[str, int]:
         "stage2_score_mismatch": 0,
         "winner_mismatch": 0,
         "tie_break_mismatch": 0,
+        "service_rate_invariant_mismatch": 0,
     }
     with path.open("r", encoding="utf-8") as stream:
         for line_number, line in enumerate(stream, start=1):
@@ -732,6 +830,10 @@ def counterfactual_record(record: Mapping[str, Any]) -> dict[str, Any]:
     schema_version = record.get("schema_version")
     if schema_version not in SUPPORTED_SELECTOR_DIAGNOSIS_SCHEMA_VERSIONS:
         raise ValueError("Selector diagnosis schema version mismatch")
+    if schema_version == 3:
+        raise ValueError(
+            "TTFT Rate/Absolute counterfactual supports diagnosis schema 1/2 only"
+        )
     selector = record["selector"]
     rel_tol = float(selector["score_rel_tol"])
     abs_tol = float(selector["score_abs_tol"])

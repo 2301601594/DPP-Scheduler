@@ -117,22 +117,21 @@ def manual_score(
     plan_id: str,
     *,
     score: float = 0.0,
-    completed: int = 0,
-    progress: float = 0.0,
     duration: float = 0.1,
+    tokens: int = 0,
     budget: int = 0,
 ) -> DPPScore:
     return DPPScore(
         plan_id=plan_id,
-        prefill_drift=-score,
         effective_duration=duration,
+        prefill_service_tokens=tokens,
+        prefill_service_rate=score,
         score=score,
         prefill_budget=budget,
         current_prefill_count=0,
+        current_prefill_backlog_tokens=0,
         current_decode_count=0,
-        prefill_reference_concurrency=1,
-        prefill_progress=progress,
-        completed_prefill_count=completed,
+        decode_coverage_complete=True,
     )
 
 
@@ -166,7 +165,7 @@ class TwoStageSelectorTests(unittest.TestCase):
         self.assertEqual(audit.stage1.status, "WITHIN_SLACK")
         self.assertEqual(audit.stage1.eligible_plan_ids, ("boundary",))
         self.assertEqual(decision.selected_plan, boundary.plan)
-        self.assertEqual(decision.reason, "TWO_STAGE_TBT_TTFT")
+        self.assertEqual(decision.reason, "TWO_STAGE_TBT_PREFILL_SERVICE_RATE")
 
     def test_negative_slack_falls_back_to_shortest_safe_candidate(self) -> None:
         state = deadline_snapshot(slack=-0.05)
@@ -213,7 +212,7 @@ class TwoStageSelectorTests(unittest.TestCase):
         )
         self.assertAlmostEqual(score.effective_duration, 0.3)
 
-    def test_completed_prefill_resets_predicted_debt(self) -> None:
+    def test_score_is_actual_prefill_tokens_per_effective_duration(self) -> None:
         state = snapshot(prefill=(PrefillRequest("p", 0.0, 100, 40),))
         item = candidate(state, "finish", prefill_items=(("p", 60),), duration=0.2)
         score = DPPSelector(settings()).score_candidate(
@@ -222,60 +221,44 @@ class TwoStageSelectorTests(unittest.TestCase):
             item,
             capture_request_details=True,
         )
-        detail = score.request_results[0]
-        self.assertTrue(detail.completion_this_frame)
-        self.assertEqual(detail.predicted_next_debt, 0.0)
-        self.assertEqual(detail.drift_contribution, -4.0)
+        self.assertEqual(score.prefill_service_tokens, 60)
+        self.assertAlmostEqual(score.prefill_service_rate, 300.0)
+        self.assertEqual(score.score, score.prefill_service_rate)
+        self.assertEqual(score.current_prefill_backlog_tokens, 60)
 
-    def test_unfinished_prefill_uses_request_slo_and_prompt_normalization(self) -> None:
+    def test_stage2_does_not_read_ttft_debt_or_request_slo(self) -> None:
         state = snapshot(
             prefill=(PrefillRequest("p", 0.0, 200, 40, ttft_slo_seconds=2.0),)
         )
         item = candidate(state, "partial", prefill_items=(("p", 20),), duration=0.2)
-        score = DPPSelector(settings()).score_candidate(
+        empty_debt = DPPSelector(settings()).score_candidate(
             state,
-            ControlState(state.snapshot_hash, (("p", 0.5),)),
+            ControlState(state.snapshot_hash),
             item,
-            capture_request_details=True,
         )
-        self.assertAlmostEqual(score.request_results[0].predicted_next_debt, 0.5)
-
-    def test_score_is_negative_absolute_prefill_drift(self) -> None:
-        state = snapshot(prefill=(PrefillRequest("p", 0.0, 100, 0),))
-        item = candidate(state, "partial", prefill_items=(("p", 10),), duration=0.2)
-        score = DPPSelector(settings()).score_candidate(
+        arbitrary_debt = DPPSelector(settings()).score_candidate(
             state,
-            ControlState(state.snapshot_hash, (("p", 0.5),)),
+            ControlState(state.snapshot_hash, (("unrelated", math.inf),)),
             item,
-            capture_request_details=True,
         )
-        self.assertAlmostEqual(score.score, -score.prefill_drift)
-        self.assertAlmostEqual(
-            score.ttft_score_rate_old,
-            -score.prefill_drift / score.effective_duration,
-        )
+        self.assertEqual(empty_debt, arbitrary_debt)
 
-    def test_duration_still_increases_next_debt(self) -> None:
+    def test_duration_normalizes_prefill_service_rate(self) -> None:
         state = snapshot(prefill=(PrefillRequest("p", 0.0, 100, 0),))
-        control = ControlState(state.snapshot_hash, (("p", 0.2),))
+        control = ControlState(state.snapshot_hash)
         short = DPPSelector(settings()).score_candidate(
             state,
             control,
             candidate(state, "short", prefill_items=(("p", 5),), duration=0.1),
-            capture_request_details=True,
         )
         long = DPPSelector(settings()).score_candidate(
             state,
             control,
             candidate(state, "long", prefill_items=(("p", 5),), duration=0.3),
-            capture_request_details=True,
         )
-        self.assertLess(
-            short.request_results[0].predicted_next_debt,
-            long.request_results[0].predicted_next_debt,
-        )
+        self.assertGreater(short.score, long.score)
 
-    def test_short_zero_vs_longer_nonzero_exposes_counterfactual_direction(self) -> None:
+    def test_zero_cannot_win_when_eligible_candidate_has_actual_prefill(self) -> None:
         state = snapshot(prefill=(PrefillRequest("p", 0.0, 100, 0),))
         control = ControlState(state.snapshot_hash, (("p", 0.0),))
         selector = DPPSelector(settings())
@@ -299,17 +282,28 @@ class TwoStageSelectorTests(unittest.TestCase):
             control,
             nonzero_candidate,
         )
-        self.assertGreater(nonzero.ttft_score_rate_old, zero.ttft_score_rate_old)
-        self.assertGreater(
-            zero.ttft_score_absolute_new,
-            nonzero.ttft_score_absolute_new,
-        )
+        self.assertGreater(nonzero.score, zero.score)
         self.assertEqual(
             selector.select(
                 state, control, (zero_candidate, nonzero_candidate)
             ).selected_plan,
-            zero_candidate.plan,
+            nonzero_candidate.plan,
         )
+
+    def test_positive_service_does_not_isclose_tie_with_zero(self) -> None:
+        state = snapshot(prefill=(PrefillRequest("p", 0.0, 1, 0),))
+        zero = candidate(state, "zero", duration=0.1, template_id="ZERO")
+        tiny = candidate(
+            state,
+            "tiny",
+            prefill_items=(("p", 1),),
+            duration=1.0e15,
+            template_id="P10",
+        )
+        decision = DPPSelector(settings()).select(
+            state, ControlState(state.snapshot_hash), (zero, tiny)
+        )
+        self.assertEqual(decision.selected_plan, tiny.plan)
 
     def test_prefill_pressure_can_choose_completion(self) -> None:
         state = snapshot(prefill=(PrefillRequest("p", 0.0, 100, 0),))
@@ -323,16 +317,19 @@ class TwoStageSelectorTests(unittest.TestCase):
             finish.plan,
         )
 
-    def test_rank_groups_isclose_then_applies_complete_tie_break(self) -> None:
+    def test_rank_groups_isclose_then_applies_service_tie_break(self) -> None:
         selector = DPPSelector(settings())
         scores = (
-            manual_score("duration", score=4e-13, duration=0.05),
-            manual_score("progress", score=0.0, progress=0.8),
-            manual_score("complete", score=2e-13, completed=1),
+            manual_score("long", score=1.0, duration=0.2, tokens=20),
+            manual_score("short-low", score=1.0 + 4e-10, duration=0.1, tokens=10),
+            manual_score("short-high", score=1.0 + 2e-10, duration=0.1, tokens=11),
         )
         ranked, tie = selector._rank_scores(scores)
-        self.assertEqual([score.plan_id for score in ranked], ["complete", "progress", "duration"])
-        self.assertEqual(tie, ("complete", "progress", "duration"))
+        self.assertEqual(
+            [score.plan_id for score in ranked],
+            ["short-high", "short-low", "long"],
+        )
+        self.assertEqual(tie, ("short-high", "short-low", "long"))
 
     def test_tie_break_finishes_with_budget_then_plan_id(self) -> None:
         selector = DPPSelector(settings())
@@ -344,19 +341,19 @@ class TwoStageSelectorTests(unittest.TestCase):
         ranked, _ = selector._rank_scores(scores)
         self.assertEqual([score.plan_id for score in ranked], ["z", "a", "b"])
 
-    def test_invalid_duration_and_debt_fail_closed(self) -> None:
+    def test_invalid_duration_fails_closed_but_debt_is_not_a_score_input(self) -> None:
         state = snapshot(prefill=(PrefillRequest("p", 0.0, 10, 0),))
         bad = candidate(state, "bad", duration=math.nan)
         with self.assertRaises(ValueError):
             DPPSelector(settings()).select(
                 state, ControlState(state.snapshot_hash, (("p", 0.0),)), (bad,)
             )
-        with self.assertRaises(ValueError):
-            DPPSelector(settings()).select(
-                state,
-                ControlState(state.snapshot_hash, (("p", math.inf),)),
-                (candidate(state, "ok"),),
-            )
+        decision = DPPSelector(settings()).select(
+            state,
+            ControlState(state.snapshot_hash, (("p", math.inf),)),
+            (candidate(state, "ok"),),
+        )
+        self.assertEqual(decision.selected_plan.plan_id, "ok")
 
 
 class RuntimeOverrideTests(unittest.TestCase):
@@ -410,10 +407,10 @@ class TwoStageConfigTests(unittest.TestCase):
         runtime = load_active_runtime(REPOSITORY_ROOT / ACTIVE_CONFIG_RELATIVE)
         dpp = load_dpp_settings(runtime)
         self.assertTrue(dpp.live_v2_ready)
-        self.assertEqual(dpp.algorithm, "two_stage_tbt_ttft_absolute_v1")
+        self.assertEqual(dpp.algorithm, "two_stage_tbt_prefill_service_rate_v1")
         self.assertEqual(dpp.tbt_delta_seconds, 0.020)
         self.assertFalse(dpp.diagnosis_enabled_default)
-        self.assertEqual(dpp.diagnosis_schema_version, 2)
+        self.assertEqual(dpp.diagnosis_schema_version, 3)
 
 
 if __name__ == "__main__":

@@ -16,12 +16,11 @@ from dpp_scheduler.contracts import (
 from dpp_scheduler.settings import DPPSettings
 
 
-TWO_STAGE_ALGORITHM = "two_stage_tbt_ttft_absolute_v1"
+TWO_STAGE_ALGORITHM = "two_stage_tbt_prefill_service_rate_v1"
 TIE_BREAK_ORDER = (
-    "ttft_score_absolute_new_desc",
-    "completed_prefill_count_desc",
-    "prefill_progress_desc",
+    "prefill_service_rate_desc",
     "effective_duration_asc",
+    "prefill_service_tokens_desc",
     "prefill_budget_asc",
     "plan_id_asc",
 )
@@ -57,55 +56,20 @@ class TBTStageResult:
 
 
 @dataclass(frozen=True)
-class TTFTRequestResult:
-    request_id: str
-    current_debt: float
-    prompt_tokens: int
-    remaining_tokens: int
-    scheduled_tokens: int
-    completion_this_frame: bool
-    ttft_slo_seconds: float
-    duration_increment: float
-    normalized_service: float
-    predicted_next_debt: float
-    current_debt_squared: float
-    next_debt_squared: float
-    drift_contribution: float
-
-
-@dataclass(frozen=True)
 class DPPScore:
-    """TTFT-only candidate result retained under the historical audit name."""
+    """Stage-2 Prefill service-rate result retained under the audit name."""
 
     plan_id: str
-    prefill_drift: float
     effective_duration: float
+    prefill_service_tokens: int
+    prefill_service_rate: float
     score: float
     prefill_budget: int
     current_prefill_count: int
+    current_prefill_backlog_tokens: int
     current_decode_count: int
-    prefill_reference_concurrency: int
-    prefill_progress: float
-    completed_prefill_count: int
-    request_results: tuple[TTFTRequestResult, ...] = ()
+    decode_coverage_complete: bool
     rank: int = 0
-    rank_rate_old: int = 0
-
-    @property
-    def normalized_ttft_drift(self) -> float:
-        return self.prefill_drift
-
-    @property
-    def ttft_score_rate_old(self) -> float:
-        return -self.prefill_drift / self.effective_duration
-
-    @property
-    def ttft_score_absolute_new(self) -> float:
-        return self.score
-
-    @property
-    def rank_absolute_new(self) -> int:
-        return self.rank
 
 
 @dataclass(frozen=True)
@@ -149,7 +113,7 @@ def effective_duration(candidate: SafeCandidate, maximum: float) -> float:
 
 
 class DPPSelector:
-    """Filter by live TBT time, then minimize post-decision TTFT debt."""
+    """Filter by live TBT time, then maximize Prefill service rate."""
 
     def __init__(self, settings: DPPSettings) -> None:
         self.settings = settings
@@ -354,136 +318,76 @@ class DPPSelector:
         *,
         capture_request_details: bool,
     ) -> DPPScore:
-        ttft = control.ttft_debt_map()
+        del control, capture_request_details
         prefill_by_id = {
             request.request_id: request
             for request in snapshot.waiting_prefill_requests
         }
         if len(prefill_by_id) != len(snapshot.waiting_prefill_requests):
             raise ValueError("live Prefill request IDs must be unique")
-        if set(ttft) != set(prefill_by_id):
-            raise ValueError("TTFT service-debt keys must equal live Prefill requests")
-
-        if len(candidate.plan.prefill_items) != len(
-            {request_id for request_id, _ in candidate.plan.prefill_items}
-        ):
+        prefill_items = candidate.plan.prefill_items
+        if len(prefill_items) != len({item[0] for item in prefill_items}):
             raise ValueError("BatchPlan contains duplicate Prefill service")
-        prefill_service = dict(candidate.plan.prefill_items)
-        if not set(prefill_service).issubset(prefill_by_id):
+        if not {item[0] for item in prefill_items}.issubset(prefill_by_id):
             raise ValueError("BatchPlan Prefill service targets a non-live request")
+        for request_id, tokens in prefill_items:
+            if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens <= 0:
+                raise ValueError("BatchPlan Prefill service must be a positive integer")
+            if tokens > prefill_by_id[request_id].remaining_tokens:
+                raise ValueError("BatchPlan Prefill service exceeds remaining tokens")
 
-        contributions: list[float] = []
-        details: list[TTFTRequestResult] = []
-        completed = 0
-        progress_terms: list[float] = []
-        for request_id in sorted(ttft):
-            request = prefill_by_id[request_id]
-            if (
-                isinstance(request.ttft_slo_seconds, bool)
-                or not isinstance(request.ttft_slo_seconds, (int, float))
-                or not math.isfinite(request.ttft_slo_seconds)
-                or request.ttft_slo_seconds <= 0
-                or isinstance(request.token_count, bool)
-                or not isinstance(request.token_count, int)
-                or request.token_count <= 0
-            ):
-                raise ValueError("Prefill SLO/prompt length must be positive")
-            if (
-                isinstance(request.prefilled_tokens, bool)
-                or not isinstance(request.prefilled_tokens, int)
-                or request.prefilled_tokens < 0
-                or request.remaining_tokens <= 0
-            ):
+        service_tokens = candidate.plan.total_prefill_tokens
+        if isinstance(service_tokens, bool) or not isinstance(service_tokens, int):
+            raise ValueError("Prefill service tokens must be an integer")
+        if service_tokens < 0:
+            raise ValueError("Prefill service tokens must be non-negative")
+        if service_tokens != sum(tokens for _, tokens in prefill_items):
+            raise ValueError("BatchPlan total Prefill tokens mismatch")
+        service_rate = service_tokens / tau
+        if not math.isfinite(service_rate):
+            raise ValueError("Prefill service rate must be finite")
+
+        backlog_tokens = 0
+        for request in snapshot.waiting_prefill_requests:
+            remaining = request.remaining_tokens
+            if isinstance(remaining, bool) or not isinstance(remaining, int):
+                raise ValueError("Prefill remaining tokens must be an integer")
+            if remaining <= 0:
                 raise ValueError("live Prefill request must have remaining tokens")
-            raw_current = ttft[request_id]
-            if (
-                isinstance(raw_current, bool)
-                or not isinstance(raw_current, (int, float))
-                or not math.isfinite(raw_current)
-                or raw_current < 0
-            ):
-                raise ValueError("TTFT service debt must be finite and non-negative")
-            current = float(raw_current)
-            service = prefill_service.get(request_id, 0)
-            if isinstance(service, bool) or not isinstance(service, int) or service < 0:
-                raise ValueError("Prefill service must be a non-negative integer")
-            normalized_service = service / request.token_count
-            duration_increment = tau / request.ttft_slo_seconds
-            completion = service >= request.remaining_tokens
-            predicted = (
-                0.0
-                if completion
-                else max(0.0, current + duration_increment - normalized_service)
-            )
-            if completion:
-                completed += 1
-            current_squared = current * current
-            next_squared = predicted * predicted
-            contribution = next_squared - current_squared
-            contributions.append(contribution)
-            progress_terms.append(normalized_service)
-            if capture_request_details:
-                details.append(
-                    TTFTRequestResult(
-                        request_id=request_id,
-                        current_debt=current,
-                        prompt_tokens=request.token_count,
-                        remaining_tokens=request.remaining_tokens,
-                        scheduled_tokens=service,
-                        completion_this_frame=completion,
-                        ttft_slo_seconds=request.ttft_slo_seconds,
-                        duration_increment=duration_increment,
-                        normalized_service=normalized_service,
-                        predicted_next_debt=predicted,
-                        current_debt_squared=current_squared,
-                        next_debt_squared=next_squared,
-                        drift_contribution=contribution,
-                    )
-                )
+            backlog_tokens += remaining
 
-        prefill_drift = math.fsum(contributions) / (
-            2.0 * self.settings.prefill_reference_concurrency
-        )
-        score = -prefill_drift
-        prefill_progress = math.fsum(progress_terms)
-        if not all(
-            math.isfinite(value)
-            for value in (prefill_drift, score, prefill_progress)
-        ):
-            raise ValueError("two-stage TTFT score is non-finite")
+        active_decode_ids = {
+            request.request_id for request in snapshot.active_decode_requests
+        }
+        planned_decode_ids = set(candidate.plan.decode_items)
         return DPPScore(
             plan_id=candidate.plan.plan_id,
-            prefill_drift=prefill_drift,
             effective_duration=tau,
-            score=score,
-            prefill_budget=candidate.plan.total_prefill_tokens,
-            current_prefill_count=len(prefill_by_id),
+            prefill_service_tokens=service_tokens,
+            prefill_service_rate=service_rate,
+            score=service_rate,
+            prefill_budget=service_tokens,
+            current_prefill_count=len(snapshot.waiting_prefill_requests),
+            current_prefill_backlog_tokens=backlog_tokens,
             current_decode_count=len(snapshot.active_decode_requests),
-            prefill_reference_concurrency=self.settings.prefill_reference_concurrency,
-            prefill_progress=prefill_progress,
-            completed_prefill_count=completed,
-            request_results=tuple(details),
+            decode_coverage_complete=planned_decode_ids == active_decode_ids,
         )
 
     @staticmethod
     def _tie_key(score: DPPScore) -> tuple[object, ...]:
         return (
-            -score.completed_prefill_count,
-            -score.prefill_progress,
             score.effective_duration,
+            -score.prefill_service_tokens,
             score.prefill_budget,
             score.plan_id,
         )
 
-    def _rank_scores_for(
-        self,
-        scores: tuple[DPPScore, ...],
-        *,
-        score_value: str,
+    def _rank_scores(
+        self, scores: tuple[DPPScore, ...]
     ) -> tuple[tuple[DPPScore, ...], tuple[str, ...]]:
         remaining = sorted(
             scores,
-            key=lambda score: (-float(getattr(score, score_value)), score.plan_id),
+            key=lambda score: (-score.score, score.plan_id),
         )
         ranked: list[DPPScore] = []
         winner_tie: tuple[str, ...] = ()
@@ -492,11 +396,14 @@ class DPPSelector:
             group = [
                 score
                 for score in remaining
-                if math.isclose(
-                    float(getattr(score, score_value)),
-                    float(getattr(leader, score_value)),
-                    rel_tol=self.settings.score_rel_tol,
-                    abs_tol=self.settings.score_abs_tol,
+                if (
+                    (score.score == 0.0) == (leader.score == 0.0)
+                    and math.isclose(
+                        score.score,
+                        leader.score,
+                        rel_tol=self.settings.score_rel_tol,
+                        abs_tol=self.settings.score_abs_tol,
+                    )
                 )
             ]
             group_ids = {score.plan_id for score in group}
@@ -509,26 +416,6 @@ class DPPSelector:
             for score in ordered_group:
                 ranked.append(replace(score, rank=len(ranked) + 1))
         return tuple(ranked), winner_tie
-
-    def _rank_scores(
-        self, scores: tuple[DPPScore, ...]
-    ) -> tuple[tuple[DPPScore, ...], tuple[str, ...]]:
-        absolute_ranked, winner_tie = self._rank_scores_for(
-            scores, score_value="ttft_score_absolute_new"
-        )
-        rate_ranked, _ = self._rank_scores_for(
-            scores, score_value="ttft_score_rate_old"
-        )
-        rate_rank_by_id = {
-            score.plan_id: rank for rank, score in enumerate(rate_ranked, start=1)
-        }
-        return (
-            tuple(
-                replace(score, rank_rate_old=rate_rank_by_id[score.plan_id])
-                for score in absolute_ranked
-            ),
-            winner_tie,
-        )
 
     def _run(
         self,
@@ -568,13 +455,20 @@ class DPPSelector:
         )
         ranked, winner_tie = self._rank_scores(scored)
         winner = ranked[0]
+        if any(score.prefill_service_tokens > 0 for score in ranked) and (
+            winner.prefill_service_tokens == 0
+        ):
+            raise RuntimeError(
+                "ZERO candidate selected while an eligible candidate performs "
+                "actual Prefill work"
+            )
         candidate_by_id = {
             candidate.plan.plan_id: candidate for candidate in eligible
         }
         reason = (
             "TBT_NO_CANDIDATE_MIN_DURATION"
             if stage1.status == "NO_CANDIDATE_WITHIN_SLACK"
-            else "TWO_STAGE_TBT_TTFT"
+            else "TWO_STAGE_TBT_PREFILL_SERVICE_RATE"
         )
         decision = Decision(
             frame_id=snapshot.frame_id,

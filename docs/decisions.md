@@ -1,5 +1,27 @@
 # Active research decisions
 
+## 2026-08-28: replace TTFT debt winner scoring with Prefill service rate
+
+- The Rate and Absolute TTFT-debt selectors are retained as negative evidence.
+  In their n=150 development runs, ZERO was selected in approximately 82.6%
+  and 98.5% of Prefill-backlog frames respectively; the Absolute run also had
+  severe TTFT regression. These observations identify a starvation mechanism
+  but are not formal Scheduler conclusions.
+- Stage 1 remains the active-obligation TBT duration filter with provisional
+  `delta_D=0.020s`. Stage 2 now maximizes actual planned Prefill tokens divided
+  by `effective_duration`, under algorithm identity
+  `two_stage_tbt_prefill_service_rate_v1`. Request-level TTFT/TBT debts remain
+  actual-only StateStore and diagnostic data and do not select the winner.
+- If any Stage-1 eligible candidate schedules positive actual Prefill service,
+  a zero-service candidate is forbidden from winning. A positive score cannot
+  be absorbed into the zero-score `isclose` group.
+- Diagnosis schema v3 records service-rate inputs/ranks and the ZERO invariant.
+  Historical schema v1/v2 Rate/Absolute artifacts remain replayable; their
+  counterfactual analysis is not applied to schema v3.
+- This is development/non-formal work. Candidate generation, Predictor,
+  Safe-Set, Stage 1, Fallback, trace, QPS, SLO, and actual-only state semantics
+  are frozen for the change, and no G5/G6/G7 gate advances.
+
 ## 2026-08-28: use absolute TTFT drift as a single-variable ablation
 
 - The completed QPS 0.25, seed 1001, n=150 development run for

@@ -362,7 +362,7 @@ class PredictorSettings:
 
 @dataclass(frozen=True)
 class DPPSettings:
-    """Two-stage TBT-constrained TTFT-DPP settings."""
+    """Two-stage TBT-constrained Prefill service-rate settings."""
 
     prefill_reference_concurrency: int
     decode_reference_concurrency: int
@@ -370,12 +370,12 @@ class DPPSettings:
     reference_parameter_status: str = "provisional_pending_stock_profiling"
     score_rel_tol: float = 1e-9
     score_abs_tol: float = 1e-12
-    algorithm: str = "two_stage_tbt_ttft_absolute_v1"
+    algorithm: str = "two_stage_tbt_prefill_service_rate_v1"
     reference_artifact_path: str | None = None
     reference_artifact_sha256: str | None = None
     tbt_delta_seconds: float = 0.020
     diagnosis_enabled_default: bool = False
-    diagnosis_schema_version: int = 2
+    diagnosis_schema_version: int = 3
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -386,9 +386,9 @@ class DPPSettings:
                 raise ValueError(f"{label} must be a positive integer")
         if not math.isfinite(self.maximum_numeric) or self.maximum_numeric <= 0:
             raise ValueError("maximum_numeric must be finite and positive")
-        if self.algorithm != "two_stage_tbt_ttft_absolute_v1":
+        if self.algorithm != "two_stage_tbt_prefill_service_rate_v1":
             raise ValueError(
-                "DPP algorithm must be two_stage_tbt_ttft_absolute_v1"
+                "DPP algorithm must be two_stage_tbt_prefill_service_rate_v1"
             )
         if self.reference_parameter_status not in {
             "provisional_pending_stock_profiling",
@@ -417,8 +417,8 @@ class DPPSettings:
             raise ValueError("tbt_delta_seconds must be finite and non-negative")
         if not isinstance(self.diagnosis_enabled_default, bool):
             raise ValueError("diagnosis_enabled_default must be boolean")
-        if self.diagnosis_schema_version != 2:
-            raise ValueError("DPP Selector diagnosis schema version must be 2")
+        if self.diagnosis_schema_version != 3:
+            raise ValueError("DPP Selector diagnosis schema version must be 3")
 
     @property
     def live_v2_ready(self) -> bool:
@@ -442,6 +442,7 @@ class DPPSettings:
         ranges = value.get("score_numeric_ranges")
         tolerance = value.get("score_tie_tolerance")
         tbt_stage = value.get("tbt_stage")
+        stage2 = value.get("stage2")
         diagnosis = value.get("diagnosis")
         if not isinstance(reference, Mapping):
             raise ValueError("dpp.reference_concurrency must be a mapping")
@@ -449,6 +450,8 @@ class DPPSettings:
             raise ValueError("DPP numeric range/tolerance must be mappings")
         if not isinstance(tbt_stage, Mapping):
             raise ValueError("dpp.tbt_stage must be a mapping")
+        if not isinstance(stage2, Mapping):
+            raise ValueError("dpp.stage2 must be a mapping")
         if not isinstance(diagnosis, Mapping):
             raise ValueError("dpp.diagnosis must be a mapping")
         obsolete = {"ttft_drift_weight", "development_override_env"}.intersection(
@@ -462,17 +465,20 @@ class DPPSettings:
         if reference.get("statistic") != "p50_positive_frames":
             raise ValueError("reference concurrency statistic mismatch")
         if tuple(value.get("tie_break", ())) != (
-            "ttft_score_absolute_new_desc",
-            "completed_prefill_count_desc",
-            "prefill_progress_desc",
+            "prefill_service_rate_desc",
             "effective_duration_asc",
+            "prefill_service_tokens_desc",
             "prefill_budget_asc",
             "plan_id_asc",
         ):
             raise ValueError("two-stage DPP tie-break contract mismatch")
         if tbt_stage.get("empty_policy") != "minimum_effective_duration":
             raise ValueError("DPP TBT empty policy mismatch")
-        if value.get("score") != "negative_ttft_lyapunov_drift_absolute":
+        if stage2.get("service_source") != "batch_plan_total_prefill_tokens":
+            raise ValueError("DPP Stage-2 service source mismatch")
+        if stage2.get("duration_source") != "effective_duration":
+            raise ValueError("DPP Stage-2 duration source mismatch")
+        if value.get("score") != "prefill_service_tokens_per_effective_second":
             raise ValueError("two-stage DPP score contract mismatch")
         return cls(
             prefill_reference_concurrency=reference.get("prefill"),

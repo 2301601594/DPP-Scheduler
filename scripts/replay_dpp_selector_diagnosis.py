@@ -26,7 +26,10 @@ def main() -> int:
     parser.add_argument(
         "--counterfactual",
         action="store_true",
-        help="also compare legacy rate and current absolute TTFT rankings",
+        help=(
+            "for historical schema 1/2 only, compare Rate and Absolute "
+            "TTFT-debt rankings"
+        ),
     )
     args = parser.parse_args()
     replay_summary = replay_file(args.diagnosis)

@@ -35,7 +35,8 @@ Recovery-age rule and measured replacements for the explicitly
 integration-only G4/DPP values if they are to support formal benchmark claims.
 
 The active non-formal implementation uses fixed Prefill fractions plus a
-Stock-like BatchPlan and the two-stage TBT-constrained TTFT Selector. The
+Stock-like BatchPlan and the two-stage TBT-constrained Prefill service-rate
+Selector V1. The
 unexecuted nine-run TTFT weight grid is retired without selecting a weight.
 The temporary TBT allowance is `delta_D=0.020s`; it is user-directed,
 non-formal, and does not complete a gate or establish a Scheduler claim.
@@ -160,18 +161,16 @@ TTFT/TBT, a nonterminal token creates the next TBT deadline, and a terminal
 event creates none. Snapshot now carries these obligations and Recovery state.
 The former combined Prefill/Decode drift Selector is superseded by the
 two-stage design: active TBT obligation slack filters candidate duration, then
-fixed-reference absolute TTFT drift selects the winner. Decode service debt remains
-available for actual-feedback diagnostics but no longer participates in
-selection. The earlier rate-normalized n=150 development run is retained as
-negative evidence because it exhibited Prefill starvation. The current
-absolute-drift change must first pass schema-v2 model-free tests and the
-rate-versus-absolute counterfactual replay gate. The retained n=10 diagnosis
-replays exactly but has no legacy ZERO winner among its 26 backlog frames, so
-that gate remains inconclusive until a representative starvation-regime
-diagnosis is collected. The temporary 20 ms allowance
-and replayable Diagnosis remain development-only; a new real-model integration
-run and n=150 comparison require separate approval and are still required
-before G5/G6 can be claimed complete.
+Stage 2 maximizes actual planned Prefill tokens per effective second. TTFT and
+Decode service debts remain available for actual-feedback diagnostics but no
+longer participate in selection. The n=150 Rate and Absolute TTFT-debt runs are
+retained as negative evidence because both selected ZERO in most Prefill-
+backlog frames, with the Absolute variant worsening the starvation mechanism.
+Schema-v3 model-free Selector/Diagnosis/replay tests must pass with no mismatch
+and no ZERO-with-eligible-nonzero violation before a new performance run is
+considered. The temporary 20 ms allowance and replayable Diagnosis remain
+development-only; a new real-model integration run and n=150 comparison require
+separate approval and are still required before G5/G6 can be claimed complete.
 
 ### G7: Evaluation
 

@@ -1588,23 +1588,19 @@ def get_modular_scheduler_class() -> type:
                             "in_support": prediction.in_support,
                             "prediction_mode": prediction.prediction_mode,
                             "ood_distance": prediction.ood_distance,
-                            "normalized_ttft_drift": score.normalized_ttft_drift,
+                            "prefill_service_tokens": (
+                                score.prefill_service_tokens
+                            ),
+                            "prefill_service_rate": score.prefill_service_rate,
                             "score": score.score,
-                            "ttft_score_rate_old": score.ttft_score_rate_old,
-                            "ttft_score_absolute_new": (
-                                score.ttft_score_absolute_new
+                            "current_prefill_backlog_tokens": (
+                                score.current_prefill_backlog_tokens
                             ),
-                            "prefill_reference_concurrency": (
-                                score.prefill_reference_concurrency
+                            "decode_coverage_complete": (
+                                score.decode_coverage_complete
                             ),
-                            "completed_prefill_count": (
-                                score.completed_prefill_count
-                            ),
-                            "prefill_progress_utility": score.prefill_progress,
                             "score_tied_with_winner": score.plan_id in winner_tie,
                             "selection_rank": score.rank,
-                            "rank_rate_old": score.rank_rate_old,
-                            "rank_absolute_new": score.rank_absolute_new,
                             "selected": (
                                 score.plan_id == selected_scored_plan_id
                             ),
@@ -1614,12 +1610,11 @@ def get_modular_scheduler_class() -> type:
                                 else None
                             ),
                             "tie_break_key": {
-                                "ttft_score_absolute_new_desc": score.score,
-                                "completed_prefill_count_desc": (
-                                    score.completed_prefill_count
-                                ),
-                                "prefill_progress_desc": score.prefill_progress,
+                                "prefill_service_rate_desc": score.score,
                                 "effective_duration_asc": score.effective_duration,
+                                "prefill_service_tokens_desc": (
+                                    score.prefill_service_tokens
+                                ),
                                 "prefill_budget_asc": score.prefill_budget,
                                 "plan_id_asc": score.plan_id,
                             },
@@ -1639,6 +1634,7 @@ def get_modular_scheduler_class() -> type:
                     tie_set,
                     key=lambda score: (
                         score.effective_duration,
+                        -score.prefill_service_tokens,
                         score.prefill_budget,
                         score.plan_id,
                     ),
@@ -1651,8 +1647,6 @@ def get_modular_scheduler_class() -> type:
                     ),
                     None,
                 )
-                if selected_score is not None:
-                    selected_prefill_progress = selected_score.prefill_progress
                 frame_tie = {
                     "winner_tie_size": len(selector_audit.winner_tie_plan_ids),
                     "winner_tie": len(tie_set) >= 2,
@@ -1735,9 +1729,9 @@ def get_modular_scheduler_class() -> type:
                     "rejected_candidates_scoring_status": "not_scored",
                     "candidate_scores": candidate_score_records,
                     "selection_tie_break_order": (
-                        "score_desc_with_isclose,completed_prefill_count_desc,"
-                        "prefill_progress_desc,"
-                        "effective_duration_asc,prefill_budget_asc,plan_id_asc"
+                        "prefill_service_rate_desc_with_isclose,"
+                        "effective_duration_asc,prefill_service_tokens_desc,"
+                        "prefill_budget_asc,plan_id_asc"
                     ),
                     "winner_tie_size": frame_tie["winner_tie_size"],
                     "winner_tie": frame_tie["winner_tie"],

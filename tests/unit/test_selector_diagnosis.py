@@ -138,84 +138,52 @@ class SelectorDiagnosisTests(unittest.TestCase):
             record["state"]["tbt_request_slacks"][0]["slack_seconds"] += 1.0
             self.assertGreater(replay_record(record)["stage1_mismatch"], 0)
 
-    def test_tampered_next_debt_is_detected(self) -> None:
+    def test_tampered_service_tokens_is_detected(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             record = self._prefill_record(Path(root))
             stage2 = next(
-                item["stage2_ttft"]
+                item["stage2_prefill_service_rate"]
                 for item in record["candidates"]
                 if item["plan_id"] == "partial"
             )
-            stage2["request_results"][0]["predicted_next_debt"] += 1.0
-            self.assertGreater(replay_record(record)["ttft_debt_mismatch"], 0)
+            stage2["prefill_service_tokens"] += 1
+            self.assertGreater(replay_record(record)["stage2_score_mismatch"], 0)
 
     def test_tampered_score_is_detected(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             record = self._prefill_record(Path(root))
             stage2 = next(
-                item["stage2_ttft"]
+                item["stage2_prefill_service_rate"]
                 for item in record["candidates"]
                 if item["plan_id"] == "partial"
             )
             stage2["score"] = float(stage2["score"]) + 1.0
             self.assertGreater(replay_record(record)["stage2_score_mismatch"], 0)
 
-    def test_records_absolute_and_legacy_rate_scores_and_zero_diagnosis(self) -> None:
+    def test_records_service_rate_and_zero_invariant(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             record = self._prefill_record(Path(root))
-            zero = next(
-                item["stage2_ttft"]
+            partial = next(
+                item["stage2_prefill_service_rate"]
                 for item in record["candidates"]
-                if item["template_id"] == "ZERO"
+                if item["template_id"] == "P20"
             )
-            self.assertEqual(zero["score"], zero["ttft_score_absolute_new"])
-            self.assertEqual(zero["rank"], zero["rank_absolute_new"])
-            self.assertIn("ttft_score_rate_old", zero)
-            self.assertIn("rank_rate_old", zero)
-            diagnosis = record["zero_diagnosis"]
-            self.assertTrue(diagnosis["has_prefill_backlog"])
-            self.assertTrue(diagnosis["zero_candidate_present"])
-            self.assertTrue(diagnosis["nonzero_passed_stage1"])
+            self.assertEqual(partial["prefill_service_tokens"], 20)
+            self.assertEqual(partial["score"], partial["prefill_service_rate"])
+            diagnosis = record["service_rate_diagnosis"]
+            self.assertEqual(diagnosis["prefill_backlog_count"], 1)
+            self.assertEqual(diagnosis["prefill_backlog_tokens"], 100)
+            self.assertEqual(
+                diagnosis["stage1_eligible_nonzero_candidate_count"], 1
+            )
+            self.assertFalse(diagnosis["selected_is_zero"])
+            self.assertFalse(diagnosis["zero_with_eligible_nonzero"])
 
-    def test_counterfactual_reports_rate_and_absolute_winners(self) -> None:
-        state = snapshot(
-            prefill=(PrefillRequest("p", 0.0, 100, 0, ttft_slo_seconds=2.0),)
-        )
-        control = ControlState(state.snapshot_hash, (("p", 0.0),))
-        candidates = (
-            candidate(state, "zero", duration=0.1, template_id="ZERO"),
-            candidate(
-                state,
-                "partial",
-                prefill_items=(("p", 4),),
-                duration=0.2,
-                template_id="P10",
-            ),
-        )
-        decision, audit = DPPSelector(settings()).select_with_audit(
-            state, control, candidates, capture_request_details=True
-        )
+    def test_ttft_counterfactual_rejects_service_rate_schema(self) -> None:
         with tempfile.TemporaryDirectory() as root:
-            writer = SelectorDiagnosisWriter(
-                Path(root) / "counterfactual.jsonl",
-                config_sha256="a" * 64,
-                predictor_version="predictor-test",
-                schema_version=SELECTOR_DIAGNOSIS_SCHEMA_VERSION,
-            )
-            record = writer.write(
-                snapshot=state,
-                control=control,
-                safe_candidates=candidates,
-                audit=audit,
-                selector_decision=decision,
-                controller_decision=decision,
-                executed_plan_id=decision.selected_plan.plan_id,
-            )
-            writer.close()
-        counterfactual = counterfactual_record(record)
-        self.assertEqual(counterfactual["old_winner_plan_id"], "partial")
-        self.assertEqual(counterfactual["new_winner_plan_id"], "zero")
-        self.assertTrue(counterfactual["nonzero_to_zero"])
+            record = self._prefill_record(Path(root))
+        with self.assertRaisesRegex(ValueError, "schema 1/2"):
+            counterfactual_record(record)
 
     def test_tampered_winner_is_detected(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -227,11 +195,11 @@ class SelectorDiagnosisTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             record = self._prefill_record(Path(root))
             stage2 = next(
-                item["stage2_ttft"]
+                item["stage2_prefill_service_rate"]
                 for item in record["candidates"]
                 if item["plan_id"] == "partial"
             )
-            stage2["tie_break_key"]["completed_prefill_count_desc"] += 1
+            stage2["tie_break_key"]["prefill_service_tokens_desc"] += 1
             result = replay_record(record)
             self.assertGreater(result["tie_break_mismatch"], 0)
 
