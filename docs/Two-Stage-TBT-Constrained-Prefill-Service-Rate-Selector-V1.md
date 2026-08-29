@@ -1,5 +1,11 @@
 # Two-Stage TBT-Constrained Prefill Service-Rate Selector V1
 
+> **Selector supersession:** 自 2026-08-30 起，Selector、Selector 配置、
+> Diagnosis、Replay 和对应测试的权威契约以
+> `Two-Stage-ZERO-Relative-TBT-Prefill-Service-Rate-Selector-V2B.md` 为准。
+> 本文档中的 min-slack Stage 1 内容保留为历史设计；其中的研究过程与负面
+> 证据不被改写。
+
 本文档定义当前 Selector、Selector 配置、Diagnosis、Replay 和对应测试的权威
 契约。它 supersede `Two-Stage-TBT-Constrained-TTFT-DPP-Selector.md` 的同类
 内容，但不改写其中保留的 Rate/Absolute 研究过程和负面证据。

@@ -1,0 +1,29 @@
+{
+  "analysis": "executed_predictor_accuracy_replay",
+  "files": {
+    "per_frame_accuracy": {
+      "file": "per_frame_accuracy.csv",
+      "sha256": "5c6031409de915b20dc5180edca86843f264d8014334a49da5f63d9735509e83"
+    },
+    "summary": {
+      "file": "summary.json",
+      "sha256": "bdd7043abd8945ad4202a990cb4e4789108a459b96c9a177cc60249ddc7141e0"
+    }
+  },
+  "schema_version": 1,
+  "source": {
+    "run_id": "selector_diagnosis_n150_qps0p25_seed1001_attempt01",
+    "run_manifest_sha256": "ceebd4ab8bc5830bdfc8708c06c8db67ef90d1113b0e36d4de026872cce5eb24",
+    "selector_diagnosis_replay": {
+      "frames_replayed": 4573,
+      "service_rate_invariant_mismatch": 0,
+      "stage1_mismatch": 0,
+      "stage2_score_mismatch": 0,
+      "tie_break_mismatch": 0,
+      "ttft_debt_mismatch": 0,
+      "winner_mismatch": 0
+    },
+    "selector_diagnosis_sha256": "16bd5ca4fe921a4b8a98ab3cbf10b321ce7b086263539d70aca455fa305162d5",
+    "startup_log_sha256": "0345231458234c5296d982a8450d38fd1a3ac8ca48cd78bb692ec0a57d1710d2"
+  }
+}

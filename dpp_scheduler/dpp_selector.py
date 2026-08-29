@@ -1,14 +1,16 @@
-"""Two-stage TBT-constrained TTFT-DPP selection."""
+"""Two-stage ZERO-relative TBT-constrained Prefill service-rate selection."""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
 
+from dpp_scheduler.consequence_estimator import _misses, obligation_completes
 from dpp_scheduler.contracts import (
     BatchPlan,
     ControlState,
     Decision,
+    Obligation,
     SafeCandidate,
     StateSnapshot,
     validate_snapshot_hash,
@@ -16,7 +18,7 @@ from dpp_scheduler.contracts import (
 from dpp_scheduler.settings import DPPSettings
 
 
-TWO_STAGE_ALGORITHM = "two_stage_tbt_prefill_service_rate_v1"
+TWO_STAGE_ALGORITHM = "two_stage_zero_relative_tbt_prefill_service_rate_v2b"
 TIE_BREAK_ORDER = (
     "prefill_service_rate_desc",
     "effective_duration_asc",
@@ -37,10 +39,12 @@ class TBTRequestSlack:
 class TBTCandidateResult:
     plan_id: str
     effective_duration: float
-    duration_limit: float | None
+    risk_duration_seconds: float
+    violation_count: int
+    zero_violation_count: int
+    delta_violation_count: int
+    delta_lateness_seconds: float
     passed: bool
-    selected_by_fallback: bool = False
-    rejection_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,8 +54,14 @@ class TBTStageResult:
     request_slacks: tuple[TBTRequestSlack, ...]
     min_slack_seconds: float | None
     duration_limit_seconds: float | None
+    maximum_incremental_tbt_violations: int
     candidates: tuple[TBTCandidateResult, ...]
     eligible_plan_ids: tuple[str, ...]
+    reference_plan_id: str | None = None
+    reference_template_id: str | None = None
+    reference_risk_duration_seconds: float | None = None
+    reference_violation_count: int | None = None
+    zero_reference_resolution: str | None = None
     fallback_plan_id: str | None = None
 
 
@@ -112,8 +122,16 @@ def effective_duration(candidate: SafeCandidate, maximum: float) -> float:
     raise ValueError("prediction support flag/mode mismatch")
 
 
+def stage1_risk_duration(candidate: SafeCandidate, maximum: float) -> float:
+    """Stage-1 risk duration: always the conservative duration."""
+    return _finite_positive(
+        "conservative_duration", candidate.prediction.conservative_duration, maximum
+    )
+
+
 class DPPSelector:
-    """Filter by live TBT time, then maximize Prefill service rate."""
+    """Filter by ZERO-relative incremental TBT violations, then maximize
+    Prefill service rate."""
 
     def __init__(self, settings: DPPSettings) -> None:
         self.settings = settings
@@ -186,6 +204,75 @@ class DPPSelector:
             for request_id, deadline in sorted(obligations.items())
         )
 
+    def _zero_reference(
+        self,
+        snapshot: StateSnapshot,
+        candidates_by_id: dict[str, SafeCandidate],
+    ) -> tuple[SafeCandidate, str]:
+        """Resolve the ZERO Decode-only baseline for delta risk.
+
+        The baseline must plan zero Prefill tokens and cover exactly the full
+        active Decode set. Deterministic preference: ZERO template, then STOCK
+        identity (canonical dedup preserves STOCK over a materially identical
+        ZERO), then any zero-service full-decode candidate.
+        """
+        active_decode_ids = {
+            request.request_id for request in snapshot.active_decode_requests
+        }
+        ordered = sorted(
+            candidates_by_id.values(), key=lambda candidate: candidate.plan.plan_id
+        )
+
+        def full_decode_zero(candidate: SafeCandidate) -> bool:
+            return (
+                candidate.plan.total_prefill_tokens == 0
+                and set(candidate.plan.decode_items) == active_decode_ids
+            )
+
+        for prefix, resolution in (
+            ("ZERO", "ZERO_TEMPLATE"),
+            ("STOCK", "STOCK_IDENTITY"),
+        ):
+            for candidate in ordered:
+                template = candidate.plan.template_id
+                if not (
+                    template == prefix or template.startswith(f"{prefix}:")
+                ):
+                    continue
+                if full_decode_zero(candidate):
+                    return candidate, resolution
+        for candidate in ordered:
+            if full_decode_zero(candidate):
+                return candidate, "ZERO_SERVICE_MATCH"
+        raise RuntimeError(
+            "ZERO_REFERENCE_MISSING: no zero-Prefill full-Decode candidate "
+            "exists while active TBT obligations require a risk baseline"
+        )
+
+    @staticmethod
+    def _candidate_risk(
+        snapshot: StateSnapshot,
+        candidate: SafeCandidate,
+        risk_duration: float,
+        obligations: dict[str, Obligation],
+        request_slacks: tuple[TBTRequestSlack, ...],
+    ) -> tuple[dict[str, bool], dict[str, float]]:
+        """Per-obligation TBT miss and predicted lateness under risk duration."""
+        misses: dict[str, bool] = {}
+        lateness: dict[str, float] = {}
+        for item in request_slacks:
+            obligation = obligations[item.request_id]
+            misses[item.request_id] = _misses(
+                snapshot=snapshot,
+                plan=candidate.plan,
+                obligation=obligation,
+                duration=risk_duration,
+            )
+            lateness[item.request_id] = max(
+                0.0, snapshot.timestamp + risk_duration - item.deadline
+            )
+        return misses, lateness
+
     def _tbt_stage(
         self,
         snapshot: StateSnapshot,
@@ -193,6 +280,7 @@ class DPPSelector:
     ) -> tuple[TBTStageResult, tuple[SafeCandidate, ...], dict[str, float]]:
         request_slacks = self._tbt_request_slacks(snapshot)
         durations: dict[str, float] = {}
+        risk_durations: dict[str, float] = {}
         candidates_by_id: dict[str, SafeCandidate] = {}
         for candidate in safe_candidates:
             self._validate_candidate(snapshot, candidate)
@@ -203,111 +291,123 @@ class DPPSelector:
             durations[plan_id] = effective_duration(
                 candidate, self.settings.maximum_numeric
             )
+            risk_durations[plan_id] = stage1_risk_duration(
+                candidate, self.settings.maximum_numeric
+            )
+
+        limit = self.settings.maximum_incremental_tbt_violations
+        min_slack = (
+            min(item.slack_seconds for item in request_slacks)
+            if request_slacks
+            else None
+        )
 
         if not safe_candidates:
             result = TBTStageResult(
                 status="NO_SAFE_CANDIDATES",
                 delta_seconds=self.settings.tbt_delta_seconds,
                 request_slacks=request_slacks,
-                min_slack_seconds=(
-                    min(item.slack_seconds for item in request_slacks)
-                    if request_slacks
-                    else None
-                ),
+                min_slack_seconds=min_slack,
                 duration_limit_seconds=None,
+                maximum_incremental_tbt_violations=limit,
                 candidates=(),
                 eligible_plan_ids=(),
             )
             return result, (), durations
 
+        plan_ids = tuple(candidate.plan.plan_id for candidate in safe_candidates)
+
         if not request_slacks:
-            plan_ids = tuple(candidate.plan.plan_id for candidate in safe_candidates)
             result = TBTStageResult(
                 status="NO_ACTIVE_TBT_OBLIGATION",
                 delta_seconds=self.settings.tbt_delta_seconds,
                 request_slacks=(),
                 min_slack_seconds=None,
                 duration_limit_seconds=None,
+                maximum_incremental_tbt_violations=limit,
                 candidates=tuple(
                     TBTCandidateResult(
                         plan_id=plan_id,
                         effective_duration=durations[plan_id],
-                        duration_limit=None,
+                        risk_duration_seconds=risk_durations[plan_id],
+                        violation_count=0,
+                        zero_violation_count=0,
+                        delta_violation_count=0,
+                        delta_lateness_seconds=0.0,
                         passed=True,
                     )
                     for plan_id in plan_ids
                 ),
                 eligible_plan_ids=plan_ids,
+                zero_reference_resolution="NOT_NEEDED",
             )
             return result, safe_candidates, durations
 
-        min_slack = min(item.slack_seconds for item in request_slacks)
-        duration_limit = min_slack + self.settings.tbt_delta_seconds
-        passed_ids = tuple(
-            candidate.plan.plan_id
-            for candidate in safe_candidates
-            if durations[candidate.plan.plan_id] <= duration_limit
+        zero_ref, resolution = self._zero_reference(snapshot, candidates_by_id)
+        obligations = {
+            obligation.request_id: obligation
+            for obligation in snapshot.active_tbt_obligations
+        }
+        zero_risk = risk_durations[zero_ref.plan.plan_id]
+        zero_misses, zero_lateness = self._candidate_risk(
+            snapshot, zero_ref, zero_risk, obligations, request_slacks
         )
-        if passed_ids:
-            passed_set = set(passed_ids)
-            result = TBTStageResult(
-                status="WITHIN_SLACK",
-                delta_seconds=self.settings.tbt_delta_seconds,
-                request_slacks=request_slacks,
-                min_slack_seconds=min_slack,
-                duration_limit_seconds=duration_limit,
-                candidates=tuple(
-                    TBTCandidateResult(
-                        plan_id=candidate.plan.plan_id,
-                        effective_duration=durations[candidate.plan.plan_id],
-                        duration_limit=duration_limit,
-                        passed=candidate.plan.plan_id in passed_set,
-                        rejection_reason=(
-                            None
-                            if candidate.plan.plan_id in passed_set
-                            else "EFFECTIVE_DURATION_EXCEEDS_TBT_LIMIT"
-                        ),
-                    )
-                    for candidate in safe_candidates
-                ),
-                eligible_plan_ids=passed_ids,
-            )
-            return (
-                result,
-                tuple(candidates_by_id[plan_id] for plan_id in passed_ids),
-                durations,
-            )
 
-        fallback = min(
-            safe_candidates,
-            key=lambda candidate: (
-                durations[candidate.plan.plan_id],
-                candidate.plan.total_prefill_tokens,
-                candidate.plan.plan_id,
-            ),
-        )
-        fallback_id = fallback.plan.plan_id
-        result = TBTStageResult(
-            status="NO_CANDIDATE_WITHIN_SLACK",
-            delta_seconds=self.settings.tbt_delta_seconds,
-            request_slacks=request_slacks,
-            min_slack_seconds=min_slack,
-            duration_limit_seconds=duration_limit,
-            candidates=tuple(
+        passed_ids: list[str] = []
+        candidate_results: list[TBTCandidateResult] = []
+        for candidate in safe_candidates:
+            risk_duration = risk_durations[candidate.plan.plan_id]
+            misses, lateness = self._candidate_risk(
+                snapshot, candidate, risk_duration, obligations, request_slacks
+            )
+            delta_n = sum(
+                1
+                for item in request_slacks
+                if misses[item.request_id] and not zero_misses[item.request_id]
+            )
+            delta_l = sum(
+                max(
+                    0.0,
+                    lateness[item.request_id] - zero_lateness[item.request_id],
+                )
+                for item in request_slacks
+            )
+            passed = delta_n <= limit
+            if passed:
+                passed_ids.append(candidate.plan.plan_id)
+            candidate_results.append(
                 TBTCandidateResult(
                     plan_id=candidate.plan.plan_id,
                     effective_duration=durations[candidate.plan.plan_id],
-                    duration_limit=duration_limit,
-                    passed=False,
-                    selected_by_fallback=candidate.plan.plan_id == fallback_id,
-                    rejection_reason="EFFECTIVE_DURATION_EXCEEDS_TBT_LIMIT",
+                    risk_duration_seconds=risk_duration,
+                    violation_count=sum(misses.values()),
+                    zero_violation_count=sum(zero_misses.values()),
+                    delta_violation_count=delta_n,
+                    delta_lateness_seconds=delta_l,
+                    passed=passed,
                 )
-                for candidate in safe_candidates
-            ),
-            eligible_plan_ids=(fallback_id,),
-            fallback_plan_id=fallback_id,
+            )
+
+        result = TBTStageResult(
+            status="DELTA_N_ADMITTED",
+            delta_seconds=self.settings.tbt_delta_seconds,
+            request_slacks=request_slacks,
+            min_slack_seconds=min_slack,
+            duration_limit_seconds=None,
+            maximum_incremental_tbt_violations=limit,
+            candidates=tuple(candidate_results),
+            eligible_plan_ids=tuple(passed_ids),
+            reference_plan_id=zero_ref.plan.plan_id,
+            reference_template_id=zero_ref.plan.template_id,
+            reference_risk_duration_seconds=zero_risk,
+            reference_violation_count=sum(zero_misses.values()),
+            zero_reference_resolution=resolution,
         )
-        return result, (fallback,), durations
+        return (
+            result,
+            tuple(candidates_by_id[plan_id] for plan_id in passed_ids),
+            durations,
+        )
 
     def _score_one(
         self,
@@ -465,11 +565,7 @@ class DPPSelector:
         candidate_by_id = {
             candidate.plan.plan_id: candidate for candidate in eligible
         }
-        reason = (
-            "TBT_NO_CANDIDATE_MIN_DURATION"
-            if stage1.status == "NO_CANDIDATE_WITHIN_SLACK"
-            else "TWO_STAGE_TBT_PREFILL_SERVICE_RATE"
-        )
+        reason = "TWO_STAGE_TBT_PREFILL_SERVICE_RATE"
         decision = Decision(
             frame_id=snapshot.frame_id,
             snapshot_hash=snapshot.snapshot_hash,

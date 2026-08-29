@@ -1,5 +1,37 @@
 # Active research decisions
 
+## 2026-08-30: replace min-slack Stage 1 with a ZERO-relative ΔN ≤ N guard
+
+- The 2026-08-29 V2-A offline replay is negative evidence: ΔN=0 released 0 of
+  the 1,527 old ZERO-only backlog frames; Stock has ΔN=1 in every one of them
+  with added TBT lateness ΔL P50 0.674s / P90 0.756s. The min-slack Stage 1
+  and the pure ΔN=0 filter are therefore retired as the online admission rule.
+- The online Stage 1 now admits a candidate iff its ZERO-relative incremental
+  TBT violation count ΔN ≤ N, with risk durations always the Predictor
+  conservative duration and miss semantics identical to
+  `ConsequenceEstimator._misses` (`>` when served, `>=` otherwise). ΔL is
+  recorded but does not filter. Algorithm identity
+  `two_stage_zero_relative_tbt_prefill_service_rate_v2b`; the authoritative
+  contract is
+  `docs/Two-Stage-ZERO-Relative-TBT-Prefill-Service-Rate-Selector-V2B.md`.
+- The ZERO reference is a zero-Prefill full-Decode candidate resolved
+  deterministically: ZERO template, then STOCK identity (canonical dedup
+  preserves STOCK over a materially identical ZERO), then any zero-service
+  full-decode candidate by ascending plan_id; a missing reference raises
+  `ZERO_REFERENCE_MISSING` fail-closed. ZERO always satisfies ΔN=0, so the
+  eligible set is never empty when the reference resolves.
+- Stage 2 (Prefill service rate = actual planned Prefill tokens per
+  effective duration), its tie-break, the ZERO invariant, Candidate
+  Generator, Predictor, Safe-Set, Fallback, trace, QPS, and SLO are frozen.
+  `tbt_stage.delta_seconds` is `legacy_inactive_in_v2b`; diagnosis is schema
+  v4 with replayable per-candidate risk fields.
+- N is grid-searched at {0, 2, 4, 8, 16} via the development-only env
+  `DPP_STAGE1_MAX_DELTA_N` (non-negative integer, rejected outside
+  `development_nonformal`), one n=150 run per value on the staged QPS 0.25
+  seed 1001 trace (SHA-256 `203e7ed4…`) plus one same-batch Stock run, all
+  DPP runs with Selector Diagnosis whose replay must be zero-mismatch. This
+  is development/non-formal work and advances no gate.
+
 ## 2026-08-28: make online residual calibration robust to outliers
 
 - This change is limited to Predictor online calibration. The offline Ridge

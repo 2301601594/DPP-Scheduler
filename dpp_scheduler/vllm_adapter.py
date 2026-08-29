@@ -16,7 +16,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +64,7 @@ DPP_EXECUTION_SCOPE_ENV = "DPP_EXECUTION_SCOPE"
 DPP_TTFT_DRIFT_WEIGHT_ENV = "DPP_TTFT_DRIFT_WEIGHT"
 DPP_SELECTION_MODE_ENV = "DPP_SELECTION_MODE"
 DPP_SELECTION_MODES = frozenset({"normal", "forced_stock_plan"})
+DPP_STAGE1_MAX_DELTA_N_ENV = "DPP_STAGE1_MAX_DELTA_N"
 
 VLLM_OFFICIAL_ITERATION_TIMING = "vllm_official_iteration_details"
 VLLM_ALIGNED_ITERATION_TIMING = "vllm_aligned_monotonic"
@@ -77,7 +78,7 @@ def resolve_dpp_runtime_overrides(
     execution_scope: str,
     environment: Mapping[str, str],
 ) -> tuple[DPPSettings, str]:
-    """Resolve selection mode and reject the retired weighted-DPP override."""
+    """Resolve selection mode, Stage-1 delta-N override, and rejected weights."""
     selection_mode = environment.get(DPP_SELECTION_MODE_ENV, "normal")
     if selection_mode not in DPP_SELECTION_MODES:
         raise ValueError(
@@ -89,6 +90,25 @@ def resolve_dpp_runtime_overrides(
         )
     if selection_mode != "normal" and execution_scope != "development_nonformal":
         raise ValueError("DPP selection override is development_nonformal only")
+    raw_limit = environment.get(DPP_STAGE1_MAX_DELTA_N_ENV)
+    if raw_limit is not None:
+        if execution_scope != "development_nonformal":
+            raise ValueError(
+                f"{DPP_STAGE1_MAX_DELTA_N_ENV} is development_nonformal only"
+            )
+        valid_limit = (
+            isinstance(raw_limit, int)
+            and not isinstance(raw_limit, bool)
+        ) or (
+            isinstance(raw_limit, str) and raw_limit.strip().isdigit()
+        )
+        if not valid_limit:
+            raise ValueError(
+                f"{DPP_STAGE1_MAX_DELTA_N_ENV} must be a non-negative integer"
+            )
+        settings = replace(
+            settings, maximum_incremental_tbt_violations=int(raw_limit)
+        )
     return settings, selection_mode
 
 
@@ -1320,6 +1340,9 @@ def get_modular_scheduler_class() -> type:
                 "selection_mode": self._dpp_selection_mode,
                 "selector_algorithm": self._dpp_selector.settings.algorithm,
                 "tbt_delta_seconds": self._dpp_selector.settings.tbt_delta_seconds,
+                "maximum_incremental_tbt_violations": (
+                    self._dpp_selector.settings.maximum_incremental_tbt_violations
+                ),
                 "selection_histogram": agg["selection_histogram"],
                 "tie_selected_histogram": agg["tie_selected_histogram"],
                 "prefill_backlog_frame_count": agg["prefill_backlog_frame_count"],
@@ -1674,6 +1697,9 @@ def get_modular_scheduler_class() -> type:
                     "selector_algorithm": self._dpp_selector.settings.algorithm,
                     "tbt_delta_seconds": (
                         self._dpp_selector.settings.tbt_delta_seconds
+                    ),
+                    "maximum_incremental_tbt_violations": (
+                        self._dpp_selector.settings.maximum_incremental_tbt_violations
                     ),
                     "tbt_stage_status": (
                         selector_audit.stage1.status

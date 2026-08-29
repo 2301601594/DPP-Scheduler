@@ -60,6 +60,7 @@ DPP_DIAGNOSTIC_ITERATION_LOG_ENV = "DPP_DIAGNOSTIC_ITERATION_LOG"
 DPP_DIAGNOSTIC_AGGREGATE_PATH_ENV = "DPP_DIAGNOSTIC_AGGREGATE_PATH"
 DPP_EXECUTION_SCOPE_ENV = "DPP_EXECUTION_SCOPE"
 DPP_SELECTION_MODE_ENV = "DPP_SELECTION_MODE"
+DPP_STAGE1_MAX_DELTA_N_ENV = "DPP_STAGE1_MAX_DELTA_N"
 
 
 def resolve_execution_scope(
@@ -648,6 +649,13 @@ def main() -> int:
         raise ActiveConfigError(
             "DPP_TTFT_DRIFT_WEIGHT is obsolete for two-stage DPP"
         )
+    if (
+        DPP_STAGE1_MAX_DELTA_N_ENV in os.environ
+        and args.policy != "dpp"
+    ):
+        raise ActiveConfigError(
+            "DPP_STAGE1_MAX_DELTA_N requires --policy dpp"
+        )
     command_builder = (
         build_dpp_server_command if args.policy == "dpp" else build_stock_server_command
     )
@@ -672,7 +680,14 @@ def main() -> int:
         comparison_scope=comparison_scope,
         diagnostic_prefix=args.request_limit is not None,
     )
+    stage1_delta_n = os.environ.get(DPP_STAGE1_MAX_DELTA_N_ENV)
+    if stage1_delta_n is not None and execution_scope != "development_nonformal":
+        raise ActiveConfigError(
+            "DPP_STAGE1_MAX_DELTA_N is development_nonformal only"
+        )
     preview["runner_env_overrides"][DPP_EXECUTION_SCOPE_ENV] = execution_scope
+    if stage1_delta_n is not None:
+        preview["runner_env_overrides"][DPP_STAGE1_MAX_DELTA_N_ENV] = stage1_delta_n
     if args.policy == "dpp":
         preview["runner_env_overrides"][DPP_DIAGNOSTIC_AGGREGATE_PATH_ENV] = str(
             output_dir / "dpp_diagnostic_aggregate.json"

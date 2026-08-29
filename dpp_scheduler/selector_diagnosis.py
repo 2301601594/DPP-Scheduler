@@ -15,8 +15,8 @@ from dpp_scheduler.settings import DPPSettings
 
 DPP_SELECTOR_DIAGNOSIS_ENV = "DPP_SELECTOR_DIAGNOSIS"
 DPP_SELECTOR_DIAGNOSIS_PATH_ENV = "DPP_SELECTOR_DIAGNOSIS_PATH"
-SELECTOR_DIAGNOSIS_SCHEMA_VERSION = 3
-SUPPORTED_SELECTOR_DIAGNOSIS_SCHEMA_VERSIONS = frozenset({1, 2, 3})
+SELECTOR_DIAGNOSIS_SCHEMA_VERSION = 4
+SUPPORTED_SELECTOR_DIAGNOSIS_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4})
 
 
 def _is_zero_template(template_id: object) -> bool:
@@ -196,11 +196,18 @@ class SelectorDiagnosisWriter:
                 "score_rel_tol": 1e-9,
                 "score_abs_tol": 1e-12,
                 "tbt_delta_seconds": audit.stage1.delta_seconds,
+                "maximum_incremental_tbt_violations": (
+                    audit.stage1.maximum_incremental_tbt_violations
+                ),
                 "tie_break_order": list(audit.tie_break_order),
             },
             "state": {
                 "timestamp": snapshot.timestamp,
                 "active_decode_count": len(snapshot.active_decode_requests),
+                "active_decode_request_ids": [
+                    request.request_id
+                    for request in snapshot.active_decode_requests
+                ],
                 "waiting_prefill_count": len(snapshot.waiting_prefill_requests),
                 "waiting_prefill_tokens": backlog_tokens,
                 "tbt_request_slacks": [
@@ -371,6 +378,19 @@ def replay_record(record: Mapping[str, Any]) -> dict[str, int]:
     ):
         counters["stage1_mismatch"] += 1
 
+    if schema_version == 4:
+        return _replay_stage1_delta_n_v4(
+            record=record,
+            state=state,
+            stage1=stage1,
+            selector=selector,
+            decision=decision,
+            candidates=candidates,
+            counters=counters,
+            rel_tol=rel_tol,
+            abs_tol=abs_tol,
+        )
+
     duration_limit = min_slack + delta if min_slack is not None else None
     recorded_limit = stage1["duration_limit_seconds"]
     if (duration_limit is None) != (recorded_limit is None) or (
@@ -453,148 +473,17 @@ def replay_record(record: Mapping[str, Any]) -> dict[str, int]:
             counters["stage1_mismatch"] += 1
 
     if schema_version == 3:
-        replayed_scores: list[dict[str, Any]] = []
-        backlog_tokens = int(state["waiting_prefill_tokens"])
-        for candidate in candidates:
-            plan_id = str(candidate["plan_id"])
-            details = candidate["stage2_prefill_service_rate"]
-            if plan_id not in replayed_eligible:
-                if details is not None:
-                    counters["stage2_score_mismatch"] += 1
-                continue
-            if details is None:
-                counters["stage2_score_mismatch"] += 1
-                continue
-            tau = effective_by_id[plan_id]
-            service_tokens = int(candidate["plan"]["total_prefill_tokens"])
-            service_rate = service_tokens / tau
-            decode_items = list(candidate["plan"]["decode_items"])
-            decode_coverage = (
-                len(decode_items) == len(set(decode_items))
-                and len(decode_items) == int(state["active_decode_count"])
-            )
-            if (
-                int(details["prefill_service_tokens"]) != service_tokens
-                or not _close(
-                    service_rate,
-                    float(details["prefill_service_rate"]),
-                    rel_tol=rel_tol,
-                    abs_tol=abs_tol,
-                )
-                or not _close(
-                    service_rate,
-                    float(details["score"]),
-                    rel_tol=rel_tol,
-                    abs_tol=abs_tol,
-                )
-                or not _close(
-                    tau,
-                    float(details["effective_duration"]),
-                    rel_tol=rel_tol,
-                    abs_tol=abs_tol,
-                )
-                or int(details["prefill_budget"]) != service_tokens
-                or int(details["current_prefill_count"])
-                != int(state["waiting_prefill_count"])
-                or int(details["current_prefill_backlog_tokens"])
-                != backlog_tokens
-                or int(details["current_decode_count"])
-                != int(state["active_decode_count"])
-                or bool(details["decode_coverage_complete"]) != decode_coverage
-            ):
-                counters["stage2_score_mismatch"] += 1
-            tie_key = details["tie_break_key"]
-            if (
-                not _close(
-                    service_rate,
-                    float(tie_key["prefill_service_rate_desc"]),
-                    rel_tol=rel_tol,
-                    abs_tol=abs_tol,
-                )
-                or not _close(
-                    tau,
-                    float(tie_key["effective_duration_asc"]),
-                    rel_tol=rel_tol,
-                    abs_tol=abs_tol,
-                )
-                or int(tie_key["prefill_service_tokens_desc"])
-                != service_tokens
-                or int(tie_key["prefill_budget_asc"]) != service_tokens
-                or str(tie_key["plan_id_asc"]) != plan_id
-            ):
-                counters["tie_break_mismatch"] += 1
-            replayed_scores.append(
-                {
-                    "plan_id": plan_id,
-                    "score": service_rate,
-                    "duration": tau,
-                    "service_tokens": service_tokens,
-                    "budget": service_tokens,
-                    "recorded_rank": int(details["rank"]),
-                }
-            )
-
-        ranked, winner_tie = _rank_service_candidates(
-            replayed_scores, rel_tol=rel_tol, abs_tol=abs_tol
+        return _verify_stage2_service_rate(
+            record=record,
+            state=state,
+            decision=decision,
+            candidates=candidates,
+            replayed_eligible=replayed_eligible,
+            effective_by_id=effective_by_id,
+            counters=counters,
+            rel_tol=rel_tol,
+            abs_tol=abs_tol,
         )
-        if any(
-            item["recorded_rank"] != rank
-            for rank, item in enumerate(ranked, start=1)
-        ):
-            counters["tie_break_mismatch"] += 1
-        if winner_tie != list(decision["winner_tie_plan_ids"]):
-            counters["tie_break_mismatch"] += 1
-        replayed_winner = ranked[0]["plan_id"] if ranked else None
-        if replayed_winner != decision["selector_selected_plan_id"]:
-            counters["winner_mismatch"] += 1
-
-        diagnosis = record["service_rate_diagnosis"]
-        eligible_nonzero = sum(
-            int(item["service_tokens"] > 0) for item in replayed_scores
-        )
-        selected = ranked[0] if ranked else None
-        selected_is_zero = bool(
-            selected is not None and selected["service_tokens"] == 0
-        )
-        invariant = bool(selected_is_zero and eligible_nonzero)
-        selected_tokens = selected["service_tokens"] if selected is not None else None
-        selected_rate = selected["score"] if selected is not None else None
-        recorded_selected_tokens = diagnosis["selected_prefill_service_tokens"]
-        recorded_selected_rate = diagnosis["selected_prefill_service_rate"]
-        selected_value_mismatch = (
-            (selected_tokens is None) != (recorded_selected_tokens is None)
-            or (
-                selected_tokens is not None
-                and int(recorded_selected_tokens) != selected_tokens
-            )
-            or (selected_rate is None) != (recorded_selected_rate is None)
-            or (
-                selected_rate is not None
-                and not _close(
-                    selected_rate,
-                    float(recorded_selected_rate),
-                    rel_tol=rel_tol,
-                    abs_tol=abs_tol,
-                )
-            )
-        )
-        if (
-            int(diagnosis["prefill_backlog_count"])
-            != int(state["waiting_prefill_count"])
-            or int(diagnosis["prefill_backlog_tokens"]) != backlog_tokens
-            or int(diagnosis["stage1_eligible_candidate_count"])
-            != len(replayed_scores)
-            or int(diagnosis["stage1_eligible_nonzero_candidate_count"])
-            != eligible_nonzero
-            or diagnosis["selected_plan_id"] != replayed_winner
-            or bool(diagnosis["selected_is_zero"]) != selected_is_zero
-            or bool(diagnosis["zero_with_eligible_nonzero"]) != invariant
-            or selected_value_mismatch
-        ):
-            counters["stage2_score_mismatch"] += 1
-        if invariant:
-            counters["service_rate_invariant_mismatch"] += 1
-        return counters
 
     prefill_ref = selector["prefill_reference_concurrency"]
     replayed_scores: list[dict[str, Any]] = []
@@ -773,6 +662,378 @@ def replay_record(record: Mapping[str, Any]) -> dict[str, int]:
     return counters
 
 
+def _verify_stage2_service_rate(
+    *,
+    record: Mapping[str, Any],
+    state: Mapping[str, Any],
+    decision: Mapping[str, Any],
+    candidates: list[dict[str, Any]],
+    replayed_eligible: list[str],
+    effective_by_id: dict[str, float],
+    counters: dict[str, int],
+    rel_tol: float,
+    abs_tol: float,
+) -> dict[str, int]:
+    """Re-derive Stage-2 Prefill service-rate scores, ranks, winner, invariant."""
+    replayed_scores: list[dict[str, Any]] = []
+    backlog_tokens = int(state["waiting_prefill_tokens"])
+    for candidate in candidates:
+        plan_id = str(candidate["plan_id"])
+        details = candidate["stage2_prefill_service_rate"]
+        if plan_id not in replayed_eligible:
+            if details is not None:
+                counters["stage2_score_mismatch"] += 1
+            continue
+        if details is None:
+            counters["stage2_score_mismatch"] += 1
+            continue
+        tau = effective_by_id[plan_id]
+        service_tokens = int(candidate["plan"]["total_prefill_tokens"])
+        service_rate = service_tokens / tau
+        decode_items = list(candidate["plan"]["decode_items"])
+        decode_coverage = (
+            len(decode_items) == len(set(decode_items))
+            and len(decode_items) == int(state["active_decode_count"])
+        )
+        if (
+            int(details["prefill_service_tokens"]) != service_tokens
+            or not _close(
+                service_rate,
+                float(details["prefill_service_rate"]),
+                rel_tol=rel_tol,
+                abs_tol=abs_tol,
+            )
+            or not _close(
+                service_rate,
+                float(details["score"]),
+                rel_tol=rel_tol,
+                abs_tol=abs_tol,
+            )
+            or not _close(
+                tau,
+                float(details["effective_duration"]),
+                rel_tol=rel_tol,
+                abs_tol=abs_tol,
+            )
+            or int(details["prefill_budget"]) != service_tokens
+            or int(details["current_prefill_count"])
+            != int(state["waiting_prefill_count"])
+            or int(details["current_prefill_backlog_tokens"])
+            != backlog_tokens
+            or int(details["current_decode_count"])
+            != int(state["active_decode_count"])
+            or bool(details["decode_coverage_complete"]) != decode_coverage
+        ):
+            counters["stage2_score_mismatch"] += 1
+        tie_key = details["tie_break_key"]
+        if (
+            not _close(
+                service_rate,
+                float(tie_key["prefill_service_rate_desc"]),
+                rel_tol=rel_tol,
+                abs_tol=abs_tol,
+            )
+            or not _close(
+                tau,
+                float(tie_key["effective_duration_asc"]),
+                rel_tol=rel_tol,
+                abs_tol=abs_tol,
+            )
+            or int(tie_key["prefill_service_tokens_desc"])
+            != service_tokens
+            or int(tie_key["prefill_budget_asc"]) != service_tokens
+            or str(tie_key["plan_id_asc"]) != plan_id
+        ):
+            counters["tie_break_mismatch"] += 1
+        replayed_scores.append(
+            {
+                "plan_id": plan_id,
+                "score": service_rate,
+                "duration": tau,
+                "service_tokens": service_tokens,
+                "budget": service_tokens,
+                "recorded_rank": int(details["rank"]),
+            }
+        )
+
+    ranked, winner_tie = _rank_service_candidates(
+        replayed_scores, rel_tol=rel_tol, abs_tol=abs_tol
+    )
+    if any(
+        item["recorded_rank"] != rank
+        for rank, item in enumerate(ranked, start=1)
+    ):
+        counters["tie_break_mismatch"] += 1
+    if winner_tie != list(decision["winner_tie_plan_ids"]):
+        counters["tie_break_mismatch"] += 1
+    replayed_winner = ranked[0]["plan_id"] if ranked else None
+    if replayed_winner != decision["selector_selected_plan_id"]:
+        counters["winner_mismatch"] += 1
+
+    diagnosis = record["service_rate_diagnosis"]
+    eligible_nonzero = sum(
+        int(item["service_tokens"] > 0) for item in replayed_scores
+    )
+    selected = ranked[0] if ranked else None
+    selected_is_zero = bool(
+        selected is not None and selected["service_tokens"] == 0
+    )
+    invariant = bool(selected_is_zero and eligible_nonzero)
+    selected_tokens = selected["service_tokens"] if selected is not None else None
+    selected_rate = selected["score"] if selected is not None else None
+    recorded_selected_tokens = diagnosis["selected_prefill_service_tokens"]
+    recorded_selected_rate = diagnosis["selected_prefill_service_rate"]
+    selected_value_mismatch = (
+        (selected_tokens is None) != (recorded_selected_tokens is None)
+        or (
+            selected_tokens is not None
+            and int(recorded_selected_tokens) != selected_tokens
+        )
+        or (selected_rate is None) != (recorded_selected_rate is None)
+        or (
+            selected_rate is not None
+            and not _close(
+                selected_rate,
+                float(recorded_selected_rate),
+                rel_tol=rel_tol,
+                abs_tol=abs_tol,
+            )
+        )
+    )
+    if (
+        int(diagnosis["prefill_backlog_count"])
+        != int(state["waiting_prefill_count"])
+        or int(diagnosis["prefill_backlog_tokens"]) != backlog_tokens
+        or int(diagnosis["stage1_eligible_candidate_count"])
+        != len(replayed_scores)
+        or int(diagnosis["stage1_eligible_nonzero_candidate_count"])
+        != eligible_nonzero
+        or diagnosis["selected_plan_id"] != replayed_winner
+        or bool(diagnosis["selected_is_zero"]) != selected_is_zero
+        or bool(diagnosis["zero_with_eligible_nonzero"]) != invariant
+        or selected_value_mismatch
+    ):
+        counters["stage2_score_mismatch"] += 1
+    if invariant:
+        counters["service_rate_invariant_mismatch"] += 1
+    return counters
+
+
+def _replay_stage1_delta_n_v4(
+    *,
+    record: Mapping[str, Any],
+    state: Mapping[str, Any],
+    stage1: Mapping[str, Any],
+    selector: Mapping[str, Any],
+    decision: Mapping[str, Any],
+    candidates: list[dict[str, Any]],
+    counters: dict[str, int],
+    rel_tol: float,
+    abs_tol: float,
+) -> dict[str, int]:
+    """Re-derive schema-v4 ZERO-relative Stage-1 admission and Stage 2."""
+    effective_by_id: dict[str, float] = {}
+    risk_by_id: dict[str, float] = {}
+    for candidate in candidates:
+        duration = candidate["duration"]
+        if duration["in_support"] and duration["prediction_mode"] == "INTERPOLATION":
+            effective = float(duration["expected"])
+        elif (
+            not duration["in_support"]
+            and duration["prediction_mode"] == "CONSTRAINED_EXTRAPOLATION"
+        ):
+            effective = float(duration["conservative"])
+        else:
+            counters["stage1_mismatch"] += 1
+            continue
+        risk = float(duration["conservative"])
+        if not math.isfinite(risk) or risk <= 0:
+            counters["stage1_mismatch"] += 1
+            continue
+        plan_id = str(candidate["plan_id"])
+        effective_by_id[plan_id] = effective
+        risk_by_id[plan_id] = risk
+        stage1_candidate = candidate["stage1_tbt"]
+        if not _close(
+            effective,
+            float(duration["effective"]),
+            rel_tol=rel_tol,
+            abs_tol=abs_tol,
+        ):
+            counters["stage1_mismatch"] += 1
+        if not _close(
+            risk,
+            float(stage1_candidate["risk_duration_seconds"]),
+            rel_tol=rel_tol,
+            abs_tol=abs_tol,
+        ):
+            counters["stage1_mismatch"] += 1
+
+    limit = int(selector["maximum_incremental_tbt_violations"])
+    timestamp = float(state["timestamp"])
+    tbt_items = list(state["tbt_request_slacks"])
+    active_decode_ids = {
+        str(item) for item in state.get("active_decode_request_ids", [])
+    }
+
+    def risk_set(decode_items: list[Any], duration: float) -> tuple[dict[str, bool], dict[str, float]]:
+        served = {str(item) for item in decode_items}
+        misses: dict[str, bool] = {}
+        lateness: dict[str, float] = {}
+        for item in tbt_items:
+            request_id = str(item["request_id"])
+            deadline = float(item["deadline"])
+            end = timestamp + duration
+            if request_id in served:
+                misses[request_id] = end > deadline
+            else:
+                misses[request_id] = end >= deadline
+            lateness[request_id] = max(0.0, end - deadline)
+        return misses, lateness
+
+    def full_decode_zero(candidate: dict[str, Any]) -> bool:
+        return (
+            int(candidate["plan"]["total_prefill_tokens"]) == 0
+            and {str(item) for item in candidate["plan"]["decode_items"]}
+            == active_decode_ids
+        )
+
+    replayed_status: str
+    replayed_eligible: list[str] = []
+    if not candidates:
+        replayed_status = "NO_SAFE_CANDIDATES"
+    elif not tbt_items:
+        replayed_status = "NO_ACTIVE_TBT_OBLIGATION"
+        replayed_eligible = [str(candidate["plan_id"]) for candidate in candidates]
+        if stage1.get("zero_reference_resolution") != "NOT_NEEDED":
+            counters["stage1_mismatch"] += 1
+        for candidate in candidates:
+            stage1_candidate = candidate["stage1_tbt"]
+            if (
+                int(stage1_candidate["violation_count"]) != 0
+                or int(stage1_candidate["zero_violation_count"]) != 0
+                or int(stage1_candidate["delta_violation_count"]) != 0
+                or not _close(
+                    float(stage1_candidate["delta_lateness_seconds"]),
+                    0.0,
+                    rel_tol=rel_tol,
+                    abs_tol=abs_tol,
+                )
+                or not bool(stage1_candidate["passed"])
+            ):
+                counters["stage1_mismatch"] += 1
+    else:
+        zero: dict[str, Any] | None = None
+        resolution: str | None = None
+        ordered = sorted(candidates, key=lambda item: str(item["plan_id"]))
+        for prefix, candidate_resolution in (
+            ("ZERO", "ZERO_TEMPLATE"),
+            ("STOCK", "STOCK_IDENTITY"),
+        ):
+            for candidate in ordered:
+                template = str(candidate.get("template_id", ""))
+                if not (
+                    template == prefix or template.startswith(f"{prefix}:")
+                ):
+                    continue
+                if full_decode_zero(candidate):
+                    zero = candidate
+                    resolution = candidate_resolution
+                    break
+            if zero is not None:
+                break
+        if zero is None:
+            for candidate in ordered:
+                if full_decode_zero(candidate):
+                    zero = candidate
+                    resolution = "ZERO_SERVICE_MATCH"
+                    break
+        if zero is None:
+            replayed_status = "ZERO_REFERENCE_MISSING"
+        else:
+            replayed_status = "DELTA_N_ADMITTED"
+            zero_id = str(zero["plan_id"])
+            if stage1["reference_plan_id"] != zero_id:
+                counters["stage1_mismatch"] += 1
+            if stage1.get("zero_reference_resolution") != resolution:
+                counters["stage1_mismatch"] += 1
+            if not _close(
+                risk_by_id[zero_id],
+                float(stage1["reference_risk_duration_seconds"]),
+                rel_tol=rel_tol,
+                abs_tol=abs_tol,
+            ):
+                counters["stage1_mismatch"] += 1
+            zero_misses, zero_lateness = risk_set(
+                zero["plan"]["decode_items"], risk_by_id[zero_id]
+            )
+            if int(stage1["reference_violation_count"]) != sum(
+                zero_misses.values()
+            ):
+                counters["stage1_mismatch"] += 1
+            for candidate in candidates:
+                plan_id = str(candidate["plan_id"])
+                if plan_id not in risk_by_id:
+                    continue
+                stage1_candidate = candidate["stage1_tbt"]
+                misses, lateness = risk_set(
+                    candidate["plan"]["decode_items"], risk_by_id[plan_id]
+                )
+                delta_n = sum(
+                    1
+                    for item in tbt_items
+                    if misses[str(item["request_id"])]
+                    and not zero_misses[str(item["request_id"])]
+                )
+                delta_l = sum(
+                    max(
+                        0.0,
+                        lateness[str(item["request_id"])]
+                        - zero_lateness[str(item["request_id"])],
+                    )
+                    for item in tbt_items
+                )
+                if int(stage1_candidate["violation_count"]) != sum(misses.values()):
+                    counters["stage1_mismatch"] += 1
+                if int(stage1_candidate["zero_violation_count"]) != sum(
+                    zero_misses.values()
+                ):
+                    counters["stage1_mismatch"] += 1
+                if int(stage1_candidate["delta_violation_count"]) != delta_n:
+                    counters["stage1_mismatch"] += 1
+                if not _close(
+                    float(stage1_candidate["delta_lateness_seconds"]),
+                    delta_l,
+                    rel_tol=rel_tol,
+                    abs_tol=abs_tol,
+                ):
+                    counters["stage1_mismatch"] += 1
+                passed = delta_n <= limit
+                if bool(stage1_candidate["passed"]) != passed:
+                    counters["stage1_mismatch"] += 1
+                if passed:
+                    replayed_eligible.append(plan_id)
+
+    if replayed_status != stage1["status"] or replayed_eligible != list(
+        stage1["eligible_plan_ids"]
+    ):
+        counters["stage1_mismatch"] += 1
+    if int(stage1.get("maximum_incremental_tbt_violations", -1)) != limit:
+        counters["stage1_mismatch"] += 1
+
+    return _verify_stage2_service_rate(
+        record=record,
+        state=state,
+        decision=decision,
+        candidates=candidates,
+        replayed_eligible=replayed_eligible,
+        effective_by_id=effective_by_id,
+        counters=counters,
+        rel_tol=rel_tol,
+        abs_tol=abs_tol,
+    )
+
+
 def replay_file(path: Path) -> dict[str, int]:
     summary = {
         "frames_replayed": 0,
@@ -830,7 +1091,7 @@ def counterfactual_record(record: Mapping[str, Any]) -> dict[str, Any]:
     schema_version = record.get("schema_version")
     if schema_version not in SUPPORTED_SELECTOR_DIAGNOSIS_SCHEMA_VERSIONS:
         raise ValueError("Selector diagnosis schema version mismatch")
-    if schema_version == 3:
+    if schema_version in {3, 4}:
         raise ValueError(
             "TTFT Rate/Absolute counterfactual supports diagnosis schema 1/2 only"
         )

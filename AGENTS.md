@@ -22,7 +22,7 @@ Read only the documents relevant to the task:
 | --- | --- |
 | Baseline Scheduler scope, architecture, public contracts, algorithms, and acceptance criteria | [`docs/Qwen3-14B-DGX-Spark-Modular-DPP-Scheduler.md`](docs/Qwen3-14B-DGX-Spark-Modular-DPP-Scheduler.md) |
 | Request-level Service-Deficit DPP v2 changes, formulas, implementation phases, and tests | [`docs/Request-level-Service-Deficit-DPP-v2-Agent-Modification-Plan.md`](docs/Request-level-Service-Deficit-DPP-v2-Agent-Modification-Plan.md) |
-| Current two-stage TBT-constrained Prefill service-rate Selector, diagnosis, replay, and tests | [`docs/Two-Stage-TBT-Constrained-Prefill-Service-Rate-Selector-V1.md`](docs/Two-Stage-TBT-Constrained-Prefill-Service-Rate-Selector-V1.md) |
+| Current two-stage ZERO-relative TBT-constrained Prefill service-rate Selector, diagnosis, replay, and tests | [`docs/Two-Stage-ZERO-Relative-TBT-Prefill-Service-Rate-Selector-V2B.md`](docs/Two-Stage-ZERO-Relative-TBT-Prefill-Service-Rate-Selector-V2B.md) |
 | Current Candidate Generator V3 budget search, Prefill allocation policies, and diagnostics | [`docs/Candidate-Generator-V3.md`](docs/Candidate-Generator-V3.md) |
 | Current stage, G0–G7 gates, evidence requirements, and experiment milestones | [`docs/experiment_plan.md`](docs/experiment_plan.md) |
 | Frozen or superseding research decisions and their rationale | [`docs/decisions.md`](docs/decisions.md) |
@@ -32,10 +32,10 @@ Read only the documents relevant to the task:
 | Result namespaces, retention, and cleanup rules | [`results/README.md`](results/README.md) |
 
 The Candidate Generator V3 document takes precedence for that component. The
-Prefill service-rate Selector V1 document takes precedence for Selector, Selector settings,
-diagnosis, replay, and their tests. The v2 modification plan takes precedence
-over the baseline design only for other components it explicitly changes. Use
-the baseline design for everything else.
+ZERO-relative Prefill service-rate Selector V2-B document takes precedence for
+Selector, Selector settings, diagnosis, replay, and their tests. The v2
+modification plan takes precedence over the baseline design only for other
+components it explicitly changes. Use the baseline design for everything else.
 Do not infer current status from a design document; use the experiment plan,
 decisions, active configuration, and recorded artifacts.
 

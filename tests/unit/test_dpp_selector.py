@@ -24,17 +24,24 @@ from dpp_scheduler.settings import DPPSettings
 from dpp_scheduler.state_store import DuplicateLedgerEvent, InMemoryStateStore
 from dpp_scheduler.vllm_adapter import (
     DPP_SELECTION_MODE_ENV,
+    DPP_STAGE1_MAX_DELTA_N_ENV,
     DPP_TTFT_DRIFT_WEIGHT_ENV,
     resolve_dpp_runtime_overrides,
 )
 
 
-def settings(*, prefill_ref: int = 1, delta: float = 0.020) -> DPPSettings:
+def settings(
+    *,
+    prefill_ref: int = 1,
+    delta: float = 0.020,
+    stage1_max_delta_n: int = 0,
+) -> DPPSettings:
     return DPPSettings(
         prefill_ref,
         1,
         float.fromhex("0x1.fffffffffffffp+1023"),
         tbt_delta_seconds=delta,
+        maximum_incremental_tbt_violations=stage1_max_delta_n,
     )
 
 
@@ -70,16 +77,22 @@ def candidate(
     duration: float = 0.1,
     extrapolated: bool = False,
     template_id: str = "test",
+    decode_items: tuple[str, ...] | None = None,
 ) -> SafeCandidate:
+    planned_decode = (
+        tuple(item.request_id for item in state.active_decode_requests)
+        if decode_items is None
+        else decode_items
+    )
     plan = BatchPlan(
         plan_id=plan_id,
         snapshot_hash=state.snapshot_hash,
         template_id=template_id,
         prefill_items=prefill_items,
-        decode_items=tuple(item.request_id for item in state.active_decode_requests),
+        decode_items=planned_decode,
         total_prefill_tokens=sum(tokens for _, tokens in prefill_items),
-        total_decode_tokens=len(state.active_decode_requests),
-        total_sequences=len(state.active_decode_requests) + len(prefill_items),
+        total_decode_tokens=len(planned_decode),
+        total_sequences=len(planned_decode) + len(prefill_items),
         projected_kv_blocks=0,
         mandatory_request_ids=(),
     )
@@ -155,32 +168,219 @@ class TwoStageSelectorTests(unittest.TestCase):
         self.assertEqual(audit.stage1.status, "NO_ACTIVE_TBT_OBLIGATION")
         self.assertEqual(decision.selected_plan, fast.plan)
 
-    def test_tbt_stage_filters_by_inclusive_duration_limit(self) -> None:
-        state = deadline_snapshot(slack=0.15)
-        boundary = candidate(state, "boundary", duration=0.17)
-        long = candidate(state, "long", duration=0.171)
-        decision, audit = DPPSelector(settings()).select_with_audit(
-            state, ControlState(state.snapshot_hash), (long, boundary)
+    def test_same_violation_set_delta_n_zero_admits_candidate(self) -> None:
+        state = snapshot(
+            prefill=(PrefillRequest("p", 0.0, 100, 0),),
+            decode=(DecodeRequest("d", 0.0, 100, tbt_deadline=10.4),),
+            obligations=(Obligation("tbt:d", "d", "TBT", 10.4, 9.0),),
         )
-        self.assertEqual(audit.stage1.status, "WITHIN_SLACK")
-        self.assertEqual(audit.stage1.eligible_plan_ids, ("boundary",))
-        self.assertEqual(decision.selected_plan, boundary.plan)
+        zero = candidate(state, "zero", duration=0.1, template_id="ZERO")
+        mixed = candidate(
+            state,
+            "mixed",
+            prefill_items=(("p", 4),),
+            duration=0.1,
+            template_id="P10",
+        )
+        decision, audit = DPPSelector(settings()).select_with_audit(
+            state, ControlState(state.snapshot_hash, (("p", 0.0),)), (zero, mixed)
+        )
+        self.assertEqual(audit.stage1.status, "DELTA_N_ADMITTED")
+        self.assertEqual(
+            audit.stage1.eligible_plan_ids, ("zero", "mixed")
+        )
+        for result in audit.stage1.candidates:
+            self.assertEqual(result.delta_violation_count, 0)
+            self.assertTrue(result.passed)
+        self.assertEqual(decision.selected_plan, mixed.plan)
         self.assertEqual(decision.reason, "TWO_STAGE_TBT_PREFILL_SERVICE_RATE")
 
-    def test_negative_slack_falls_back_to_shortest_safe_candidate(self) -> None:
-        state = deadline_snapshot(slack=-0.05)
-        same_fast_large = candidate(state, "b", duration=0.1)
-        same_fast_small = candidate(state, "a", duration=0.1)
-        slow = candidate(state, "slow", duration=0.2)
-        decision, audit = DPPSelector(settings()).select_with_audit(
-            state,
-            ControlState(state.snapshot_hash),
-            (slow, same_fast_large, same_fast_small),
+    def test_one_new_miss_rejected_at_zero_limit_admitted_at_one(self) -> None:
+        state = snapshot(
+            prefill=(PrefillRequest("p", 0.0, 100, 0),),
+            decode=(DecodeRequest("d", 0.0, 100, tbt_deadline=10.4),),
+            obligations=(Obligation("tbt:d", "d", "TBT", 10.4, 9.0),),
         )
-        self.assertEqual(audit.stage1.status, "NO_CANDIDATE_WITHIN_SLACK")
-        self.assertEqual(audit.stage1.fallback_plan_id, "a")
-        self.assertEqual(decision.selected_plan, same_fast_small.plan)
-        self.assertEqual(decision.reason, "TBT_NO_CANDIDATE_MIN_DURATION")
+        zero = candidate(state, "zero", duration=0.1, template_id="ZERO")
+        mixed = candidate(
+            state,
+            "mixed",
+            prefill_items=(("p", 4),),
+            duration=0.3,
+            template_id="P10",
+        )
+        control = ControlState(state.snapshot_hash, (("p", 0.0),))
+        decision, audit = DPPSelector(settings()).select_with_audit(
+            state, control, (zero, mixed)
+        )
+        self.assertEqual(audit.stage1.status, "DELTA_N_ADMITTED")
+        self.assertEqual(audit.stage1.eligible_plan_ids, ("zero",))
+        mixed_result = next(
+            item for item in audit.stage1.candidates if item.plan_id == "mixed"
+        )
+        self.assertEqual(mixed_result.delta_violation_count, 1)
+        self.assertFalse(mixed_result.passed)
+        self.assertEqual(decision.selected_plan, zero.plan)
+
+        decision_n1, audit_n1 = DPPSelector(
+            settings(stage1_max_delta_n=1)
+        ).select_with_audit(state, control, (zero, mixed))
+        self.assertEqual(audit_n1.stage1.eligible_plan_ids, ("zero", "mixed"))
+        self.assertEqual(decision_n1.selected_plan, mixed.plan)
+
+    def test_zero_already_missing_same_request_delta_n_zero_admits(self) -> None:
+        state = snapshot(
+            prefill=(PrefillRequest("p", 0.0, 100, 0),),
+            decode=(DecodeRequest("d", 0.0, 100, tbt_deadline=10.2),),
+            obligations=(Obligation("tbt:d", "d", "TBT", 10.2, 9.0),),
+        )
+        zero = candidate(state, "zero", duration=0.1, template_id="ZERO")
+        mixed = candidate(
+            state,
+            "mixed",
+            prefill_items=(("p", 4),),
+            duration=0.3,
+            template_id="P10",
+        )
+        decision, audit = DPPSelector(settings()).select_with_audit(
+            state, ControlState(state.snapshot_hash, (("p", 0.0),)), (zero, mixed)
+        )
+        self.assertEqual(audit.stage1.status, "DELTA_N_ADMITTED")
+        self.assertEqual(audit.stage1.reference_plan_id, "zero")
+        self.assertGreater(audit.stage1.reference_violation_count, 0)
+        mixed_result = next(
+            item for item in audit.stage1.candidates if item.plan_id == "mixed"
+        )
+        self.assertEqual(mixed_result.delta_violation_count, 0)
+        self.assertGreater(mixed_result.delta_lateness_seconds, 0.0)
+        self.assertTrue(mixed_result.passed)
+        self.assertEqual(decision.selected_plan, mixed.plan)
+
+    def test_boundary_served_strict_greater_unserved_greater_equal(self) -> None:
+        state = snapshot(
+            prefill=(PrefillRequest("p", 0.0, 100, 0),),
+            decode=(DecodeRequest("d", 0.0, 100, tbt_deadline=10.5),),
+            obligations=(Obligation("tbt:d", "d", "TBT", 10.5, 9.0),),
+        )
+        control = ControlState(state.snapshot_hash, (("p", 0.0),))
+        zero = candidate(state, "zero", duration=0.1, template_id="ZERO")
+        served_boundary = candidate(
+            state,
+            "served",
+            prefill_items=(("p", 2),),
+            duration=0.3,
+            template_id="P10",
+        )
+        decision, audit = DPPSelector(settings()).select_with_audit(
+            state, control, (zero, served_boundary)
+        )
+        served_result = next(
+            item for item in audit.stage1.candidates if item.plan_id == "served"
+        )
+        self.assertEqual(served_result.delta_violation_count, 0)
+        self.assertTrue(served_result.passed)
+        self.assertEqual(decision.selected_plan, served_boundary.plan)
+
+        unserved = candidate(
+            state,
+            "unserved",
+            duration=0.3,
+            template_id="P10",
+            decode_items=(),
+        )
+        decision_u, audit_u = DPPSelector(settings()).select_with_audit(
+            state, control, (zero, unserved)
+        )
+        unserved_result = next(
+            item for item in audit_u.stage1.candidates if item.plan_id == "unserved"
+        )
+        self.assertEqual(unserved_result.delta_violation_count, 1)
+        self.assertFalse(unserved_result.passed)
+        self.assertEqual(decision_u.selected_plan, zero.plan)
+
+    def test_no_tbt_obligation_admits_all_with_not_needed_reference(self) -> None:
+        state = snapshot(decode=(DecodeRequest("d", 0.0, 100),))
+        slow = candidate(state, "slow", duration=0.2)
+        fast = candidate(state, "fast", duration=0.1)
+        decision, audit = DPPSelector(settings()).select_with_audit(
+            state, ControlState(state.snapshot_hash), (slow, fast)
+        )
+        self.assertEqual(audit.stage1.status, "NO_ACTIVE_TBT_OBLIGATION")
+        self.assertEqual(audit.stage1.zero_reference_resolution, "NOT_NEEDED")
+        self.assertEqual(audit.stage1.eligible_plan_ids, ("slow", "fast"))
+        self.assertEqual(decision.selected_plan, fast.plan)
+
+    def test_zero_reference_missing_fails_fast(self) -> None:
+        state = snapshot(
+            decode=(DecodeRequest("d", 0.0, 100, tbt_deadline=10.4),),
+            obligations=(Obligation("tbt:d", "d", "TBT", 10.4, 9.0),),
+        )
+        partial = candidate(
+            state, "partial", template_id="P10", decode_items=()
+        )
+        with self.assertRaisesRegex(RuntimeError, "ZERO_REFERENCE_MISSING"):
+            DPPSelector(settings()).select(
+                state, ControlState(state.snapshot_hash), (partial,)
+            )
+
+    def test_stock_identity_serves_as_zero_reference(self) -> None:
+        state = snapshot(
+            prefill=(PrefillRequest("p", 0.0, 100, 0),),
+            decode=(DecodeRequest("d", 0.0, 100, tbt_deadline=10.4),),
+            obligations=(Obligation("tbt:d", "d", "TBT", 10.4, 9.0),),
+        )
+        stock = candidate(state, "stock", duration=0.1, template_id="STOCK")
+        mixed = candidate(
+            state,
+            "mixed",
+            prefill_items=(("p", 4),),
+            duration=0.1,
+            template_id="P10",
+        )
+        decision, audit = DPPSelector(settings()).select_with_audit(
+            state, ControlState(state.snapshot_hash, (("p", 0.0),)), (stock, mixed)
+        )
+        self.assertEqual(audit.stage1.zero_reference_resolution, "STOCK_IDENTITY")
+        self.assertEqual(audit.stage1.reference_plan_id, "stock")
+        self.assertEqual(decision.selected_plan, mixed.plan)
+
+    def test_two_new_misses_require_limit_two(self) -> None:
+        state = snapshot(
+            prefill=(PrefillRequest("p", 0.0, 100, 0),),
+            decode=(
+                DecodeRequest("a", 0.0, 100, tbt_deadline=10.4),
+                DecodeRequest("b", 0.0, 100, tbt_deadline=10.45),
+            ),
+            obligations=(
+                Obligation("tbt:a", "a", "TBT", 10.4, 9.0),
+                Obligation("tbt:b", "b", "TBT", 10.45, 9.0),
+            ),
+        )
+        control = ControlState(state.snapshot_hash, (("p", 0.0),))
+        zero = candidate(state, "zero", duration=0.1, template_id="ZERO")
+        mixed = candidate(
+            state,
+            "mixed",
+            prefill_items=(("p", 4),),
+            duration=0.35,
+            template_id="P10",
+        )
+        _, audit = DPPSelector(settings(stage1_max_delta_n=1)).select_with_audit(
+            state, control, (zero, mixed)
+        )
+        mixed_result = next(
+            item for item in audit.stage1.candidates if item.plan_id == "mixed"
+        )
+        self.assertEqual(mixed_result.delta_violation_count, 2)
+        self.assertFalse(mixed_result.passed)
+        decision, audit2 = DPPSelector(
+            settings(stage1_max_delta_n=2)
+        ).select_with_audit(state, control, (zero, mixed))
+        self.assertEqual(audit2.stage1.eligible_plan_ids, ("zero", "mixed"))
+        self.assertEqual(decision.selected_plan, mixed.plan)
+
+    def test_stage1_max_delta_n_defaults_to_zero(self) -> None:
+        self.assertEqual(settings().maximum_incremental_tbt_violations, 0)
 
     def test_deadline_and_obligation_must_match_exactly(self) -> None:
         state = snapshot(
@@ -380,6 +580,32 @@ class RuntimeOverrideTests(unittest.TestCase):
                 environment={DPP_TTFT_DRIFT_WEIGHT_ENV: "1"},
             )
 
+    def test_stage1_delta_n_override_accepted_in_development(self) -> None:
+        resolved, mode = resolve_dpp_runtime_overrides(
+            settings(),
+            execution_scope="development_nonformal",
+            environment={DPP_STAGE1_MAX_DELTA_N_ENV: "4"},
+        )
+        self.assertEqual(resolved.maximum_incremental_tbt_violations, 4)
+        self.assertEqual(mode, "normal")
+
+    def test_stage1_delta_n_override_rejected_in_formal_scope(self) -> None:
+        with self.assertRaisesRegex(ValueError, "development_nonformal"):
+            resolve_dpp_runtime_overrides(
+                settings(),
+                execution_scope="formal",
+                environment={DPP_STAGE1_MAX_DELTA_N_ENV: "4"},
+            )
+
+    def test_stage1_delta_n_override_rejects_invalid_values(self) -> None:
+        for invalid in ("x", "-1", "1.5", "true"):
+            with self.assertRaises(ValueError):
+                resolve_dpp_runtime_overrides(
+                    settings(),
+                    execution_scope="development_nonformal",
+                    environment={DPP_STAGE1_MAX_DELTA_N_ENV: invalid},
+                )
+
 
 class RequestDebtStateTests(unittest.TestCase):
     def test_prefill_completion_remains_actual_only(self) -> None:
@@ -407,10 +633,15 @@ class TwoStageConfigTests(unittest.TestCase):
         runtime = load_active_runtime(REPOSITORY_ROOT / ACTIVE_CONFIG_RELATIVE)
         dpp = load_dpp_settings(runtime)
         self.assertTrue(dpp.live_v2_ready)
-        self.assertEqual(dpp.algorithm, "two_stage_tbt_prefill_service_rate_v1")
+        self.assertEqual(
+            dpp.algorithm, "two_stage_zero_relative_tbt_prefill_service_rate_v2b"
+        )
         self.assertEqual(dpp.tbt_delta_seconds, 0.020)
+        self.assertEqual(dpp.stage1_mode, "zero_relative_incremental_violation")
+        self.assertEqual(dpp.stage1_duration_source, "conservative_duration")
+        self.assertEqual(dpp.maximum_incremental_tbt_violations, 0)
         self.assertFalse(dpp.diagnosis_enabled_default)
-        self.assertEqual(dpp.diagnosis_schema_version, 3)
+        self.assertEqual(dpp.diagnosis_schema_version, 4)
 
 
 if __name__ == "__main__":

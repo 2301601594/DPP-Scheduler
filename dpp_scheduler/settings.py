@@ -387,7 +387,7 @@ class PredictorSettings:
 
 @dataclass(frozen=True)
 class DPPSettings:
-    """Two-stage TBT-constrained Prefill service-rate settings."""
+    """Two-stage ZERO-relative TBT-constrained Prefill service-rate settings."""
 
     prefill_reference_concurrency: int
     decode_reference_concurrency: int
@@ -395,12 +395,15 @@ class DPPSettings:
     reference_parameter_status: str = "provisional_pending_stock_profiling"
     score_rel_tol: float = 1e-9
     score_abs_tol: float = 1e-12
-    algorithm: str = "two_stage_tbt_prefill_service_rate_v1"
+    algorithm: str = "two_stage_zero_relative_tbt_prefill_service_rate_v2b"
     reference_artifact_path: str | None = None
     reference_artifact_sha256: str | None = None
     tbt_delta_seconds: float = 0.020
     diagnosis_enabled_default: bool = False
-    diagnosis_schema_version: int = 3
+    diagnosis_schema_version: int = 4
+    stage1_mode: str = "zero_relative_incremental_violation"
+    stage1_duration_source: str = "conservative_duration"
+    maximum_incremental_tbt_violations: int = 0
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -411,9 +414,9 @@ class DPPSettings:
                 raise ValueError(f"{label} must be a positive integer")
         if not math.isfinite(self.maximum_numeric) or self.maximum_numeric <= 0:
             raise ValueError("maximum_numeric must be finite and positive")
-        if self.algorithm != "two_stage_tbt_prefill_service_rate_v1":
+        if self.algorithm != "two_stage_zero_relative_tbt_prefill_service_rate_v2b":
             raise ValueError(
-                "DPP algorithm must be two_stage_tbt_prefill_service_rate_v1"
+                "DPP algorithm must be two_stage_zero_relative_tbt_prefill_service_rate_v2b"
             )
         if self.reference_parameter_status not in {
             "provisional_pending_stock_profiling",
@@ -442,8 +445,19 @@ class DPPSettings:
             raise ValueError("tbt_delta_seconds must be finite and non-negative")
         if not isinstance(self.diagnosis_enabled_default, bool):
             raise ValueError("diagnosis_enabled_default must be boolean")
-        if self.diagnosis_schema_version != 3:
-            raise ValueError("DPP Selector diagnosis schema version must be 3")
+        if self.diagnosis_schema_version != 4:
+            raise ValueError("DPP Selector diagnosis schema version must be 4")
+        if self.stage1_mode != "zero_relative_incremental_violation":
+            raise ValueError(
+                "stage1_mode must be zero_relative_incremental_violation"
+            )
+        if self.stage1_duration_source != "conservative_duration":
+            raise ValueError("stage1_duration_source must be conservative_duration")
+        limit = self.maximum_incremental_tbt_violations
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError(
+                "maximum_incremental_tbt_violations must be a non-negative integer"
+            )
 
     @property
     def live_v2_ready(self) -> bool:
@@ -467,6 +481,7 @@ class DPPSettings:
         ranges = value.get("score_numeric_ranges")
         tolerance = value.get("score_tie_tolerance")
         tbt_stage = value.get("tbt_stage")
+        stage1 = value.get("stage1")
         stage2 = value.get("stage2")
         diagnosis = value.get("diagnosis")
         if not isinstance(reference, Mapping):
@@ -475,6 +490,8 @@ class DPPSettings:
             raise ValueError("DPP numeric range/tolerance must be mappings")
         if not isinstance(tbt_stage, Mapping):
             raise ValueError("dpp.tbt_stage must be a mapping")
+        if not isinstance(stage1, Mapping):
+            raise ValueError("dpp.stage1 must be a mapping")
         if not isinstance(stage2, Mapping):
             raise ValueError("dpp.stage2 must be a mapping")
         if not isinstance(diagnosis, Mapping):
@@ -497,8 +514,20 @@ class DPPSettings:
             "plan_id_asc",
         ):
             raise ValueError("two-stage DPP tie-break contract mismatch")
-        if tbt_stage.get("empty_policy") != "minimum_effective_duration":
-            raise ValueError("DPP TBT empty policy mismatch")
+        if stage1.get("mode") != "zero_relative_incremental_violation":
+            raise ValueError("DPP Stage-1 mode mismatch")
+        if stage1.get("duration_source") != "conservative_duration":
+            raise ValueError("DPP Stage-1 duration source mismatch")
+        stage1_limit = stage1.get("maximum_incremental_tbt_violations")
+        if (
+            isinstance(stage1_limit, bool)
+            or not isinstance(stage1_limit, int)
+            or stage1_limit < 0
+        ):
+            raise ValueError(
+                "dpp.stage1.maximum_incremental_tbt_violations must be a "
+                "non-negative integer"
+            )
         if stage2.get("service_source") != "batch_plan_total_prefill_tokens":
             raise ValueError("DPP Stage-2 service source mismatch")
         if stage2.get("duration_source") != "effective_duration":
@@ -518,4 +547,7 @@ class DPPSettings:
             tbt_delta_seconds=float(tbt_stage.get("delta_seconds")),
             diagnosis_enabled_default=diagnosis.get("enabled"),
             diagnosis_schema_version=diagnosis.get("schema_version"),
+            stage1_mode=str(stage1.get("mode", "")),
+            stage1_duration_source=str(stage1.get("duration_source", "")),
+            maximum_incremental_tbt_violations=stage1_limit,
         )

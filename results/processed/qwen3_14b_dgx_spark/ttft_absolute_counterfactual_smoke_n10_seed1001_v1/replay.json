@@ -1,0 +1,102 @@
+{
+  "counterfactual": {
+    "by_backlog_depth": {
+      "1": {
+        "all_nonzero_filtered_by_stage1": 0,
+        "frames": 26,
+        "new_zero_ratio": 0.0,
+        "new_zero_selected": 0,
+        "new_zero_with_nonzero_passed_stage1": 0,
+        "nonzero_to_zero": 0,
+        "old_zero_ratio": 0.0,
+        "old_zero_selected": 0,
+        "old_zero_with_nonzero_passed_stage1": 0,
+        "stock_rank_count": 20,
+        "stock_rank_new_mean": 1.0,
+        "stock_rank_old_mean": 4.85,
+        "winner_changed": 12,
+        "zero_to_nonzero": 0
+      }
+    },
+    "by_min_tbt_slack": {
+      ">200ms": {
+        "all_nonzero_filtered_by_stage1": 0,
+        "frames": 20,
+        "new_zero_ratio": 0.0,
+        "new_zero_selected": 0,
+        "new_zero_with_nonzero_passed_stage1": 0,
+        "nonzero_to_zero": 0,
+        "old_zero_ratio": 0.0,
+        "old_zero_selected": 0,
+        "old_zero_with_nonzero_passed_stage1": 0,
+        "stock_rank_count": 14,
+        "stock_rank_new_mean": 1.0,
+        "stock_rank_old_mean": 5.357142857142857,
+        "winner_changed": 10,
+        "zero_to_nonzero": 0
+      },
+      "no_active_tbt_obligation": {
+        "all_nonzero_filtered_by_stage1": 0,
+        "frames": 6,
+        "new_zero_ratio": 0.0,
+        "new_zero_selected": 0,
+        "new_zero_with_nonzero_passed_stage1": 0,
+        "nonzero_to_zero": 0,
+        "old_zero_ratio": 0.0,
+        "old_zero_selected": 0,
+        "old_zero_with_nonzero_passed_stage1": 0,
+        "stock_rank_count": 6,
+        "stock_rank_new_mean": 1.0,
+        "stock_rank_old_mean": 3.6666666666666665,
+        "winner_changed": 2,
+        "zero_to_nonzero": 0
+      }
+    },
+    "overall": {
+      "all_nonzero_filtered_by_stage1": 0,
+      "frames": 2030,
+      "new_zero_ratio": 0.0,
+      "new_zero_selected": 0,
+      "new_zero_with_nonzero_passed_stage1": 0,
+      "nonzero_to_zero": 0,
+      "old_zero_ratio": 0.0,
+      "old_zero_selected": 0,
+      "old_zero_with_nonzero_passed_stage1": 0,
+      "stock_rank_count": 2023,
+      "stock_rank_new_mean": 1.0,
+      "stock_rank_old_mean": 1.0380622837370241,
+      "winner_changed": 12,
+      "zero_to_nonzero": 0
+    },
+    "prefill_backlog": {
+      "all_nonzero_filtered_by_stage1": 0,
+      "frames": 26,
+      "new_zero_ratio": 0.0,
+      "new_zero_selected": 0,
+      "new_zero_with_nonzero_passed_stage1": 0,
+      "nonzero_to_zero": 0,
+      "old_zero_ratio": 0.0,
+      "old_zero_selected": 0,
+      "old_zero_with_nonzero_passed_stage1": 0,
+      "stock_rank_count": 20,
+      "stock_rank_new_mean": 1.0,
+      "stock_rank_old_mean": 4.85,
+      "winner_changed": 12,
+      "zero_to_nonzero": 0
+    },
+    "prefill_backlog_frames": 26,
+    "total_frames": 2030
+  },
+  "replay": {
+    "frames_replayed": 2030,
+    "stage1_mismatch": 0,
+    "stage2_score_mismatch": 0,
+    "tie_break_mismatch": 0,
+    "ttft_debt_mismatch": 0,
+    "winner_mismatch": 0
+  },
+  "source_diagnosis": {
+    "path": "results/raw/qwen3_14b_dgx_spark/two_stage_tbt_ttft_qps0p25_n150_seed1001_v1/runs/smoke_two_stage_tbt_ttft_qps0p25_seed1001_attempt01/selector_diagnosis.jsonl",
+    "sha256": "9efbd406f473bcdd94ca1ee0a48fab65ab88ca3018aaca04a1e104c0971f697f"
+  }
+}

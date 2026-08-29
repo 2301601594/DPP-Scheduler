@@ -321,7 +321,7 @@ fallback:
   must_pass_hard_filters: true
 
 dpp:
-  algorithm: two_stage_tbt_prefill_service_rate_v1
+  algorithm: two_stage_zero_relative_tbt_prefill_service_rate_v2b
   parameter_status: provisional_for_development_nonformal_validation
   formal_benchmark_eligible: false
   reference_concurrency:
@@ -342,7 +342,12 @@ dpp:
     constrained_extrapolation: conservative_duration
   tbt_stage:
     delta_seconds: 0.020
-    empty_policy: minimum_effective_duration
+    delta_seconds_status: legacy_inactive_in_v2b
+    parameter_status: provisional_user_directed_development_nonformal
+  stage1:
+    mode: zero_relative_incremental_violation
+    duration_source: conservative_duration
+    maximum_incremental_tbt_violations: 0
     parameter_status: provisional_user_directed_development_nonformal
   stage2:
     service_source: batch_plan_total_prefill_tokens
@@ -362,7 +367,7 @@ dpp:
     - plan_id_asc
   diagnosis:
     enabled: false
-    schema_version: 3
+    schema_version: 4
     enable_env: DPP_SELECTOR_DIAGNOSIS
     output_path_env: DPP_SELECTOR_DIAGNOSIS_PATH
   updates_from_actual_observation_only: true

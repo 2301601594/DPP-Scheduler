@@ -370,3 +370,113 @@
   source is reconstructed from the frozen 32-sample threshold, 128-sample
   per-kind window, and prior actual-only in-support executions. No Predictor,
   Selector, gate, or formal claim was changed by this analysis.
+
+## 2026-08-30 — Stage-1 V2-B ZERO-relative ΔN≤N Selector implementation
+
+- Replaced the online min-slack Stage 1 with the ZERO-relative incremental
+  TBT-violation guard: per-candidate `ΔN = Σ_j [m_j(c) − m_j(0)]⁺` computed
+  with conservative risk durations and `ConsequenceEstimator._misses`
+  semantics (`>` when served, `>=` otherwise); a candidate is admitted iff
+  `ΔN ≤ maximum_incremental_tbt_violations`. ΔL is recorded, not filtering.
+  ZERO reference resolution is deterministic (ZERO template → STOCK identity
+  → any zero-service full-decode candidate by ascending plan_id) and
+  fail-closes with `ZERO_REFERENCE_MISSING`. Stage 2, tie-break, ZERO
+  invariant, Candidate Generator, Predictor, Safe-Set, Fallback, trace, QPS,
+  and SLO are unchanged. New algorithm identity
+  `two_stage_zero_relative_tbt_prefill_service_rate_v2b`; `tbt_delta_seconds`
+  is `legacy_inactive_in_v2b`; Selector Diagnosis is schema v4 with replayable
+  per-candidate risk fields, and v1/v2/v3 replay branches remain supported.
+- N is grid-configurable via the development-only env `DPP_STAGE1_MAX_DELTA_N`
+  (non-negative integer; rejected outside `development_nonformal` at both the
+  runner and server gates) and is recorded in the audit, diagnosis, iteration
+  log, and aggregate.
+- Remote model-free checks pass: 203/203 unit tests (including the new ΔN
+  admission/boundary/reference/env tests and schema-v4 diagnosis tests); the
+  frozen schema-v3 JSONL (SHA-256 `16bd5ca4…`, 4,573 frames) replays with
+  zero mismatches under the new code; the V2-A replay script reproduces its
+  frozen output SHA-256 `db6647b2…`.
+- Added `scripts/stage1_delta_n_grid_campaign.sh`,
+  `benchmarks/run_stage1_delta_n_grid.py`, and
+  `scripts/analyze_stage1_delta_n_grid.py` for the smoke-gated N grid over
+  the staged n=150 QPS 0.25 seed 1001 trace (SHA-256 `203e7ed4…`).
+- Smoke gate passed under campaign
+  `stage1_delta_n_grid_qps0p25_n150_seed1001_v1`: Stock 20/20 requests with
+  0 failures (TTFT p50/p95 306/1,483 ms) and DPP N=0 20/20 with 0 failures
+  (TTFT p50/p95 328/2,240 ms); the DPP smoke manifest has
+  `selector_diagnosis_valid: true` with the recorded `DPP_STAGE1_MAX_DELTA_N=0`.
+  This is development/non-formal evidence and advances no gate.
+
+## 2026-08-30 — Stage-1 V2-B delta-N grid campaign
+
+- Campaign `stage1_delta_n_grid_qps0p25_n150_seed1001_v1` completed: Stock plus
+  DPP N ∈ {0,2,4,8,16}, one n=150 run each on the staged QPS 0.25 seed 1001
+  trace (SHA-256 `203e7ed4…`). All six runs are `valid`: 150/150 requests,
+  zero failures, and every DPP run has `selector_diagnosis_valid: true` with
+  zero replay mismatches (schema v4).
+- Selection mechanism (selection_histogram ZERO/STOCK, backlog frames): N=0
+  selects ZERO in 1,490 of 1,830 backlog frames; N=2 drops this to 398 of
+  625; N≥4 selects ZERO once (1,611→~1 frame) with STOCK winning 4,455-4,811
+  frames. The ZERO-relative guard releases the min-slack starvation for
+  N ≥ 2 and is Stock-equivalent for N ≥ 4.
+- TTFT mean-p50/p95/p99 (ms): Stock 544/1,927/2,767; N=0 44,956/136,385/
+  140,736 (severe starvation, as the V2-A replay predicted); N=2 603/14,797/
+  30,956 (p50 recovered, heavy tail); N=4 550/1,880/2,908; N=8 541/1,800/
+  2,715; N=16 535/1,845/2,727. TBT p50/p95/p99 (ms): Stock 184/203/649;
+  N=0 173/226/265 (best TBT tail, bought with TTFT starvation); N=2 184/206/
+  650; N=4 183/206/663; N=8 185/201/667; N=16 185/207/664.
+- Throughput (completion rps): Stock 0.1916; N=0 0.1685; N=2 0.1838; N=4
+  0.1806; N=8 0.1870; N=16 0.1905. Natural-EOS SLO-goodput rps
+  (TTFT ≤ 2s ∧ every TBT ≤ 0.25s ∧ stop): Stock 0.0089 (7/150); N=0 0.0135
+  (12/150); N=2 0.0172 (14/150); N=4 0.0084 (7/150); N=8 0.0087 (7/150);
+  N=16 0.0089 (7/150). E2E mean (ms): Stock 160,056; N=0 193,925; N=2
+  162,192; N=4 161,624; N=8 162,466; N=16 162,286.
+- Interpretation: N=0 protects TBT at catastrophic TTFT cost and is unusable.
+  N=2 is a transition point with the best observed SLO-goodput (14/150) but a
+  heavy TTFT tail. N=4/8/16 are Stock-equivalent, with N=8/16 showing slightly
+  better TTFT p50/p95/p99 than Stock at 2-4% lower completion throughput.
+  Success counts (7-14 per 150) are single-seed development evidence with no
+  cross-seed confidence interval; the processed summary is retained at
+  `results/processed/qwen3_14b_dgx_spark/stage1_delta_n_grid_qps0p25_n150_seed1001_v1/summary.json`
+  (SHA-256 `c1ab2b04…`). No gate advance and no formal claim.
+
+## 2026-08-29 — Stage-1 V2-A ZERO-relative ΔN_TBT=0 offline counterfactual replay
+
+- Added the user-provided V2-A plan as
+  `docs/Stage1-V2A-ZERO-Relative-TBT-Replay.md` and its companion script as
+  `scripts/replay_stage1_delta_n0.py`. The script is read-only over Selector
+  Diagnosis schema v3 and reproduces Stage 1 risk with conservative duration,
+  `ConsequenceEstimator._misses` semantics (`>` when the request is served,
+  `>=` otherwise), ZERO-relative ΔN/ΔL, and the frozen V1 Stage-2 service-rate
+  ranking with its tie-break order.
+- Replayed the frozen selector-diagnosis JSONL
+  (`selector_diagnosis.jsonl`, SHA-256
+  `16bd5ca4fe921a4b8a98ab3cbf10b321ce7b086263539d70aca455fa305162d5`,
+  77,175,969 bytes, 4,573 frames; 4,572 OK, 1 `NO_SAFE_CANDIDATES`). Output is
+  `results/processed/qwen3_14b_dgx_spark/stage1_v2a_delta_n0_replay_seed1001.json`
+  (SHA-256 `db6647b25872cf227ea7ab1029beb4f3913f348ba5bd2bf98281535da151b9ed`),
+  pulled append-only and checksum-verified.
+- Verdict: plan case B. `R_release = 0.0`: none of the 1,527 old-ZERO-only
+  backlog frames gained a non-ZERO V2-A winner, and no old-ZERO-only frame had
+  a new ΔN=0 eligible candidate with positive service. In the 1,611
+  active-TBT+backlog frames the V2-A winner is ZERO in 1,547 (96.0%) versus
+  1,527 under the old min-slack Stage 1; V2-A admits fewer non-ZERO backlog
+  winners (64 versus 84). Winner ΔL is identically 0 across all 4,572 OK
+  frames.
+- Stock ΔN histogram: 2,978×0, 1,565×1, 14×2, 13×3, 2×5; every ΔN≥1 Stock
+  frame is a backlog frame. Stock remains eligible in 2,978 frames and wins
+  2,973 (versus 2,997 under the old Stage 1). 67 winners changed overall.
+- ZERO reference resolution: 1,611 `ZERO_TEMPLATE` (all backlog frames with
+  active TBT obligations), 1,764 `ZERO_SERVICE_COUNT_MATCH_FALLBACK`
+  (non-backlog frames where canonical dedup preserved the materially identical
+  zero-service STOCK over ZERO, per plan §3.3 rule 4), 1,197 `NOT_NEEDED`.
+- Supplementary read-only pass over the same frozen JSONL: all 1,527
+  old-ZERO-only frames have Stock ΔN=1, so a ΔN≤1 gate would newly admit Stock
+  in every one of them. In those frames Stock ΔL (added TBT lateness versus the
+  ZERO baseline) is min 0.004 s, P50 0.674 s, P90 0.756 s, max 0.794 s — a
+  large lateness extension, supporting a V2-B `ΔN≤K ∧ ΔL≤B` design rather than
+  a pure `ΔN≤1` gate.
+- Recommendation: do not implement V2-A in the online Selector as-is; ΔN=0 is
+  as strict as the min-slack filter and does not relieve the Prefill
+  starvation. This is counterfactual replay over recorded predictions, not a
+  performance benchmark. No online Selector, Candidate Generator, Predictor,
+  Safe-Set, or Fallback change, gate advance, or formal claim was made.

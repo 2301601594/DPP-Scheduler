@@ -1,0 +1,95 @@
+{
+  "baseline_resolution_histogram": {
+    "NOT_NEEDED": 1197,
+    "ZERO_SERVICE_COUNT_MATCH_FALLBACK": 1764,
+    "ZERO_TEMPLATE": 1611
+  },
+  "counts": {
+    "active_tbt_and_backlog_frames": 1611,
+    "active_tbt_frames": 3375,
+    "frames": 4573,
+    "new_nonzero_winner_frames": 136,
+    "new_zero_winner_active_tbt_backlog_frames": 1547,
+    "new_zero_winner_frames": 4436,
+    "old_zero_only_active_tbt_backlog_frames": 1527,
+    "prefill_backlog_frames": 1683,
+    "status:NO_SAFE_CANDIDATES": 1,
+    "status:OK": 4572,
+    "stock_new_eligible_frames": 2978,
+    "stock_new_winner_frames": 2973,
+    "stock_present_frames": 4572,
+    "winner_changed_frames": 67
+  },
+  "interpretation_guardrails": [
+    "This is a counterfactual replay over recorded candidate predictions; it is not a performance benchmark.",
+    "Stage 1 risk uses recorded conservative duration.",
+    "Stage 2 ranking preserves the current V1 effective-duration service-rate semantics.",
+    "Alternative selections were not actually executed, so replay cannot infer actual TTFT/TBT/E2E."
+  ],
+  "new_winner_template_histogram": {
+    "P10": 15,
+    "P20": 8,
+    "P30": 6,
+    "P40": 3,
+    "P50": 2,
+    "P60": 4,
+    "P70": 4,
+    "P80": 4,
+    "P90": 6,
+    "STOCK": 2973,
+    "ZERO": 1547
+  },
+  "rates": {
+    "new_zero_rate_with_active_tbt_and_backlog": 0.9602731222842955,
+    "old_zero_only_release_rate": 0.0,
+    "winner_change_rate": 0.014651213645309425
+  },
+  "released_examples_first_50": [],
+  "released_frame_winner_delta_lateness_seconds": {
+    "count": 0
+  },
+  "replay_algorithm": "stage1_zero_relative_delta_n_zero_v2a",
+  "schema_version": 1,
+  "source": {
+    "bytes": 77175969,
+    "path": "/home/dongj/LLM/results/raw/qwen3_14b_dgx_spark/predictor_online_trimmed_calibration_selector_diagnosis_qps0p25_n150_seed1001_v1/runs/selector_diagnosis_n150_qps0p25_seed1001_attempt01/selector_diagnosis.jsonl",
+    "sha256": "16bd5ca4fe921a4b8a98ab3cbf10b321ce7b086263539d70aca455fa305162d5"
+  },
+  "stock_delta_n_histogram": {
+    "0": 2978,
+    "1": 1565,
+    "2": 14,
+    "3": 13,
+    "5": 2
+  },
+  "winner_delta_lateness_seconds": {
+    "count": 4572,
+    "max": 0.0,
+    "mean": 0.0,
+    "min": 0.0,
+    "p50": 0.0,
+    "p90": 0.0,
+    "p95": 0.0,
+    "p99": 0.0
+  },
+  "winner_prefill_service_tokens": {
+    "count": 4572,
+    "max": 2023.0,
+    "mean": 22.414479440069993,
+    "min": 0.0,
+    "p50": 0.0,
+    "p90": 0.0,
+    "p95": 0.0,
+    "p99": 746.0
+  },
+  "winner_risk_duration_seconds": {
+    "count": 4572,
+    "max": 0.9999564224914753,
+    "mean": 0.17183092072522688,
+    "min": 0.1269330773846634,
+    "p50": 0.16882330640673654,
+    "p90": 0.18835654841817004,
+    "p95": 0.1964015714471383,
+    "p99": 0.5054589219179086
+  }
+}
